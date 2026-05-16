@@ -10,6 +10,9 @@ const { createLogger } = require('./core/logger');
 const authRoutes = require('./routes/auth');
 const apiRoutes  = require('./routes/api');
 
+// Inicializar banco de dados (cria tabelas se não existirem)
+require('./core/database');
+
 const logger = createLogger('server');
 const app    = express();
 const PORT   = process.env.DASHBOARD_PORT || 3100;
