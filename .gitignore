@@ -1,0 +1,10 @@
+node_modules/
+.env
+data/pdfs/
+data/covers/
+data/metrics.db
+data/ai_state.json
+logs/
+*.log
+.DS_Store
+Thumbs.db

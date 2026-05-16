@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — GENIA EbookPublisher</title>
+<style>
+:root { --bg:#0a0e1a; --bg2:#111827; --accent:#6366f1; --accent2:#8b5cf6;
+        --gold:#f59e0b; --text:#f1f5f9; --muted:#94a3b8; --card:#1e2535;
+        --border:#2d3748; --green:#10b981; --red:#ef4444; --orange:#f97316; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif;
+       display:flex; min-height:100vh; }
+
+/* SIDEBAR */
+.sidebar { width:240px; min-height:100vh; background:var(--bg2); border-right:1px solid var(--border);
+           display:flex; flex-direction:column; position:fixed; left:0; top:0; z-index:50; }
+.sidebar-logo { padding:1.5rem; font-size:1.1rem; font-weight:900;
+                background:linear-gradient(135deg,#6366f1,#8b5cf6); -webkit-background-clip:text;
+                -webkit-text-fill-color:transparent; border-bottom:1px solid var(--border); }
+.nav-menu { padding:1rem 0; flex:1; }
+.nav-item { display:flex; align-items:center; gap:.75rem; padding:.75rem 1.5rem;
+            color:var(--muted); text-decoration:none; font-size:.9rem; transition:all .2s;
+            cursor:pointer; border:none; background:none; width:100%; text-align:left; }
+.nav-item:hover, .nav-item.active { color:var(--text); background:rgba(99,102,241,.1); }
+.nav-item.active { border-right:3px solid var(--accent); color:var(--accent); }
+.nav-item .icon { font-size:1.1rem; width:20px; text-align:center; }
+.sidebar-user { padding:1rem 1.5rem; border-top:1px solid var(--border); }
+.user-info { display:flex; align-items:center; gap:.75rem; }
+.user-avatar { width:36px; height:36px; border-radius:50%;
+               background:linear-gradient(135deg,var(--accent),var(--accent2));
+               display:flex; align-items:center; justify-content:center; font-weight:700; font-size:.85rem; }
+.user-name { font-size:.85rem; font-weight:600; }
+.user-email { font-size:.75rem; color:var(--muted); }
+.btn-logout { display:flex; align-items:center; gap:.5rem; margin-top:.75rem; color:var(--muted);
+              background:none; border:none; font-size:.8rem; cursor:pointer; padding:.3rem 0; }
+.btn-logout:hover { color:var(--red); }
+
+/* MAIN */
+.main { margin-left:240px; flex:1; display:flex; flex-direction:column; min-height:100vh; }
+.topbar { height:64px; border-bottom:1px solid var(--border); display:flex; align-items:center;
+          justify-content:space-between; padding:0 2rem; background:var(--bg);
+          position:sticky; top:0; z-index:40; }
+.topbar h1 { font-size:1.1rem; font-weight:700; }
+.btn-generate { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff;
+                border:none; padding:.6rem 1.25rem; border-radius:10px; font-size:.9rem;
+                font-weight:700; cursor:pointer; display:flex; align-items:center; gap:.5rem;
+                transition:all .2s; }
+.btn-generate:hover { transform:translateY(-1px); box-shadow:0 6px 20px rgba(99,102,241,.4); }
+.btn-generate:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+
+/* CONTENT */
+.content { padding:2rem; flex:1; }
+
+/* STATS */
+.stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:1rem; margin-bottom:2rem; }
+.stat-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:1.25rem; }
+.stat-label { font-size:.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:.5rem; }
+.stat-value { font-size:2rem; font-weight:900; }
+.stat-sub { font-size:.8rem; color:var(--muted); margin-top:.3rem; }
+.stat-card.accent .stat-value { color:var(--accent); }
+.stat-card.green  .stat-value { color:var(--green); }
+.stat-card.gold   .stat-value { color:var(--gold); }
+.stat-card.orange .stat-value { color:var(--orange); }
+
+/* AI STATUS */
+.ai-status { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:2rem; }
+.ai-badge { display:flex; align-items:center; gap:.4rem; padding:.3rem .75rem;
+            border-radius:100px; font-size:.75rem; font-weight:600; border:1px solid; }
+.ai-badge.ok  { background:rgba(16,185,129,.1); border-color:rgba(16,185,129,.3); color:#6ee7b7; }
+.ai-badge.bad { background:rgba(239,68,68,.1);  border-color:rgba(239,68,68,.3);  color:#fca5a5; }
+.ai-badge.na  { background:rgba(148,163,184,.1); border-color:rgba(148,163,184,.3); color:var(--muted); }
+.ai-dot { width:6px; height:6px; border-radius:50%; }
+.ai-badge.ok .ai-dot  { background:var(--green); }
+.ai-badge.bad .ai-dot { background:var(--red); }
+.ai-badge.na .ai-dot  { background:var(--muted); }
+
+/* SECTION HEADER */
+.section-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem; }
+.section-title { font-size:1.1rem; font-weight:700; }
+.section-count { background:rgba(99,102,241,.15); color:var(--accent);
+                 padding:.2rem .6rem; border-radius:100px; font-size:.8rem; font-weight:700; }
+.filter-bar { display:flex; gap:.5rem; }
+.filter-btn { background:transparent; border:1px solid var(--border); color:var(--muted);
+              padding:.35rem .85rem; border-radius:8px; font-size:.8rem; cursor:pointer; transition:all .2s; }
+.filter-btn:hover, .filter-btn.active { background:rgba(99,102,241,.15); border-color:var(--accent);
+                                         color:var(--accent); }
+
+/* EBOOKS GRID */
+.ebooks-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:1.5rem; }
+.ebook-card { background:var(--card); border:1px solid var(--border); border-radius:16px;
+              overflow:hidden; transition:all .3s; display:flex; flex-direction:column; }
+.ebook-card:hover { border-color:var(--accent); transform:translateY(-3px);
+                     box-shadow:0 15px 40px rgba(0,0,0,.4); }
+.ebook-cover { width:100%; height:180px; object-fit:cover; background:var(--bg);
+               display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:3rem; }
+.ebook-cover img { width:100%; height:100%; object-fit:cover; }
+.ebook-body { padding:1.25rem; flex:1; display:flex; flex-direction:column; }
+.ebook-status { display:inline-flex; align-items:center; gap:.35rem; padding:.2rem .65rem;
+                border-radius:100px; font-size:.72rem; font-weight:700; margin-bottom:.75rem; }
+.status-ready     { background:rgba(99,102,241,.15); color:#a5b4fc; border:1px solid rgba(99,102,241,.3); }
+.status-published { background:rgba(16,185,129,.15); color:#6ee7b7; border:1px solid rgba(16,185,129,.3); }
+.status-pending   { background:rgba(148,163,184,.15); color:var(--muted); border:1px solid var(--border); }
+.ebook-title { font-size:.95rem; font-weight:700; line-height:1.4; margin-bottom:.4rem;
+               display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.ebook-meta { font-size:.75rem; color:var(--muted); margin-bottom:.75rem; display:flex; gap:.75rem; flex-wrap:wrap; }
+.ebook-meta span { display:flex; align-items:center; gap:.25rem; }
+.ebook-platforms { display:flex; gap:.4rem; margin-bottom:.75rem; flex-wrap:wrap; }
+.platform-badge { font-size:.7rem; padding:.2rem .5rem; border-radius:6px; font-weight:600; }
+.pb-hotmart { background:rgba(255,107,53,.15); color:#ff6b35; }
+.pb-cakto   { background:rgba(99,102,241,.15); color:#a5b4fc; }
+.pb-amazon  { background:rgba(245,158,11,.15); color:#fcd34d; }
+.ebook-actions { display:flex; gap:.5rem; margin-top:auto; flex-wrap:wrap; }
+.btn-action { flex:1; padding:.5rem; border-radius:8px; font-size:.75rem; font-weight:700;
+              cursor:pointer; border:none; transition:all .2s; min-width:60px; text-align:center; }
+.btn-download { background:rgba(99,102,241,.15); color:#a5b4fc; }
+.btn-download:hover { background:rgba(99,102,241,.3); }
+.btn-publish { background:rgba(16,185,129,.15); color:#6ee7b7; }
+.btn-publish:hover { background:rgba(16,185,129,.3); }
+.btn-hotmart { background:rgba(255,107,53,.15); color:#ff6b35; }
+.btn-hotmart:hover { background:rgba(255,107,53,.3); }
+.btn-amazon  { background:rgba(245,158,11,.15); color:#fcd34d; }
+.btn-amazon:hover { background:rgba(245,158,11,.3); }
+
+/* MODAL */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:100;
+                 display:none; align-items:center; justify-content:center; padding:2rem; }
+.modal-overlay.open { display:flex; }
+.modal { background:var(--card); border:1px solid var(--border); border-radius:20px;
+         padding:2rem; width:100%; max-width:480px; }
+.modal h3 { font-size:1.25rem; font-weight:800; margin-bottom:1rem; }
+.modal label { display:block; font-size:.85rem; color:var(--muted); margin-bottom:.4rem; font-weight:600; }
+.modal input, .modal select, .modal textarea {
+  width:100%; background:#0f1623; border:1px solid var(--border); border-radius:10px;
+  padding:.75rem 1rem; color:var(--text); font-size:.9rem; outline:none; margin-bottom:1rem;
+  transition:border .2s; font-family:inherit; }
+.modal input:focus, .modal select:focus, .modal textarea:focus { border-color:var(--accent); }
+.modal textarea { resize:vertical; min-height:80px; }
+.modal-btns { display:flex; gap:.75rem; margin-top:.5rem; }
+.btn-cancel { flex:1; background:transparent; border:1px solid var(--border); color:var(--muted);
+              padding:.75rem; border-radius:10px; cursor:pointer; font-size:.9rem; }
+.btn-confirm { flex:2; background:linear-gradient(135deg,var(--accent),var(--accent2));
+               color:#fff; border:none; padding:.75rem; border-radius:10px; cursor:pointer;
+               font-size:.9rem; font-weight:700; }
+.btn-confirm:hover { opacity:.9; }
+
+/* LOADING */
+.loading { display:flex; align-items:center; justify-content:center; height:200px; color:var(--muted); }
+.spinner { width:32px; height:32px; border:3px solid var(--border); border-top-color:var(--accent);
+           border-radius:50%; animation:spin .8s linear infinite; margin-right:1rem; }
+
+/* TOAST */
+.toast { position:fixed; bottom:2rem; right:2rem; background:var(--card); border:1px solid var(--border);
+         border-radius:12px; padding:.85rem 1.25rem; font-size:.9rem; z-index:200;
+         transform:translateY(100px); opacity:0; transition:all .3s; max-width:320px; }
+.toast.show { transform:translateY(0); opacity:1; }
+.toast.success { border-color:rgba(16,185,129,.4); }
+.toast.error   { border-color:rgba(239,68,68,.4); }
+
+/* EMPTY STATE */
+.empty { text-align:center; padding:4rem 2rem; color:var(--muted); }
+.empty .icon { font-size:3rem; margin-bottom:1rem; }
+.empty h3 { font-size:1.1rem; font-weight:700; color:var(--text); margin-bottom:.5rem; }
+
+@keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">⚡ GENIA Publisher</div>
+  <nav class="nav-menu">
+    <button class="nav-item active" onclick="showSection('ebooks')">
+      <span class="icon">📚</span> Meus E-books
+    </button>
+    <button class="nav-item" onclick="showSection('generate')">
+      <span class="icon">⚡</span> Gerar Novo
+    </button>
+    <button class="nav-item" onclick="showSection('topics')">
+      <span class="icon">🎯</span> Tópicos
+    </button>
+    <button class="nav-item" onclick="showSection('ai')">
+      <span class="icon">🤖</span> Status da IA
+    </button>
+    <button class="nav-item" onclick="window.open('/', '_blank')">
+      <span class="icon">🌐</span> Landing Page
+    </button>
+  </nav>
+  <div class="sidebar-user">
+    <div class="user-info">
+      <div class="user-avatar" id="userAvatar">?</div>
+      <div>
+        <div class="user-name" id="userName">Carregando...</div>
+        <div class="user-email" id="userEmail"></div>
+      </div>
+    </div>
+    <button class="btn-logout" onclick="logout()">🚪 Sair</button>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+  <div class="topbar">
+    <h1 id="pageTitle">Meus E-books</h1>
+    <button class="btn-generate" id="btnGenerate" onclick="openGenerateModal()">
+      ⚡ Gerar E-book
+    </button>
+  </div>
+
+  <div class="content">
+    <!-- STATS -->
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card accent"><div class="stat-label">Total E-books</div><div class="stat-value" id="statTotal">—</div></div>
+      <div class="stat-card green"><div class="stat-label">Publicados</div><div class="stat-value" id="statPublished">—</div></div>
+      <div class="stat-card gold"><div class="stat-label">Receita Total</div><div class="stat-value" id="statRevenue">—</div></div>
+      <div class="stat-card orange"><div class="stat-label">Vendas</div><div class="stat-value" id="statSales">—</div></div>
+    </div>
+
+    <!-- AI STATUS -->
+    <div id="aiStatusBar" style="margin-bottom:1.5rem;">
+      <div style="font-size:.8rem;color:var(--muted);margin-bottom:.5rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Providers de IA</div>
+      <div class="ai-status" id="aiStatusBadges"></div>
+    </div>
+
+    <!-- EBOOKS SECTION -->
+    <div id="sectionEbooks">
+      <div class="section-header">
+        <div style="display:flex;align-items:center;gap:.75rem;">
+          <span class="section-title">E-books</span>
+          <span class="section-count" id="ebooksCount">0</span>
+        </div>
+        <div class="filter-bar">
+          <button class="filter-btn active" onclick="filterEbooks('all', this)">Todos</button>
+          <button class="filter-btn" onclick="filterEbooks('ready', this)">Prontos</button>
+          <button class="filter-btn" onclick="filterEbooks('published', this)">Publicados</button>
+        </div>
+      </div>
+
+      <div id="ebooksLoading" class="loading" style="display:none;">
+        <div class="spinner"></div> Carregando e-books...
+      </div>
+
+      <div class="ebooks-grid" id="ebooksGrid"></div>
+      <div class="empty" id="ebooksEmpty" style="display:none;">
+        <div class="icon">📭</div>
+        <h3>Nenhum e-book encontrado</h3>
+        <p>Clique em "Gerar E-book" para criar seu primeiro e-book com IA.</p>
+      </div>
+    </div>
+
+    <!-- GENERATE SECTION -->
+    <div id="sectionGenerate" style="display:none;max-width:600px;">
+      <div class="section-title" style="margin-bottom:1.5rem;">⚡ Gerar Novo E-book</div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:2rem;">
+        <label>Tópico (deixe em branco para o sistema escolher automaticamente)</label>
+        <input type="text" id="topicInput" placeholder="Ex: Inteligência artificial para iniciantes" style="width:100%;background:#0f1623;border:1px solid var(--border);border-radius:10px;padding:.75rem 1rem;color:var(--text);font-size:.9rem;outline:none;margin-bottom:1.5rem;">
+        <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:12px;padding:1rem;margin-bottom:1.5rem;font-size:.85rem;color:var(--muted);">
+          <strong style="color:var(--text);">Pipeline automático:</strong><br>
+          IA escreve → Capa gerada → PDF A4 com ilustrações → QA automático → Pronto para publicar
+        </div>
+        <button class="btn-generate" style="width:100%;justify-content:center;" onclick="generateEbook()">
+          ⚡ Iniciar Geração
+        </button>
+      </div>
+    </div>
+
+    <!-- TOPICS SECTION -->
+    <div id="sectionTopics" style="display:none;">
+      <div class="section-title" style="margin-bottom:1.5rem;">🎯 Tópicos Disponíveis</div>
+      <div id="topicsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem;"></div>
+    </div>
+
+    <!-- AI STATUS SECTION -->
+    <div id="sectionAI" style="display:none;">
+      <div class="section-header">
+        <span class="section-title">🤖 Status dos Providers de IA</span>
+        <button class="btn-generate" onclick="resetAllAI()" style="font-size:.8rem;padding:.5rem 1rem;">
+          🔄 Reset Estado
+        </button>
+      </div>
+      <div id="aiDetailGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem;margin-top:1rem;"></div>
+    </div>
+  </div>
+</main>
+
+<!-- MODAL GENERATE -->
+<div class="modal-overlay" id="modalGenerate">
+  <div class="modal">
+    <h3>⚡ Gerar Novo E-book</h3>
+    <label>Tópico (opcional)</label>
+    <input type="text" id="modalTopic" placeholder="Deixe em branco para o sistema escolher">
+    <div style="font-size:.8rem;color:var(--muted);margin-bottom:1rem;">
+      O sistema irá: Escrever (5000+ palavras) → Criar capa → Gerar PDF A4 → QA automático
+    </div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal('modalGenerate')">Cancelar</button>
+      <button class="btn-confirm" onclick="startGenerate()">🚀 Gerar Agora</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL PUBLISH -->
+<div class="modal-overlay" id="modalPublish">
+  <div class="modal">
+    <h3>🚀 Publicar E-book</h3>
+    <div id="publishEbookTitle" style="font-size:.9rem;color:var(--muted);margin-bottom:1.25rem;"></div>
+    <label>Plataforma</label>
+    <select id="publishPlatform">
+      <option value="cakto">Cakto</option>
+      <option value="hotmart">Hotmart</option>
+      <option value="amazon">Amazon KDP</option>
+    </select>
+    <div id="publishNote" style="font-size:.8rem;color:var(--muted);background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:10px;padding:.75rem;margin-bottom:1rem;"></div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal('modalPublish')">Cancelar</button>
+      <button class="btn-confirm" onclick="confirmPublish()">🚀 Publicar</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+const API = { token: '', base: '' };
+let allEbooks = [], currentFilter = 'all', publishingEbookId = null;
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+async function init() {
+  const token = localStorage.getItem('genia_token');
+  if (!token) return window.location.href = '/login';
+
+  try {
+    const r = await fetch('/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) throw new Error();
+    const { user } = await r.json();
+    API.token = token;
+    document.getElementById('userName').textContent = user.name;
+    document.getElementById('userEmail').textContent = user.email;
+    document.getElementById('userAvatar').textContent = user.name[0].toUpperCase();
+    loadAll();
+  } catch {
+    localStorage.removeItem('genia_token');
+    window.location.href = '/login';
+  }
+}
+
+async function authFetch(url, opts = {}) {
+  return fetch(url, { ...opts, headers: { 'Authorization': 'Bearer ' + API.token, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+}
+
+// ─── Load All Data ───────────────────────────────────────────────────────────
+async function loadAll() {
+  loadStats();
+  loadEbooks();
+  loadAIStatus();
+}
+
+async function loadStats() {
+  try {
+    const r = await authFetch('/api/stats');
+    const { totalEbooks, published, totalRevenue, totalSales } = await r.json();
+    document.getElementById('statTotal').textContent = totalEbooks;
+    document.getElementById('statPublished').textContent = published;
+    document.getElementById('statRevenue').textContent = 'R$ ' + parseFloat(totalRevenue || 0).toFixed(2);
+    document.getElementById('statSales').textContent = totalSales || 0;
+  } catch (e) { console.error('stats:', e); }
+}
+
+async function loadEbooks() {
+  document.getElementById('ebooksLoading').style.display = 'flex';
+  document.getElementById('ebooksGrid').innerHTML = '';
+  try {
+    const r = await authFetch('/api/ebooks');
+    const { ebooks } = await r.json();
+    allEbooks = ebooks || [];
+    document.getElementById('ebooksCount').textContent = allEbooks.length;
+    renderEbooks(allEbooks);
+  } catch (e) {
+    showToast('Erro ao carregar e-books: ' + e.message, 'error');
+  } finally {
+    document.getElementById('ebooksLoading').style.display = 'none';
+  }
+}
+
+async function loadAIStatus() {
+  try {
+    const r = await authFetch('/api/ai-status');
+    const { providers } = await r.json();
+    renderAIBadges(providers);
+    renderAIDetail(providers);
+  } catch (e) { console.error('ai-status:', e); }
+}
+
+async function loadTopics() {
+  try {
+    const r = await authFetch('/api/topics');
+    const { topics } = await r.json();
+    const grid = document.getElementById('topicsGrid');
+    grid.innerHTML = topics.map(t => `
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.25rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;">
+          <span style="font-size:.75rem;background:rgba(99,102,241,.15);color:#a5b4fc;padding:.15rem .5rem;border-radius:6px;">${t.category}</span>
+          <span style="font-size:.8rem;color:var(--gold);font-weight:700;">⭐ ${t.demand_score?.toFixed(1)}</span>
+        </div>
+        <div style="font-size:.9rem;font-weight:600;line-height:1.4;">${t.topic}</div>
+        <div style="font-size:.75rem;color:var(--muted);margin-top:.5rem;">
+          Usado ${t.times_used}× · Vendas: ${t.total_sales} · ML: ${t.ml_score?.toFixed(2)}
+        </div>
+        <button onclick="setTopicAndGenerate('${t.topic.replace(/'/g, "\\'")}')"
+                style="margin-top:.75rem;width:100%;background:rgba(99,102,241,.15);color:#a5b4fc;border:none;padding:.4rem;border-radius:8px;cursor:pointer;font-size:.8rem;font-weight:600;">
+          ⚡ Gerar com este tópico
+        </button>
+      </div>`).join('');
+  } catch (e) { console.error('topics:', e); }
+}
+
+// ─── Render ──────────────────────────────────────────────────────────────────
+function renderEbooks(ebooks) {
+  const grid = document.getElementById('ebooksGrid');
+  const empty = document.getElementById('ebooksEmpty');
+  const filtered = currentFilter === 'all' ? ebooks : ebooks.filter(e => e.status === currentFilter);
+
+  if (!filtered.length) {
+    grid.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  grid.innerHTML = filtered.map(e => {
+    const date = new Date(e.createdAt).toLocaleDateString('pt-BR');
+    const cover = e.coverUrl
+      ? `<img src="${e.coverUrl}" alt="capa" loading="lazy" onerror="this.parentElement.innerHTML='📚'">`
+      : `📚`;
+    const platforms = [
+      e.hotmartUrl ? `<a href="${e.hotmartUrl}" target="_blank" class="platform-badge pb-hotmart">Hotmart</a>` : '',
+      e.caktoUrl   ? `<a href="${e.caktoUrl}"   target="_blank" class="platform-badge pb-cakto">Cakto</a>`   : '',
+      e.amazonUrl  ? `<a href="${e.amazonUrl}"  target="_blank" class="platform-badge pb-amazon">Amazon</a>` : '',
+    ].filter(Boolean).join('');
+    return `
+    <div class="ebook-card">
+      <div class="ebook-cover">${cover}</div>
+      <div class="ebook-body">
+        <div class="ebook-status status-${e.status}">${
+          e.status === 'published' ? '✅ Publicado' :
+          e.status === 'ready' ? '⚡ Pronto' : '⏳ Pendente'}</div>
+        <div class="ebook-title">${e.title}</div>
+        <div class="ebook-meta">
+          <span>📅 ${date}</span>
+          <span>📦 ${e.sizeKb}KB</span>
+          ${e.price ? `<span>💰 R$ ${e.price}</span>` : ''}
+        </div>
+        ${platforms ? `<div class="ebook-platforms">${platforms}</div>` : ''}
+        <div class="ebook-actions">
+          <button class="btn-action btn-download" onclick="downloadEbook('${e.pdfFile}')">⬇ Baixar</button>
+          <button class="btn-action btn-publish" onclick="openPublishModal('${e.id || e.pdfFile}', '${e.title.replace(/'/g, "\\'")}')" >🚀 Publicar</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderAIBadges(providers) {
+  const bar = document.getElementById('aiStatusBadges');
+  if (!providers) return;
+  bar.innerHTML = Object.entries(providers).filter(([k]) => !k.startsWith('_')).map(([name, p]) => {
+    const cls = !p.configured ? 'na' : p.degraded ? 'bad' : p.availableKeys === 0 ? 'bad' : 'ok';
+    const label = !p.configured ? 'sem chave' : p.degraded ? 'degradado' : p.availableKeys === 0 ? 'esgotado' : `${p.availableKeys}/${p.totalKeys || 1} chaves`;
+    return `<div class="ai-badge ${cls}"><div class="ai-dot"></div><strong>${name}</strong> <span>${label}</span></div>`;
+  }).join('');
+}
+
+function renderAIDetail(providers) {
+  const grid = document.getElementById('aiDetailGrid');
+  if (!providers) return;
+  grid.innerHTML = Object.entries(providers).filter(([k]) => !k.startsWith('_')).map(([name, p]) => {
+    const ok = p.configured && !p.degraded && p.availableKeys > 0;
+    const color = ok ? 'var(--green)' : 'var(--red)';
+    const status = !p.configured ? '⚪ Sem chave' : p.degraded ? '🔴 Degradado' : p.availableKeys === 0 ? '🟡 Esgotado' : '🟢 Operacional';
+    return `
+    <div style="background:var(--card);border:1px solid ${ok ? 'rgba(16,185,129,.3)' : 'var(--border)'};border-radius:12px;padding:1.25rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;">
+        <strong style="font-size:.95rem;">${name}</strong>
+        <span style="font-size:.75rem;color:${color};">${status}</span>
+      </div>
+      <div style="font-size:.75rem;color:var(--muted);">
+        ${p.totalKeys ? `${p.availableKeys}/${p.totalKeys} chaves ativas` : 'Local/sem chave'}<br>
+        ${p.limits ? `${p.limits.rpm} RPM · ${p.limits.rpd === 999999 ? '∞' : p.limits.rpd} RPD` : ''}
+        ${p.degradedUntil ? `<br>Disponível às: ${new Date(p.degradedUntil).toLocaleTimeString('pt-BR')}` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─── Actions ─────────────────────────────────────────────────────────────────
+function filterEbooks(filter, btn) {
+  currentFilter = filter;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderEbooks(allEbooks);
+}
+
+function downloadEbook(pdfFile) {
+  const a = document.createElement('a');
+  a.href = `/pdfs/${pdfFile}?token=${API.token}`;
+  a.download = pdfFile;
+  a.click();
+}
+
+function openGenerateModal() { document.getElementById('modalGenerate').classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+async function startGenerate() {
+  const topic = document.getElementById('modalTopic').value.trim();
+  closeModal('modalGenerate');
+  showToast('⚡ Geração iniciada! Pode demorar alguns minutos.', 'success');
+  try {
+    await authFetch('/api/generate', { method: 'POST', body: JSON.stringify({ topic: topic || null }) });
+    setTimeout(() => { loadEbooks(); loadStats(); }, 5000);
+  } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+}
+
+function setTopicAndGenerate(topic) {
+  document.getElementById('modalTopic').value = topic;
+  showSection('generate');
+  showToast(`Tópico selecionado: "${topic}"`, 'success');
+}
+
+function generateEbook() {
+  const topic = document.getElementById('topicInput').value.trim();
+  openGenerateModal();
+  document.getElementById('modalTopic').value = topic;
+}
+
+function openPublishModal(ebookId, title) {
+  publishingEbookId = ebookId;
+  document.getElementById('publishEbookTitle').textContent = title;
+  updatePublishNote();
+  document.getElementById('modalPublish').classList.add('open');
+}
+
+function updatePublishNote() {
+  const platform = document.getElementById('publishPlatform').value;
+  const notes = {
+    cakto:   '⚠️ Necessário: CAKTO_EMAIL e CAKTO_PASSWORD no .env. O sistema fará login automático e criará o produto.',
+    hotmart: '⚠️ Necessário: HOTMART_EMAIL e HOTMART_PASSWORD no .env. O sistema fará upload do PDF automaticamente.',
+    amazon:  '⚠️ Necessário: AMAZON_EMAIL e AMAZON_PASSWORD no .env. O sistema irá ao KDP e publicará o e-book. Dados bancários devem ser preenchidos por você na Amazon.',
+  };
+  document.getElementById('publishNote').textContent = notes[platform] || '';
+}
+document.getElementById('publishPlatform')?.addEventListener('change', updatePublishNote);
+
+async function confirmPublish() {
+  const platform = document.getElementById('publishPlatform').value;
+  closeModal('modalPublish');
+  showToast(`🚀 Publicando no ${platform}...`, 'success');
+  try {
+    await authFetch(`/api/publish/${platform}`, {
+      method: 'POST',
+      body: JSON.stringify({ ebookId: publishingEbookId }),
+    });
+    showToast(`Publicação no ${platform} iniciada! Verifique os logs.`, 'success');
+    setTimeout(() => { loadEbooks(); loadStats(); }, 8000);
+  } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+}
+
+async function resetAllAI() {
+  try {
+    await authFetch('/api/reset-ai', { method: 'POST', body: JSON.stringify({}) });
+    showToast('✅ Estado da IA resetado!', 'success');
+    loadAIStatus();
+  } catch (e) { showToast('Erro: ' + e.message, 'error'); }
+}
+
+function logout() {
+  localStorage.removeItem('genia_token');
+  localStorage.removeItem('genia_user');
+  window.location.href = '/login';
+}
+
+// ─── Navigation ──────────────────────────────────────────────────────────────
+function showSection(name) {
+  const sections = { ebooks: 'sectionEbooks', generate: 'sectionGenerate',
+                     topics: 'sectionTopics', ai: 'sectionAI' };
+  const titles   = { ebooks: 'Meus E-books', generate: 'Gerar E-book',
+                     topics: 'Tópicos', ai: 'Status da IA' };
+  Object.values(sections).forEach(id => document.getElementById(id).style.display = 'none');
+  document.getElementById(sections[name]).style.display = 'block';
+  document.getElementById('pageTitle').textContent = titles[name];
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  event?.currentTarget?.classList.add('active');
+  if (name === 'topics') loadTopics();
+  if (name === 'ai') loadAIStatus();
+}
+
+// ─── Toast ───────────────────────────────────────────────────────────────────
+function showToast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast show ${type}`;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// ─── Start ───────────────────────────────────────────────────────────────────
+init();
+setInterval(loadAll, 30000); // Auto-refresh a cada 30s
+</script>
+</body>
+</html>

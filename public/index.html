@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GENIA EbookPublisher — Crie e Venda E-books com IA</title>
+<style>
+  :root {
+    --bg: #0a0e1a; --bg2: #111827; --accent: #6366f1;
+    --accent2: #8b5cf6; --gold: #f59e0b; --text: #f1f5f9;
+    --muted: #94a3b8; --card: #1e2535; --border: #2d3748;
+    --green: #10b981; --red: #ef4444;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif; }
+
+  /* NAV */
+  nav { position:fixed; top:0; width:100%; z-index:100; backdrop-filter:blur(20px);
+        background:rgba(10,14,26,0.85); border-bottom:1px solid var(--border);
+        display:flex; align-items:center; justify-content:space-between; padding:0 2rem; height:64px; }
+  .logo { font-size:1.25rem; font-weight:800; color:var(--text);
+          background:linear-gradient(135deg,#6366f1,#8b5cf6); -webkit-background-clip:text;
+          -webkit-text-fill-color:transparent; }
+  .nav-links { display:flex; gap:1.5rem; align-items:center; }
+  .nav-links a { color:var(--muted); text-decoration:none; font-size:.9rem; transition:color .2s; }
+  .nav-links a:hover { color:var(--text); }
+  .btn-nav { background:var(--accent); color:#fff; padding:.5rem 1.25rem; border-radius:8px;
+             font-size:.9rem; font-weight:600; text-decoration:none; transition:all .2s; }
+  .btn-nav:hover { background:var(--accent2); transform:translateY(-1px); }
+
+  /* HERO */
+  .hero { min-height:100vh; display:flex; align-items:center; justify-content:center;
+          flex-direction:column; text-align:center; padding:6rem 2rem 4rem;
+          background:radial-gradient(ellipse at 50% 0%, rgba(99,102,241,0.15) 0%, transparent 70%); }
+  .badge { display:inline-flex; align-items:center; gap:.5rem; background:rgba(99,102,241,.15);
+           border:1px solid rgba(99,102,241,.3); border-radius:100px; padding:.35rem 1rem;
+           font-size:.8rem; color:#a5b4fc; margin-bottom:1.5rem; }
+  .badge span { width:6px; height:6px; border-radius:50%; background:var(--accent); animation:pulse 2s infinite; }
+  h1 { font-size:clamp(2.5rem,6vw,4.5rem); font-weight:900; line-height:1.1;
+       background:linear-gradient(135deg,#fff 30%,#a5b4fc); -webkit-background-clip:text;
+       -webkit-text-fill-color:transparent; margin-bottom:1.5rem; max-width:900px; }
+  .hero p { font-size:1.25rem; color:var(--muted); max-width:600px; line-height:1.7; margin-bottom:2.5rem; }
+  .hero-btns { display:flex; gap:1rem; flex-wrap:wrap; justify-content:center; }
+  .btn-primary { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff;
+                 padding:.9rem 2rem; border-radius:12px; font-size:1rem; font-weight:700;
+                 text-decoration:none; transition:all .2s; box-shadow:0 0 30px rgba(99,102,241,.3); }
+  .btn-primary:hover { transform:translateY(-2px); box-shadow:0 0 50px rgba(99,102,241,.5); }
+  .btn-outline { border:2px solid var(--border); color:var(--text); padding:.9rem 2rem;
+                 border-radius:12px; font-size:1rem; font-weight:600; text-decoration:none; transition:all .2s; }
+  .btn-outline:hover { border-color:var(--accent); color:var(--accent); }
+
+  /* STATS STRIP */
+  .stats { display:flex; justify-content:center; gap:3rem; padding:3rem 2rem;
+           border-top:1px solid var(--border); border-bottom:1px solid var(--border);
+           background:var(--bg2); flex-wrap:wrap; }
+  .stat { text-align:center; }
+  .stat-num { font-size:2.5rem; font-weight:900; color:var(--accent); }
+  .stat-label { font-size:.85rem; color:var(--muted); margin-top:.25rem; }
+
+  /* FEATURES */
+  section { padding:5rem 2rem; max-width:1200px; margin:0 auto; }
+  .section-label { font-size:.8rem; text-transform:uppercase; letter-spacing:.1em;
+                   color:var(--accent); font-weight:700; margin-bottom:1rem; }
+  h2 { font-size:2.25rem; font-weight:800; margin-bottom:1rem; }
+  .subtitle { color:var(--muted); font-size:1.1rem; max-width:600px; line-height:1.7; margin-bottom:3rem; }
+  .features { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:1.5rem; }
+  .feature-card { background:var(--card); border:1px solid var(--border); border-radius:16px;
+                  padding:2rem; transition:all .3s; }
+  .feature-card:hover { border-color:var(--accent); transform:translateY(-4px);
+                         box-shadow:0 20px 40px rgba(0,0,0,.3); }
+  .feature-icon { font-size:2rem; margin-bottom:1rem; }
+  .feature-card h3 { font-size:1.1rem; font-weight:700; margin-bottom:.5rem; }
+  .feature-card p { color:var(--muted); font-size:.9rem; line-height:1.6; }
+
+  /* PIPELINE */
+  .pipeline { display:flex; gap:0; align-items:stretch; flex-wrap:wrap; margin:2rem 0; }
+  .step { flex:1; min-width:160px; background:var(--card); border:1px solid var(--border);
+          padding:1.5rem; text-align:center; position:relative; }
+  .step:not(:last-child)::after { content:'→'; position:absolute; right:-18px; top:50%;
+                                   transform:translateY(-50%); color:var(--accent); font-size:1.5rem; z-index:1; }
+  .step:first-child { border-radius:12px 0 0 12px; }
+  .step:last-child  { border-radius:0 12px 12px 0; }
+  .step-num { width:36px; height:36px; border-radius:50%; background:rgba(99,102,241,.2);
+              border:2px solid var(--accent); display:flex; align-items:center; justify-content:center;
+              font-weight:800; font-size:.9rem; margin:0 auto .75rem; color:var(--accent); }
+  .step h4 { font-size:.9rem; font-weight:700; margin-bottom:.3rem; }
+  .step p  { font-size:.75rem; color:var(--muted); }
+
+  /* PLATFORMS */
+  .platforms { display:flex; gap:1rem; flex-wrap:wrap; margin-top:2rem; }
+  .platform { background:var(--card); border:1px solid var(--border); border-radius:12px;
+              padding:1rem 1.5rem; display:flex; align-items:center; gap:.75rem; }
+  .platform-dot { width:10px; height:10px; border-radius:50%; }
+  .platform h4 { font-size:.9rem; font-weight:700; }
+  .platform p  { font-size:.75rem; color:var(--muted); }
+
+  /* CTA */
+  .cta { text-align:center; padding:6rem 2rem;
+         background:radial-gradient(ellipse at 50% 50%, rgba(99,102,241,0.15) 0%, transparent 70%); }
+  .cta h2 { font-size:2.5rem; font-weight:900; margin-bottom:1rem; }
+  .cta p  { color:var(--muted); font-size:1.1rem; margin-bottom:2.5rem; }
+
+  /* FOOTER */
+  footer { border-top:1px solid var(--border); padding:2rem; text-align:center;
+           color:var(--muted); font-size:.85rem; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">⚡ GENIA Publisher</div>
+  <div class="nav-links">
+    <a href="#features">Recursos</a>
+    <a href="#pipeline">Como funciona</a>
+    <a href="#platforms">Plataformas</a>
+    <a href="/login">Login</a>
+    <a href="/register" class="btn-nav">Começar grátis</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="badge"><span></span> Sistema 100% autônomo com IA</div>
+  <h1>Crie e venda e-books<br>no piloto automático</h1>
+  <p>O GENIA EbookPublisher usa IA para escrever, criar capas profissionais, gerar PDFs e publicar automaticamente em Hotmart, Cakto e Amazon KDP — sem intervenção humana.</p>
+  <div class="hero-btns">
+    <a href="/register" class="btn-primary">🚀 Criar minha conta grátis</a>
+    <a href="/login" class="btn-outline">Ver Dashboard</a>
+  </div>
+</section>
+
+<!-- STATS -->
+<div class="stats">
+  <div class="stat"><div class="stat-num">7+</div><div class="stat-label">Providers de IA</div></div>
+  <div class="stat"><div class="stat-num">A4</div><div class="stat-label">PDFs profissionais</div></div>
+  <div class="stat"><div class="stat-num">3</div><div class="stat-label">Plataformas de venda</div></div>
+  <div class="stat"><div class="stat-num">100%</div><div class="stat-label">Automático</div></div>
+</div>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="section-label">Recursos</div>
+  <h2>Tudo que você precisa para vender e-books</h2>
+  <p class="subtitle">Da ideia ao dinheiro na conta, sem você precisar fazer nada manualmente.</p>
+  <div class="features">
+    <div class="feature-card">
+      <div class="feature-icon">🤖</div>
+      <h3>IA com Fallback Chain</h3>
+      <p>Gemini, Cerebras, SambaNova, Groq, HuggingFace. Se um cai, outro assume automaticamente. Sem interrupção na produção.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🎨</div>
+      <h3>Capas Profissionais</h3>
+      <p>FLUX.1, DALL-E 3, Gemini Image Gen ou HTML/CSS via Puppeteer. Capas que parecem feitas por designer profissional.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📄</div>
+      <h3>PDFs Perfeitos</h3>
+      <p>A4, ilustrações por capítulo, capa, sumário, introdução, conclusão. QA automático verifica cada PDF antes de publicar.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🛒</div>
+      <h3>Publicação Automática</h3>
+      <p>Publica automaticamente no Hotmart, Cakto e Amazon KDP via Puppeteer. Sem precisar acessar nenhuma plataforma.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📊</div>
+      <h3>Dashboard Completo</h3>
+      <p>Veja todos os e-books gerados, capas, status de publicação, vendas e receita em um único lugar.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🧠</div>
+      <h3>Machine Learning</h3>
+      <p>O sistema aprende quais tópicos vendem mais e prioriza automaticamente os assuntos de maior demanda.</p>
+    </div>
+  </div>
+</section>
+
+<!-- PIPELINE -->
+<section id="pipeline">
+  <div class="section-label">Como funciona</div>
+  <h2>Pipeline completo em 5 etapas</h2>
+  <p class="subtitle">Do tópico ao e-book publicado de forma totalmente automática.</p>
+  <div class="pipeline">
+    <div class="step"><div class="step-num">1</div><h4>Tópico</h4><p>ML seleciona o assunto mais lucrativo</p></div>
+    <div class="step"><div class="step-num">2</div><h4>Escrita</h4><p>IA gera 5000+ palavras de conteúdo</p></div>
+    <div class="step"><div class="step-num">3</div><h4>Capa</h4><p>FLUX.1 ou HTML/CSS Puppeteer</p></div>
+    <div class="step"><div class="step-num">4</div><h4>PDF A4</h4><p>Ilustrações + QA automático</p></div>
+    <div class="step"><div class="step-num">5</div><h4>Publicação</h4><p>Hotmart, Cakto, Amazon</p></div>
+  </div>
+</section>
+
+<!-- PLATFORMS -->
+<section id="platforms">
+  <div class="section-label">Plataformas</div>
+  <h2>Publique onde seus clientes estão</h2>
+  <p class="subtitle">Integração via Puppeteer com as maiores plataformas de venda de infoprodutos.</p>
+  <div class="platforms">
+    <div class="platform">
+      <div class="platform-dot" style="background:#ff6b35"></div>
+      <div><h4>Hotmart</h4><p>Líder em infoprodutos</p></div>
+    </div>
+    <div class="platform">
+      <div class="platform-dot" style="background:#6366f1"></div>
+      <div><h4>Cakto</h4><p>Pagamentos rápidos</p></div>
+    </div>
+    <div class="platform">
+      <div class="platform-dot" style="background:#f59e0b"></div>
+      <div><h4>Amazon KDP</h4><p>Mercado global</p></div>
+    </div>
+    <div class="platform">
+      <div class="platform-dot" style="background:#10b981"></div>
+      <div><h4>+Mais em breve</h4><p>Kiwify, Eduzz, Monetizze</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta">
+  <h2>Pronto para automatizar<br>suas vendas?</h2>
+  <p>Crie sua conta gratuita e comece a gerar e-books com IA agora mesmo.</p>
+  <a href="/register" class="btn-primary" style="display:inline-block">🚀 Criar conta grátis</a>
+</section>
+
+<footer>
+  <p>© 2026 GENIA EbookPublisher — Veloxis Editorial. Feito com ⚡ e muito café.</p>
+</footer>
+
+</body>
+</html>

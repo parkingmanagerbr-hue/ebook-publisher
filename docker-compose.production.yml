@@ -1,0 +1,63 @@
+version: '3.8'
+
+# ============================================================
+# Deploy de Produção — GENIA EbookPublisher na VPS
+# ============================================================
+# Uso:
+#   ssh vps "cd /opt/platform && docker compose -f docker-compose.production.yml pull ebook-publisher && docker compose -f docker-compose.production.yml up -d ebook-publisher"
+#
+# Variáveis de ambiente necessárias no servidor:
+#   DOMAIN=seudominio.com
+#   (demais variáveis em /opt/platform/.env)
+
+services:
+  ebook-publisher:
+    image: ghcr.io/parkingmanagerbr-hue/ebook-publisher:latest
+    container_name: platform-ebook-publisher-1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - DASHBOARD_PORT=3100
+      - HEADLESS=true
+    volumes:
+      - ebook_pdfs:/app/data/pdfs
+      - ebook_covers:/app/data/covers
+      - ebook_db:/app/data
+      - ebook_logs:/app/logs
+    shm_size: '256mb'
+    cap_add:
+      - SYS_ADMIN
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      # HTTP → HTTPS redirect
+      - "traefik.http.routers.ebook-http.rule=Host(`publisher.${DOMAIN}`)"
+      - "traefik.http.routers.ebook-http.entrypoints=web"
+      - "traefik.http.routers.ebook-http.middlewares=redirect-https"
+      # HTTPS
+      - "traefik.http.routers.ebook-publisher.rule=Host(`publisher.${DOMAIN}`)"
+      - "traefik.http.routers.ebook-publisher.entrypoints=websecure"
+      - "traefik.http.routers.ebook-publisher.tls=true"
+      - "traefik.http.routers.ebook-publisher.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ebook-publisher.loadbalancer.server.port=3100"
+      # Middleware redirect
+      - "traefik.http.middlewares.redirect-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-https.redirectscheme.permanent=true"
+
+volumes:
+  ebook_pdfs:
+    driver: local
+  ebook_covers:
+    driver: local
+  ebook_db:
+    driver: local
+  ebook_logs:
+    driver: local
+
+networks:
+  proxy:
+    external: true

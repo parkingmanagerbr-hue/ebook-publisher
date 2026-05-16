@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  ebook-publisher:
+    build: .
+    image: genia/ebook-publisher:latest
+    container_name: ebook-publisher
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - DASHBOARD_PORT=3100
+      - HEADLESS=true
+    volumes:
+      # Dados persistentes (PDFs, capas, banco de dados)
+      - ebook_pdfs:/app/data/pdfs
+      - ebook_covers:/app/data/covers
+      - ebook_db:/app/data
+      - ebook_logs:/app/logs
+    shm_size: '256mb'   # Necessário para o Chromium/Puppeteer
+    cap_add:
+      - SYS_ADMIN        # Necessário para Puppeteer sandbox
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ebook-publisher.rule=Host(`publisher.${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.ebook-publisher.tls=true"
+      - "traefik.http.routers.ebook-publisher.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ebook-publisher.loadbalancer.server.port=3100"
+
+volumes:
+  ebook_pdfs:
+    driver: local
+  ebook_covers:
+    driver: local
+  ebook_db:
+    driver: local
+  ebook_logs:
+    driver: local

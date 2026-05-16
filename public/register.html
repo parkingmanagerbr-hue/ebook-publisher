@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Criar Conta — GENIA EbookPublisher</title>
+<style>
+  :root { --bg:#0a0e1a; --bg2:#111827; --accent:#6366f1; --accent2:#8b5cf6;
+          --text:#f1f5f9; --muted:#94a3b8; --card:#1e2535; --border:#2d3748;
+          --green:#10b981; --red:#ef4444; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif;
+         min-height:100vh; display:flex; flex-direction:column; align-items:center;
+         justify-content:center; padding:2rem;
+         background-image:radial-gradient(ellipse at 50% 0%, rgba(139,92,246,.12) 0%, transparent 70%); }
+  .logo { font-size:1.5rem; font-weight:900; margin-bottom:2.5rem; text-align:center;
+          background:linear-gradient(135deg,#6366f1,#8b5cf6); -webkit-background-clip:text;
+          -webkit-text-fill-color:transparent; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:20px;
+          padding:2.5rem; width:100%; max-width:420px; }
+  h1 { font-size:1.75rem; font-weight:800; margin-bottom:.5rem; }
+  .subtitle { color:var(--muted); font-size:.9rem; margin-bottom:2rem; }
+  label { display:block; font-size:.85rem; font-weight:600; color:var(--muted); margin-bottom:.4rem; }
+  input { width:100%; background:#0f1623; border:1px solid var(--border); border-radius:10px;
+          padding:.75rem 1rem; color:var(--text); font-size:1rem; outline:none; transition:border .2s;
+          margin-bottom:1.25rem; }
+  input:focus { border-color:var(--accent); }
+  input::placeholder { color:#475569; }
+  .btn { width:100%; background:linear-gradient(135deg,var(--accent),var(--accent2));
+         color:#fff; border:none; padding:.85rem; border-radius:12px; font-size:1rem;
+         font-weight:700; cursor:pointer; transition:all .2s; margin-top:.5rem; }
+  .btn:hover { transform:translateY(-1px); box-shadow:0 10px 30px rgba(99,102,241,.4); }
+  .btn:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+  .footer-link { text-align:center; font-size:.85rem; color:var(--muted); margin-top:1.5rem; }
+  .link { color:var(--accent); text-decoration:none; font-weight:600; }
+  .link:hover { text-decoration:underline; }
+  .alert { border-radius:10px; padding:.75rem 1rem; font-size:.85rem; margin-bottom:1rem; display:none; }
+  .alert.error { background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.3); color:#fca5a5; }
+  .alert.success { background:rgba(16,185,129,.1); border:1px solid rgba(16,185,129,.3); color:#6ee7b7; }
+  .perks { display:flex; flex-direction:column; gap:.5rem; margin-bottom:2rem; }
+  .perk { display:flex; align-items:center; gap:.5rem; font-size:.85rem; color:var(--muted); }
+  .perk::before { content:'✓'; color:var(--green); font-weight:700; }
+</style>
+</head>
+<body>
+
+<div class="logo">⚡ GENIA Publisher</div>
+
+<div class="card">
+  <h1>Criar conta grátis</h1>
+  <p class="subtitle">Comece a gerar e-books com IA em segundos</p>
+
+  <div class="perks">
+    <div class="perk">Dashboard completo de e-books</div>
+    <div class="perk">Publicação automática em 3 plataformas</div>
+    <div class="perk">Pipeline de IA com fallback chain</div>
+  </div>
+
+  <div class="alert error" id="alertError"></div>
+  <div class="alert success" id="alertSuccess"></div>
+
+  <form id="registerForm">
+    <label>Nome completo</label>
+    <input type="text" id="name" placeholder="Seu nome" required>
+    <label>E-mail</label>
+    <input type="email" id="email" placeholder="seu@email.com" required>
+    <label>Senha (mín. 6 caracteres)</label>
+    <input type="password" id="password" placeholder="••••••••" required minlength="6">
+    <button type="submit" class="btn" id="btnRegister">🚀 Criar minha conta</button>
+  </form>
+
+  <div class="footer-link">Já tem conta? <a href="/login" class="link">Fazer login</a></div>
+  <div class="footer-link" style="margin-top:.75rem;"><a href="/" class="link" style="color:var(--muted)">← Voltar ao início</a></div>
+</div>
+
+<script>
+  document.getElementById('registerForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn  = document.getElementById('btnRegister');
+    const errEl = document.getElementById('alertError');
+    const okEl  = document.getElementById('alertSuccess');
+    errEl.style.display = 'none';
+    okEl.style.display  = 'none';
+    btn.disabled = true;
+    btn.textContent = 'Criando conta...';
+
+    try {
+      const res = await fetch('/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name:     document.getElementById('name').value,
+          email:    document.getElementById('email').value,
+          password: document.getElementById('password').value,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao criar conta');
+      localStorage.setItem('genia_token', data.token);
+      localStorage.setItem('genia_user', JSON.stringify(data.user));
+      okEl.textContent = 'Conta criada! Redirecionando para o dashboard...';
+      okEl.style.display = 'block';
+      setTimeout(() => window.location.href = '/dashboard', 1000);
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = '🚀 Criar minha conta';
+    }
+  });
+</script>
+</body>
+</html>
