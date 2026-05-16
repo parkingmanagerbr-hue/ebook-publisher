@@ -1,7 +1,7 @@
 {
   "name": "ebook-publisher",
   "version": "1.0.0",
-  "description": "GENIA EbookPublisher — Sistema autônomo de criação e publicação de e-books",
+  "description": "E-book Caster — Sistema autônomo de criação e publicação de e-books com IA",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

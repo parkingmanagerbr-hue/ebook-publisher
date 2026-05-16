@@ -24,6 +24,12 @@ try {
   generateHTMLCover = require('./coverAgentHTML').generateHTMLCover;
 } catch (_) {}
 
+// Claude Design — melhor qualidade, prioridade máxima
+let claudeDesign = null;
+try {
+  claudeDesign = require('./claudeDesignAgent');
+} catch (_) {}
+
 const COVERS_DIR = path.join(__dirname, '../../data/covers');
 
 // ─── Paletas por categoria ───────────────────────────────────────────────────
@@ -287,10 +293,28 @@ async function _generateCoverOnce(title, subtitle, topic) {
   fs.mkdirSync(COVERS_DIR, { recursive: true });
   const cat = detectCategory(topic);
 
-  // ── Provider 1: HTML/CSS renderizado via Puppeteer (melhor qualidade de texto) ──
+  // ── Provider 0: Claude Design — capa completa HTML/CSS gerada por Claude AI ──
+  if (claudeDesign?.isAvailable()) {
+    try {
+      logger.info('🤖 Claude Design — gerando capa HTML/CSS criativa...');
+      const claudePath = await claudeDesign.generateEbookCover({
+        title, subtitle, topic,
+        author: process.env.AUTHOR_NAME || 'GENIA Editorial',
+        outputDir: COVERS_DIR,
+      });
+      if (claudePath && fs.existsSync(claudePath)) {
+        logger.info(`✅ Capa Claude Design gerada: ${path.basename(claudePath)}`);
+        return claudePath;
+      }
+    } catch (e) {
+      logger.warn(`⚠️ Claude Design falhou: ${e.message} — tentando próximo provider`);
+    }
+  }
+
+  // ── Provider 1: HTML/CSS renderizado via Puppeteer (template) ──
   if (generateHTMLCover) {
     try {
-      logger.info('🎨 Tentando capa HTML (Puppeteer)...');
+      logger.info('🎨 Tentando capa HTML template (Puppeteer)...');
       const htmlPath = await generateHTMLCover(title, subtitle, topic, cat);
       if (htmlPath && fs.existsSync(htmlPath)) {
         logger.info(`✅ Capa HTML gerada: ${path.basename(htmlPath)}`);
@@ -331,4 +355,28 @@ async function generateCover(title, subtitle, topic, category = null) {
   return ensureQualityCover(_generateCoverOnce, title, subtitle, topic);
 }
 
-module.exports = { generateCover, detectCategory, buildCoverPrompt: buildBackgroundPrompt, buildIllustrationPrompt };
+// ─── ILUSTRAÇÃO DE CAPÍTULO via Claude Design ────────────────────────────────
+async function generateChapterIllustration(chapterTitle, topic, outputDir) {
+  // Claude Design primeiro (qualidade superior)
+  if (claudeDesign?.isAvailable()) {
+    try {
+      return await claudeDesign.generateChapterIllustration({ chapterTitle, topic, outputDir });
+    } catch (e) {
+      logger.warn(`⚠️ Claude Design ilustração falhou: ${e.message} — usando imageGenAgent`);
+    }
+  }
+  // Fallback: imageGenAgent com prompt de ilustração
+  const { generateImage } = require('./imageGenAgent');
+  const prompt = buildIllustrationPrompt(chapterTitle, topic);
+  const outPath = path.join(outputDir, `illustration_${Date.now()}.png`);
+  await generateImage({ prompt, width: 1200, height: 400, outputPath: outPath });
+  return outPath;
+}
+
+module.exports = {
+  generateCover,
+  generateChapterIllustration,
+  detectCategory,
+  buildCoverPrompt: buildBackgroundPrompt,
+  buildIllustrationPrompt,
+};

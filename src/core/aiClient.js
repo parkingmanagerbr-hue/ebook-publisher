@@ -2,14 +2,15 @@
  * GENIA AI Client — Fallback chain completo
  * Baseado no padrão llm_client.py do Clipcaster
  *
- * Ordem: Gemini (3 chaves) → Cerebras (6 chaves) → SambaNova (6 chaves) → Groq → HuggingFace → Ollama VPS → Ollama Local
+ * Ordem: Gemini (5 chaves) → Cerebras (6 chaves) → SambaNova (6 chaves) → Groq → DeepSeek (2 chaves) → HuggingFace (2 chaves) → Ollama VPS → Ollama Local
  *
  * Limites por provider:
- *   Gemini Flash:    15 RPM, 1500 RPD por chave (x3 chaves = 4500 RPD total)
+ *   Gemini Flash:    15 RPM, 1500 RPD por chave (x5 chaves = 7500 RPD total)
  *   Cerebras:        60 RPM, gratuito, Qwen3-235B ~2000 tok/s
  *   SambaNova:       400 RPM, gratuito, Llama 3.3 70B (x6 chaves)
  *   Groq:            30 RPM, 14400 RPD, gratuito, Llama 3.3 70B
- *   HuggingFace:     10 RPM (serverless inference)
+ *   DeepSeek:        free tier (x2 chaves)
+ *   HuggingFace:     10 RPM (serverless inference, x2 chaves)
  *   Ollama VPS:      sem limite (llama3.2:3b via SSH tunnel)
  *   Ollama Local:    sem limite (local)
  */
@@ -33,6 +34,8 @@ const PROVIDER_KEYS = {
     process.env.GEMINI_API_KEY,
     process.env.GEMINI_API_KEY_2,
     process.env.GEMINI_API_KEY_3,
+    process.env.GEMINI_API_KEY_4,
+    process.env.GEMINI_API_KEY_5,
   ].filter(Boolean),
 
   cerebras:    [
@@ -52,7 +55,14 @@ const PROVIDER_KEYS = {
     process.env.SAMBANOVA_API_KEY_6,
   ].filter(Boolean),
   groq:        [process.env.GROQ_API_KEY].filter(Boolean),
-  huggingface: [process.env.HUGGINGFACE_API_KEY].filter(Boolean),
+  deepseek:    [
+    process.env.DEEPSEEK_API_KEY,
+    process.env.DEEPSEEK_API_KEY_2,
+  ].filter(Boolean),
+  huggingface: [
+    process.env.HUGGINGFACE_API_KEY,
+    process.env.HUGGINGFACE_API_KEY_2,
+  ].filter(Boolean),
   ollamaVps:   ['vps'],
   ollama:      ['local'],
 };
@@ -63,13 +73,14 @@ const LIMITS = {
   cerebras:    { rpm: 60,  rpd: 99999 },
   sambanova:   { rpm: 400, rpd: 99999 },
   groq:        { rpm: 30,  rpd: 14400 },
+  deepseek:    { rpm: 10,  rpd: 99999 },
   huggingface: { rpm: 10,  rpd: 1000 },
   ollamaVps:   { rpm: 999, rpd: 999999 },
   ollama:      { rpm: 999, rpd: 999999 },
 };
 
 // Ordem de fallback — mais rápidos/melhores primeiro
-const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'huggingface', 'ollamaVps', 'ollama'];
+const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'ollamaVps', 'ollama'];
 
 const SYSTEM_DEFAULT = 'Você é um escritor profissional especializado em e-books educativos em português brasileiro. Escreva de forma clara, prática e envolvente.';
 
@@ -297,6 +308,31 @@ async function callSambaNova(prompt, systemPrompt, apiKey) {
   return response.data.choices[0].message.content;
 }
 
+async function callDeepSeek(prompt, systemPrompt, apiKey) {
+  const model = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+  const response = await axios.post(
+    'https://api.deepseek.com/v1/chat/completions',
+    {
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: prompt },
+      ],
+      max_tokens: 4000,
+      temperature: 0.7,
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 60_000,
+    }
+  );
+  if (response.data.error) throw new Error(response.data.error.message || JSON.stringify(response.data.error));
+  return response.data.choices[0].message.content;
+}
+
 async function callHuggingFace(prompt, systemPrompt, apiKey) {
   // Usar o router unificado de chat completions da HuggingFace (Inference Providers)
   const model = process.env.HUGGINGFACE_MODEL || 'Qwen/Qwen2.5-72B-Instruct';
@@ -385,6 +421,7 @@ const PROVIDER_FNS = {
   cerebras:    callCerebras,
   sambanova:   callSambaNova,
   groq:        callGroq,
+  deepseek:    callDeepSeek,
   huggingface: callHuggingFace,
   ollamaVps:   callOllamaVps,
   ollama:      callOllama,

@@ -53,7 +53,7 @@ app.get('/register', (req, res) => res.sendFile(path.join(__dirname, '../public/
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  logger.info(`🌐 Dashboard rodando em http://localhost:${PORT}`);
+  logger.info(`🌐 E-book Caster rodando em http://localhost:${PORT}`);
   logger.info(`   Landing:   http://localhost:${PORT}/`);
   logger.info(`   Login:     http://localhost:${PORT}/login`);
   logger.info(`   Dashboard: http://localhost:${PORT}/dashboard`);
