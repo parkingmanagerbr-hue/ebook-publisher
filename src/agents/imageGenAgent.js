@@ -265,6 +265,7 @@ async function generateWithFlux(prompt, width, height, _primaryKey) {
           headers: {
             Authorization: `Bearer ${key}`,
             'Content-Type': 'application/json',
+            'Accept': 'image/jpeg, image/png, image/webp, */*',
             'X-Use-Cache': 'false',
           },
           responseType: 'arraybuffer',
