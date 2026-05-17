@@ -374,7 +374,7 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
   const openaiKey     = process.env.OPENAI_API_KEY;
   const togetherKey   = process.env.TOGETHER_API_KEY;
   const cfAccountId   = process.env.CF_ACCOUNT_ID;
-  const cfApiToken    = process.env.CF_API_TOKEN;
+  const cfApiToken    = process.env.CF_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN;
   const falKey        = process.env.FAL_AI_API_KEY;
   const geminiKey     = process.env.GEMINI_API_KEY;
   const hfKey         = process.env.HUGGINGFACE_API_KEY;

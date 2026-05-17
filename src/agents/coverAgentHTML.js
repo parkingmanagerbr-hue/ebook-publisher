@@ -65,7 +65,9 @@ Topic context: "${topic}"`;
 async function generateCoverHTML(title, subtitle, topic, category) {
   const prompt = buildHTMLPrompt(title, subtitle, topic, category);
   logger.info('🤖 Gerando HTML da capa via AI...');
-  const html = await generateText(prompt, '', { maxTokens: 4000 });
+  const result = await generateText(prompt, '', { maxTokens: 4000 });
+  // generate() retorna { text, provider, elapsed } — extrair o texto
+  const html = typeof result === 'string' ? result : (result?.text || '');
 
   // Limpar possíveis blocos markdown
   return html
