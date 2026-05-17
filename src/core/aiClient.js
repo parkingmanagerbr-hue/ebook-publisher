@@ -62,6 +62,8 @@ const PROVIDER_KEYS = {
   huggingface: [
     process.env.HUGGINGFACE_API_KEY,
     process.env.HUGGINGFACE_API_KEY_2,
+    process.env.HUGGINGFACE_API_KEY_3,
+    process.env.HUGGINGFACE_API_KEY_4,
   ].filter(Boolean),
   ollamaVps:   ['vps'],
   ollama:      ['local'],
