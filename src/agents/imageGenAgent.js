@@ -2,7 +2,8 @@
  * ImageGenAgent — Geração de imagens via AI com fallback chain
  *
  * Ordem (velocidade/qualidade → custo):
- *   1. DALL-E 3             (~15s, $0.04/img, melhor qualidade)
+ *   0. Higgsfield FLUX Pro  (~10s, FLUX Pro Kontext Max — MELHOR qualidade)
+ *   1. DALL-E 3             (~15s, $0.04/img, alta qualidade)
  *   2. fal.ai FLUX/schnell  (~3s, free tier — muito rápido!)
  *   3. Gemini Image Gen     (grátis com chave Gemini)
  *   4. HuggingFace FLUX     (grátis, mais lento)
@@ -17,6 +18,63 @@ const fs = require('fs');
 const path = require('path');
 const { createLogger } = require('../core/logger');
 const logger = createLogger('imageGenAgent');
+
+// ═══════════════════════════════════════════════════
+// 0. HIGGSFIELD — FLUX Pro Kontext Max (melhor qualidade)
+//    Env var: HIGGSFIELD_API_KEY=KEY_ID:KEY_SECRET
+// ═══════════════════════════════════════════════════
+async function generateWithHiggsfield(prompt, width, height, apiKey) {
+  const BASE = 'https://platform.higgsfield.ai';
+  const headers = {
+    'Authorization': `Key ${apiKey}`,
+    'Content-Type': 'application/json',
+  };
+
+  // Aspect ratio mais próximo das dimensões solicitadas
+  const ratio = width / height;
+  const aspectRatio = ratio >= 1.7 ? '16:9'
+    : ratio >= 1.2 ? '4:3'
+    : ratio >= 0.9 ? '1:1'
+    : ratio >= 0.7 ? '3:4'
+    : '9:16';
+
+  // 1. Submeter job
+  const seed = Math.floor(Math.random() * 999999);
+  const submitResp = await axios.post(
+    `${BASE}/flux-pro/kontext/max/text-to-image`,
+    { input: { prompt: prompt.slice(0, 2000), aspect_ratio: aspectRatio, safety_tolerance: 2, seed } },
+    { headers, timeout: 30_000 }
+  );
+
+  const requestId = submitResp.data?.request_id;
+  if (!requestId) throw new Error('Higgsfield não retornou request_id');
+  logger.info(`   Higgsfield job ${requestId} submetido (${aspectRatio})...`);
+
+  // 2. Polling até completar (máx 120s)
+  const t0 = Date.now();
+  while (Date.now() - t0 < 120_000) {
+    await new Promise(r => setTimeout(r, 2500));
+    const statusResp = await axios.get(
+      `${BASE}/requests/${requestId}/status`,
+      { headers, timeout: 15_000 }
+    );
+    const { status, results } = statusResp.data;
+
+    if (status === 'completed') {
+      const imgUrl = results?.raw?.url || results?.url;
+      if (!imgUrl) throw new Error('Higgsfield: completed mas sem URL');
+      const imgResp = await axios.get(imgUrl, { responseType: 'arraybuffer', timeout: 30_000 });
+      const buf = Buffer.from(imgResp.data);
+      if (buf.length < 10_000) throw new Error(`Higgsfield imagem suspeita (${buf.length} bytes)`);
+      return buf;
+    }
+    if (status === 'failed' || status === 'nsfw') {
+      throw new Error(`Higgsfield job ${status}`);
+    }
+    // queued / in_progress — continua polling
+  }
+  throw new Error('Higgsfield timeout (120s)');
+}
 
 // ═══════════════════════════════════════════════════
 // 1. DALL-E 3 (OpenAI) — mais rápido e confiável (~15s)
@@ -245,10 +303,11 @@ async function generateWithPollinations(prompt, width, height) {
 // FUNÇÃO PRINCIPAL
 // ═══════════════════════════════════════════════════
 async function generateImage({ prompt, width = 1024, height = 1024, outputPath }) {
-  const openaiKey = process.env.OPENAI_API_KEY;
-  const geminiKey = process.env.GEMINI_API_KEY;
-  const hfKey     = process.env.HUGGINGFACE_API_KEY;
-  const falKey    = process.env.FAL_AI_API_KEY;
+  const higgsfieldKey = process.env.HIGGSFIELD_API_KEY;
+  const openaiKey     = process.env.OPENAI_API_KEY;
+  const geminiKey     = process.env.GEMINI_API_KEY;
+  const hfKey         = process.env.HUGGINGFACE_API_KEY;
+  const falKey        = process.env.FAL_AI_API_KEY;
 
   // Aspect ratio para Gemini
   const ratio = width / height;
@@ -256,7 +315,12 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
 
   const providers = [
     {
-      name: 'DALL-E 3',           // ⚡ mais rápido e confiável (~15s, $0.04/img)
+      name: 'Higgsfield FLUX Pro', // 🥇 melhor qualidade, FLUX Pro Kontext Max
+      enabled: !!higgsfieldKey,
+      fn: () => generateWithHiggsfield(prompt, width, height, higgsfieldKey),
+    },
+    {
+      name: 'DALL-E 3',           // ⚡ confiável (~15s, $0.04/img)
       enabled: !!openaiKey,
       fn: () => generateWithDallE3(prompt, width, height, openaiKey),
     },
