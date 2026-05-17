@@ -67,6 +67,15 @@ app.listen(PORT, async () => {
     logger.warn('⚠️  topicExpander:', e.message);
   }
 
+  // Iniciar session watcher (verifica/renova sessões Hotmart+Cakto a cada 2h)
+  try {
+    const { startSessionWatcher } = require('./agents/sessionAgent');
+    startSessionWatcher();
+    logger.info('🔑 Session watcher iniciado');
+  } catch (e) {
+    logger.warn('⚠️  sessionAgent:', e.message);
+  }
+
   try {
     const agent = require('./core/autonomousAgent');
     agent.loop();

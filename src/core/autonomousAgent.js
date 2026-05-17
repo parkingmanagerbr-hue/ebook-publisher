@@ -49,6 +49,11 @@ function shouldPublishTo(platform) {
   const envKey = `AUTO_PUBLISH_${platform.toUpperCase()}`;
   // Se explicitamente desativado, não publica
   if (process.env[envKey] === 'false') return false;
+  // Verificar se sessão está degradada (sessionAgent detectou problema)
+  try {
+    const { isPlatformDegraded } = require('../agents/sessionAgent');
+    if (isPlatformDegraded(platform.toLowerCase())) return false;
+  } catch {}
   // Se explicitamente ativado, publica (usa sessão salva ou credenciais)
   if (process.env[envKey] === 'true') return true;
   // Fallback: publica se tiver credenciais de email/senha
