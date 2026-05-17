@@ -65,6 +65,7 @@ const PROVIDER_KEYS = {
     process.env.HUGGINGFACE_API_KEY_3,
     process.env.HUGGINGFACE_API_KEY_4,
   ].filter(Boolean),
+  pollinations: ['free'],
   ollamaVps:   ['vps'],
   ollama:      ['local'],
 };
@@ -77,12 +78,13 @@ const LIMITS = {
   groq:        { rpm: 30,  rpd: 14400 },
   deepseek:    { rpm: 10,  rpd: 99999 },
   huggingface: { rpm: 10,  rpd: 1000 },
+  pollinations: { rpm: 30,  rpd: 5000 },
   ollamaVps:   { rpm: 999, rpd: 999999 },
   ollama:      { rpm: 999, rpd: 999999 },
 };
 
 // Ordem de fallback — mais rápidos/melhores primeiro
-const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'ollamaVps', 'ollama'];
+const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'pollinations', 'ollamaVps', 'ollama'];
 
 const SYSTEM_DEFAULT = 'Você é um escritor profissional especializado em e-books educativos em português brasileiro. Escreva de forma clara, prática e envolvente.';
 
@@ -336,28 +338,32 @@ async function callDeepSeek(prompt, systemPrompt, apiKey) {
 }
 
 async function callHuggingFace(prompt, systemPrompt, apiKey) {
-  // Usar o router unificado de chat completions da HuggingFace (Inference Providers)
-  const model = process.env.HUGGINGFACE_MODEL || 'Qwen/Qwen2.5-72B-Instruct';
-  const response = await axios.post(
-    'https://api-inference.huggingface.co/v1/chat/completions',
-    {
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: prompt },
-      ],
-      max_tokens: 4000,
-      temperature: 0.7,
-    },
-    {
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 90_000,
-    }
+  // HuggingFace via router - tenta varios providers/modelos
+  const hfCombos = [
+    ["novita", "Qwen/Qwen2.5-72B-Instruct"],
+    ["together", "Qwen/Qwen2.5-72B-Instruct"],
+    ["novita", "meta-llama/Llama-3.1-8B-Instruct"],
+  ];
+  for (const [provider, model] of hfCombos) {
+    try {
+      const url = `https://router.huggingface.co/${provider}/models/${model}/v1/chat/completions`;
+      const r = await axios.post(url,
+        { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
+        { headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 90_000 }
+      );
+      return r.data.choices[0].message.content;
+    } catch {}
+  }
+  throw new Error("HuggingFace: nenhum provider disponivel");
+}
+
+async function callPollinations(prompt, systemPrompt) {
+  const model = process.env.POLLINATIONS_MODEL || "openai";
+  const r = await axios.post("https://text.pollinations.ai/openai",
+    { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
+    { headers: { "Content-Type": "application/json" }, timeout: 90_000 }
   );
-  return response.data.choices[0].message.content;
+  return r.data.choices[0].message.content;
 }
 
 async function callOllamaVps(prompt, systemPrompt) {
@@ -425,12 +431,13 @@ const PROVIDER_FNS = {
   groq:        callGroq,
   deepseek:    callDeepSeek,
   huggingface: callHuggingFace,
+  pollinations: (p, s, _k) => callPollinations(p, s),
   ollamaVps:   callOllamaVps,
   ollama:      callOllama,
 };
 
 // Providers sem apiKey (locais/tunnel)
-const LOCAL_PROVIDERS = new Set(['ollama', 'ollamaVps']);
+const LOCAL_PROVIDERS = new Set(['ollama', 'ollamaVps', 'pollinations']);
 // Providers que precisam de apiKey mas não entram no getNextKey como multi-key
 // (tudo fora de LOCAL_PROVIDERS já usa getNextKey normalmente)
 
