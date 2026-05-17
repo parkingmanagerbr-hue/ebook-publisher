@@ -238,57 +238,112 @@ async function generateWithCloudflare(prompt, width, height, accountId, apiToken
 }
 
 // ═══════════════════════════════════════════════════
-// 2b. HUGGINGFACE — tenta FLUX.1-schnell depois SDXL
+// 2b. HUGGINGFACE — modelos gratuitos via Inference API
+//     Prioriza modelos SD que funcionam no free tier
 // ═══════════════════════════════════════════════════
 async function generateWithFlux(prompt, width, height, apiKey) {
+  // Modelos gratuitos no HF Inference API (sem necessidade de pagamento)
   const models = [
-    { id: 'black-forest-labs/FLUX.1-schnell', steps: 4,  guidance: 0 },
-    { id: 'black-forest-labs/FLUX.1-dev',     steps: 20, guidance: 3.5 },
+    { id: 'stabilityai/stable-diffusion-xl-base-1.0', steps: 20, guidance: 7.5 },
+    { id: 'stabilityai/stable-diffusion-2-1',         steps: 20, guidance: 7.5 },
+    { id: 'Lykon/dreamshaper-7',                       steps: 20, guidance: 7.0 },
+    { id: 'SG161222/Realistic_Vision_V5.1_noVAE',      steps: 25, guidance: 7.0 },
+    { id: 'prompthero/openjourney-v4',                 steps: 25, guidance: 7.0 },
+    // FLUX como última tentativa (pode estar em waitlist/pago)
+    { id: 'black-forest-labs/FLUX.1-schnell',          steps: 4,  guidance: 0   },
   ];
-  // Router novo (requer Accept: image/png) → legacy como fallback
-  const baseUrls = [
-    'https://router.huggingface.co/hf-inference/models',
-    'https://api-inference.huggingface.co/models',
-  ];
+  const base = 'https://api-inference.huggingface.co/models';
   let lastErr;
   for (const { id: model, steps, guidance } of models) {
-    for (const base of baseUrls) {
-      try {
-        logger.info(`   HF model: ${model.split('/')[1]} (${base.includes('router') ? 'router' : 'legacy'})`);
-        const response = await axios.post(
-          `${base}/${model}`,
-          {
-            inputs: prompt,
-            parameters: {
-              width:  Math.min(width, 1024),
-              height: Math.min(height, 1024),
-              num_inference_steps: steps,
-              guidance_scale: guidance,
-            },
+    try {
+      logger.info(`   HF model: ${model.split('/')[1]}`);
+      const w = Math.min(Math.round(width  / 8) * 8, 1024);
+      const h = Math.min(Math.round(height / 8) * 8, 1024);
+      const response = await axios.post(
+        `${base}/${model}`,
+        {
+          inputs: prompt.slice(0, 500),
+          parameters: {
+            width: w, height: h,
+            num_inference_steps: steps,
+            guidance_scale: guidance,
           },
-          {
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-              'Accept': 'image/png',
-              'X-Use-Cache': 'false',
-            },
-            responseType: 'arraybuffer',
-            timeout: 180_000,
-          }
-        );
-        const buf = Buffer.from(response.data);
-        if (buf.length < 10_000) throw new Error(`Imagem suspeita: ${buf.length} bytes`);
-        return buf;
-      } catch (e) {
-        lastErr = e;
-        const status = e.response?.status;
-        logger.warn(`   HF ${model.split('/')[1]} falhou (${status || e.code}): ${e.message?.slice(0, 60)}`);
-        if (status !== 404 && status !== 503) break; // só tenta outra URL em 404/503
-      }
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'X-Use-Cache': 'false',
+          },
+          responseType: 'arraybuffer',
+          timeout: 120_000,
+        }
+      );
+      const buf = Buffer.from(response.data);
+      if (buf.length < 10_000) throw new Error(`Imagem suspeita: ${buf.length} bytes`);
+      return buf;
+    } catch (e) {
+      lastErr = e;
+      const status = e.response?.status;
+      logger.warn(`   HF ${model.split('/')[1]} falhou (${status || e.code}): ${e.message?.slice(0, 60)}`);
+      // 503 = model loading → aguardar e tentar próximo; outros erros → next model
     }
   }
   throw lastErr;
+}
+
+// ═══════════════════════════════════════════════════
+// 2c. PRODIA — Stable Diffusion API gratuita (sem chave)
+//     https://prodia.com/api-docs
+// ═══════════════════════════════════════════════════
+async function generateWithProdia(prompt, width, height) {
+  const models = [
+    'absolutereality_v181.safetensors [3d9d4d2b]',
+    'dreamshaper_8.safetensors [9d40847d]',
+    'revAnimated_v122.safetensors [3f4fefd9]',
+  ];
+  const model = models[Math.floor(Math.random() * models.length)];
+  const w = Math.min(Math.round(width  / 8) * 8, 1024);
+  const h = Math.min(Math.round(height / 8) * 8, 1024);
+
+  // Passo 1: submeter job
+  const jobResp = await axios.post(
+    'https://api.prodia.com/v1/sd/generate',
+    {
+      model,
+      prompt: prompt.slice(0, 500),
+      negative_prompt: 'text, watermark, blurry, low quality, ugly',
+      steps: 20,
+      cfg_scale: 7,
+      seed: Math.floor(Math.random() * 999999),
+      width: w,
+      height: h,
+      sampler: 'DPM++ 2M Karras',
+    },
+    { headers: { 'Content-Type': 'application/json' }, timeout: 20_000 }
+  );
+
+  const jobId = jobResp.data?.job;
+  if (!jobId) throw new Error('Prodia: job ID não retornado');
+
+  // Passo 2: aguardar processamento (poll até 120s)
+  const t0 = Date.now();
+  while (Date.now() - t0 < 120_000) {
+    await new Promise(r => setTimeout(r, 3000));
+    const statusResp = await axios.get(
+      `https://api.prodia.com/v1/job/${jobId}`,
+      { timeout: 10_000 }
+    );
+    const { status, imageUrl } = statusResp.data;
+    if (status === 'succeeded' && imageUrl) {
+      const imgResp = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30_000 });
+      const buf = Buffer.from(imgResp.data);
+      if (buf.length < 10_000) throw new Error(`Prodia imagem suspeita (${buf.length} bytes)`);
+      return buf;
+    }
+    if (status === 'failed') throw new Error('Prodia: job falhou');
+  }
+  throw new Error('Prodia: timeout aguardando job');
 }
 
 // ═══════════════════════════════════════════════════
@@ -385,11 +440,6 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
 
   const providers = [
     {
-      name: 'Higgsfield FLUX Pro', // 🥇 melhor qualidade, FLUX Pro Kontext Max
-      enabled: !!higgsfieldKey,
-      fn: () => generateWithHiggsfield(prompt, width, height, higgsfieldKey),
-    },
-    {
       name: 'Together.ai FLUX',   // ⚡ FLUX.1-schnell grátis ($25 free credit)
       enabled: !!togetherKey,
       fn: () => generateWithTogether(prompt, width, height, togetherKey),
@@ -415,9 +465,14 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
       fn: () => generateWithImagen(prompt, aspectRatio, geminiKey),
     },
     {
-      name: 'HuggingFace FLUX',   // grátis, mais lento
+      name: 'HuggingFace SD',     // grátis, modelos SD gratuitos
       enabled: !!hfKey,
       fn: () => generateWithFlux(prompt, width, height, hfKey),
+    },
+    {
+      name: 'Prodia SD',          // grátis, sem chave, SD via API
+      enabled: true,
+      fn: () => generateWithProdia(prompt, width, height),
     },
     {
       name: 'Pollinations.ai',    // grátis, sem chave, fallback final
