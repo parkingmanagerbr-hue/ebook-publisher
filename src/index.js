@@ -185,9 +185,13 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  logger.error('Erro fatal:', err);
-  process.exit(1);
-});
+// Só executa main() quando rodado diretamente (node src/index.js)
+// Quando imported como módulo (require('../index')), apenas exporta funções
+if (require.main === module) {
+  main().catch(err => {
+    logger.error('Erro fatal:', err);
+    process.exit(1);
+  });
+}
 
 module.exports = { runPipeline, runExample };

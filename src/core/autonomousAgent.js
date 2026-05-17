@@ -40,8 +40,9 @@ let _running   = false;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function getIntervalMs() {
-  const mins = parseInt(process.env.GENERATE_INTERVAL_MINUTES || '180');
-  return Math.max(30, mins) * 60 * 1000; // mínimo 30 minutos
+  const mins = parseInt(process.env.GENERATE_INTERVAL_MINUTES ?? '0');
+  if (mins === 0) return 0; // modo contínuo: sem pausa entre ciclos
+  return Math.max(5, mins) * 60 * 1000; // mínimo 5 minutos
 }
 
 function shouldPublishTo(platform) {
@@ -212,12 +213,19 @@ async function loop() {
       await sleep(15 * 60 * 1000);
     }
 
-    // Agendar próximo ciclo
+    // Pausa mínima entre ciclos (cooldown de 5s para logs drenarem)
     const intervalMs = getIntervalMs();
-    const nextRun    = new Date(Date.now() + intervalMs).toISOString();
-    setState({ currentStep: 'sleeping', nextRunAt: nextRun });
-    logger.info(`💤 Próximo e-book: ${new Date(nextRun).toLocaleTimeString('pt-BR')} (em ${getIntervalMs() / 60000} min)`);
-    await sleep(intervalMs);
+    if (intervalMs > 0) {
+      const nextRun = new Date(Date.now() + intervalMs).toISOString();
+      setState({ currentStep: 'sleeping', nextRunAt: nextRun });
+      logger.info(`💤 Próximo e-book: ${new Date(nextRun).toLocaleTimeString('pt-BR')} (em ${intervalMs / 60000} min)`);
+      await sleep(intervalMs);
+    } else {
+      // Modo contínuo: cooldown mínimo de 5s e gera imediatamente
+      setState({ currentStep: 'selecting', nextRunAt: null });
+      logger.info('⚡ Modo contínuo — iniciando próximo ciclo em 5s...');
+      await sleep(5_000);
+    }
   }
 
   _running = false;
