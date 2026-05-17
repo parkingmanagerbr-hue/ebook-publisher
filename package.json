@@ -11,7 +11,9 @@
     "research": "node src/index.js --only=research",
     "write": "node src/index.js --only=write",
     "publish": "node src/index.js --only=publish",
-    "dashboard": "node src/dashboard.js"
+    "dashboard": "node src/dashboard.js",
+    "setup:hotmart": "node scripts/setup-hotmart.js",
+    "setup:cakto": "node scripts/setup-cakto.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",

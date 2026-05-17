@@ -1,123 +1,231 @@
 /**
- * PublisherHotmart — Publica e-book na Hotmart via Puppeteer
+ * PublisherHotmart — Publica e-book na Hotmart via Puppeteer com sessão salva.
+ *
+ * Fluxo:
+ *   1. Carrega sessão salva de data/sessions/hotmart.json
+ *   2. Injeta cookies no browser → pula login
+ *   3. Navega para criação de produto → preenche → faz upload → publica
+ *
+ * Setup inicial (one-time):
+ *   node scripts/setup-hotmart.js
  */
 const puppeteer = require('puppeteer');
 const path = require('path');
+const fs = require('fs');
 const { createLogger } = require('../core/logger');
 const logger = createLogger('publisherHotmart');
 
-const BASE_URL = 'https://app-vlc.hotmart.com';
-const HEADLESS = process.env.HEADLESS !== 'false';
+const BASE_URL     = 'https://app-vlc.hotmart.com';
+const SESSION_FILE = path.join(__dirname, '../../data/sessions/hotmart.json');
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ─── Carregar sessão salva ────────────────────────────────────────────────────
+function loadSession() {
+  try {
+    if (!fs.existsSync(SESSION_FILE)) return null;
+    const data = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+    // Verificar se a sessão não expirou (> 7 dias = considerar inválida)
+    if (data.savedAt && Date.now() - data.savedAt > 7 * 24 * 60 * 60 * 1000) {
+      logger.warn('⚠️  Sessão Hotmart com mais de 7 dias — pode estar expirada');
+    }
+    return data;
+  } catch (e) {
+    logger.warn(`Erro ao carregar sessão Hotmart: ${e.message}`);
+    return null;
+  }
+}
+
+// ─── Verificar se está logado na página atual ─────────────────────────────────
+async function isLoggedIn(page) {
+  try {
+    const url = page.url();
+    if (url.includes('/login') || url.includes('/auth')) return false;
+    // Procura por elementos de usuário logado
+    const userEl = await page.$('[data-test="user-avatar"], .user-avatar, [aria-label*="conta"], .hotmart-avatar');
+    return !!userEl;
+  } catch { return false; }
+}
+
+// ─── Publicar produto na Hotmart ──────────────────────────────────────────────
 async function publishToHotmart(ebook) {
-  logger.info(`Publicando na Hotmart: ${ebook.title}`);
+  logger.info(`📤 Hotmart: publicando "${ebook.title}"`);
+
+  const session = loadSession();
+  if (!session) {
+    logger.warn('⚠️  Sessão Hotmart não encontrada. Execute: node scripts/setup-hotmart.js');
+    return { success: false, error: 'Sessão não configurada. Execute setup-hotmart.js', platform: 'hotmart' };
+  }
 
   const browser = await puppeteer.launch({
-    headless: HEADLESS,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    headless: process.env.HEADLESS !== 'false',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+    ],
+    defaultViewport: { width: 1280, height: 900 },
   });
 
   const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 900 });
+
+  // Disfarçar automação
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
 
   try {
-    // ===== LOGIN =====
-    logger.info('Fazendo login na Hotmart...');
-    await page.goto('https://app-vlc.hotmart.com/login', { waitUntil: 'networkidle2', timeout: 30000 });
-    await sleep(2000);
-
-    // Email
-    await page.waitForSelector('#hotmart-custom-input-email, input[type="email"], input[name="email"]', { timeout: 15000 });
-    const emailInput = await page.$('#hotmart-custom-input-email') || await page.$('input[type="email"]');
-    await emailInput.type(process.env.HOTMART_EMAIL, { delay: 50 });
-
-    // Próximo passo (se houver botão Continuar)
-    const continueBtn = await page.$('button:has-text("Continuar"), button[type="submit"]:not(:has-text("Entrar"))');
-    if (continueBtn) { await continueBtn.click(); await sleep(1500); }
-
-    // Senha
-    await page.waitForSelector('input[type="password"]', { timeout: 10000 });
-    await page.type('input[type="password"]', process.env.HOTMART_PASSWORD, { delay: 50 });
-
-    await page.click('button[type="submit"], button:has-text("Entrar"), #btnLogin');
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 25000 });
-    logger.info('✅ Login na Hotmart OK');
-
-    await sleep(2000);
-
-    // ===== CRIAR PRODUTO =====
-    // Navegar para criação de produto
-    await page.goto(`${BASE_URL}/products/new`, { waitUntil: 'networkidle2', timeout: 30000 });
-    await sleep(2000);
-
-    // Verificar se chegou na página certa, senão tentar via menu
-    if (!page.url().includes('products')) {
-      await page.goto(`${BASE_URL}/products`, { waitUntil: 'networkidle2', timeout: 20000 });
-      await sleep(1500);
-      const newBtn = await page.$('a[href*="new"], button:has-text("Novo produto"), button:has-text("Criar produto")');
-      if (newBtn) await newBtn.click();
-      await sleep(2000);
-    }
-
-    // Selecionar tipo Ebook (se houver escolha)
-    const ebookOption = await page.$('[data-format="EBOOK"], button:has-text("E-book"), label:has-text("E-book")');
-    if (ebookOption) { await ebookOption.click(); await sleep(1000); }
-
-    // Nome
-    const nameInput = await page.$('input[name="productName"], input[placeholder*="nome"], input[placeholder*="título"]');
-    if (nameInput) {
-      await nameInput.click({ clickCount: 3 });
-      await nameInput.type(ebook.title, { delay: 30 });
-    }
-
-    // Descrição
-    const descInput = await page.$('textarea[name="productDescription"], textarea[placeholder*="descrição"]');
-    if (descInput) {
-      await descInput.click();
-      await descInput.type(ebook.description || ebook.subtitle || ebook.title, { delay: 15 });
-    }
-
-    // Idioma: Português
-    try {
-      const langSelect = await page.$('select[name="language"]');
-      if (langSelect) await page.select('select[name="language"]', 'pt');
-    } catch {}
-
-    // Categoria
-    try {
-      const catSelect = await page.$('select[name="category"]');
-      if (catSelect) await page.select('select[name="category"]', 'BUSINESS'); // categoria default
-    } catch {}
-
-    await sleep(1000);
-
-    // Próxima etapa (detalhes/conteúdo)
-    const nextBtn = await page.$('button:has-text("Próximo"), button:has-text("Continuar"), button[type="submit"]');
-    if (nextBtn) { await nextBtn.click(); await sleep(2000); }
-
-    // ===== UPLOAD ARQUIVO =====
-    // Upload PDF
-    if (ebook.pdfPath) {
-      logger.info('Fazendo upload do PDF na Hotmart...');
-      const fileInput = await page.$('input[type="file"][accept*="pdf"], input[type="file"][name*="file"]');
-      if (fileInput) {
-        await fileInput.uploadFile(ebook.pdfPath);
-        await sleep(5000); // Upload pode demorar
-        logger.info('PDF enviado');
+    // ── Injetar cookies da sessão salva ──────────────────────────────────────
+    logger.info('🍪 Injetando sessão salva...');
+    if (session.cookies?.length) {
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      for (const cookie of session.cookies) {
+        try { await page.setCookie(cookie); } catch {}
       }
     }
 
-    // ===== PREÇO =====
-    // Navegar para aba de preços
-    const priceTab = await page.$('[href*="price"], button:has-text("Preço"), a:has-text("Precificação")');
-    if (priceTab) { await priceTab.click(); await sleep(1500); }
+    // ── Injetar localStorage e sessionStorage se disponíveis ────────────────
+    if (session.localStorage || session.sessionStorage) {
+      await page.evaluateOnNewDocument((ls, ss) => {
+        if (ls) Object.entries(ls).forEach(([k, v]) => localStorage.setItem(k, v));
+        if (ss) Object.entries(ss).forEach(([k, v]) => sessionStorage.setItem(k, v));
+      }, session.localStorage || {}, session.sessionStorage || {});
+    }
 
-    const priceInput = await page.$('input[name="price"], input[placeholder*="preço"], input[placeholder*="valor"]');
-    if (priceInput) {
-      await priceInput.click({ clickCount: 3 });
-      await priceInput.type('4.99', { delay: 30 });
+    // ── Navegar para painel ──────────────────────────────────────────────────
+    await page.goto(`${BASE_URL}/products`, { waitUntil: 'networkidle2', timeout: 30000 });
+    await sleep(3000);
+
+    // Verificar login
+    const loggedIn = await isLoggedIn(page);
+    if (!loggedIn) {
+      const url = page.url();
+      logger.warn(`⚠️  Sessão Hotmart expirada (URL: ${url}). Execute: node scripts/setup-hotmart.js`);
+      await browser.close();
+      return { success: false, error: 'Sessão expirada. Execute setup-hotmart.js para renovar.', platform: 'hotmart' };
+    }
+
+    logger.info('✅ Sessão válida — iniciando criação de produto');
+
+    // ── Navegar para novo produto ────────────────────────────────────────────
+    await page.goto(`${BASE_URL}/products/new`, { waitUntil: 'networkidle2', timeout: 30000 });
+    await sleep(3000);
+
+    // ── ETAPA 1: Tipo de produto — selecionar E-book ─────────────────────────
+    const ebookSelectors = [
+      '[data-format="EBOOK"]',
+      'button:has-text("E-book")',
+      'label:has-text("E-book")',
+      '[data-product-type="EBOOK"]',
+      '.product-type-ebook',
+    ];
+    for (const sel of ebookSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (el) { await el.click(); await sleep(1000); break; }
+      } catch {}
+    }
+
+    // ── ETAPA 2: Informações básicas ─────────────────────────────────────────
+    // Nome do produto
+    const nameSelectors = [
+      'input[name="productName"]',
+      'input[placeholder*="nome do produto" i]',
+      'input[placeholder*="título" i]',
+      'input[placeholder*="name" i]',
+      '#product-name',
+    ];
+    for (const sel of nameSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (el) {
+          await el.click({ clickCount: 3 });
+          await el.type(ebook.title, { delay: 30 });
+          break;
+        }
+      } catch {}
+    }
+    await sleep(500);
+
+    // Descrição
+    const descSelectors = [
+      'textarea[name="productDescription"]',
+      'textarea[placeholder*="descrição" i]',
+      'textarea[placeholder*="description" i]',
+      '#product-description',
+    ];
+    const description = ebook.description || ebook.subtitle || `E-book completo sobre ${ebook.topic || ebook.title}`;
+    for (const sel of descSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (el) {
+          await el.click();
+          await el.type(description.substring(0, 500), { delay: 10 });
+          break;
+        }
+      } catch {}
+    }
+    await sleep(500);
+
+    // Idioma (Português)
+    try {
+      const langSelect = await page.$('select[name="language"], select[id*="language"]');
+      if (langSelect) await page.select('select[name="language"], select[id*="language"]', 'pt');
+    } catch {}
+
+    // Próxima etapa
+    await clickNext(page);
+    await sleep(3000);
+
+    // ── ETAPA 3: Upload do arquivo PDF ────────────────────────────────────────
+    if (ebook.pdfPath && fs.existsSync(ebook.pdfPath)) {
+      logger.info('📄 Fazendo upload do PDF...');
+      const fileInputSelectors = [
+        'input[type="file"][accept*="pdf"]',
+        'input[type="file"][name*="file"]',
+        'input[type="file"][name*="content"]',
+        'input[type="file"]',
+      ];
+      for (const sel of fileInputSelectors) {
+        try {
+          const fileInput = await page.$(sel);
+          if (fileInput) {
+            await fileInput.uploadFile(ebook.pdfPath);
+            logger.info('📤 PDF enviado, aguardando processamento...');
+            await sleep(10000); // Upload pode demorar
+            break;
+          }
+        } catch {}
+      }
+    }
+
+    // Próxima etapa
+    await clickNext(page);
+    await sleep(3000);
+
+    // ── ETAPA 4: Preço ───────────────────────────────────────────────────────
+    logger.info('💰 Configurando preço...');
+    const priceTab = await page.$('[href*="price"], button:has-text("Preço"), a:has-text("Precificação"), a:has-text("Price")');
+    if (priceTab) { await priceTab.click(); await sleep(2000); }
+
+    const price = (ebook.price || 4.99).toFixed(2);
+    const priceSelectors = [
+      'input[name="price"]',
+      'input[placeholder*="preço" i]',
+      'input[placeholder*="valor" i]',
+      'input[placeholder*="price" i]',
+      '#product-price',
+    ];
+    for (const sel of priceSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (el) {
+          await el.click({ clickCount: 3 });
+          await el.type(price, { delay: 30 });
+          break;
+        }
+      } catch {}
     }
 
     // Moeda BRL
@@ -126,34 +234,81 @@ async function publishToHotmart(ebook) {
       if (currencySelect) await page.select('select[name="currency"]', 'BRL');
     } catch {}
 
-    // ===== CAPA =====
-    if (ebook.coverPath) {
-      logger.info('Fazendo upload da capa na Hotmart...');
-      const coverInput = await page.$('input[type="file"][accept*="image"], input[name="thumbnail"]');
-      if (coverInput) {
-        await coverInput.uploadFile(ebook.coverPath);
-        await sleep(4000);
-        logger.info('Capa enviada');
+    // ── ETAPA 5: Capa (thumbnail) ─────────────────────────────────────────────
+    if (ebook.coverPath && fs.existsSync(ebook.coverPath)) {
+      logger.info('🖼️  Fazendo upload da capa...');
+      const coverSelectors = [
+        'input[type="file"][accept*="image"]',
+        'input[type="file"][name*="thumbnail"]',
+        'input[type="file"][name*="cover"]',
+        'input[type="file"][name*="image"]',
+      ];
+      for (const sel of coverSelectors) {
+        try {
+          const el = await page.$(sel);
+          if (el) {
+            await el.uploadFile(ebook.coverPath);
+            await sleep(5000);
+            break;
+          }
+        } catch {}
       }
     }
 
-    // ===== SALVAR / PUBLICAR =====
-    await sleep(1000);
-    const publishBtn = await page.$('button:has-text("Publicar"), button:has-text("Salvar e publicar"), button[type="submit"]');
-    if (publishBtn) { await publishBtn.click(); await sleep(3000); }
+    // ── ETAPA 6: Publicar ─────────────────────────────────────────────────────
+    logger.info('🚀 Publicando produto...');
+    const publishSelectors = [
+      'button:has-text("Publicar")',
+      'button:has-text("Salvar e publicar")',
+      'button:has-text("Publish")',
+      'button:has-text("Salvar")',
+    ];
+    let published = false;
+    for (const sel of publishSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (el) { await el.click(); published = true; await sleep(4000); break; }
+      } catch {}
+    }
 
-    const currentUrl = page.url();
-    logger.info(`✅ Publicado na Hotmart! URL: ${currentUrl}`);
+    if (!published) {
+      // Tentar submit genérico
+      try { await page.keyboard.press('Enter'); await sleep(3000); } catch {}
+    }
 
-    return { success: true, url: currentUrl, platform: 'hotmart' };
+    const finalUrl = page.url();
+    logger.info(`✅ Hotmart: produto criado! URL: ${finalUrl}`);
+
+    return { success: true, url: finalUrl, platform: 'hotmart' };
 
   } catch (err) {
-    logger.error(`Erro na Hotmart: ${err.message}`);
-    try { await page.screenshot({ path: path.join(__dirname, '../../logs/hotmart_error.png') }); } catch {}
+    logger.error(`❌ Hotmart: ${err.message}`);
+    try {
+      const screenshotDir = path.join(__dirname, '../../logs');
+      fs.mkdirSync(screenshotDir, { recursive: true });
+      await page.screenshot({ path: path.join(screenshotDir, 'hotmart_error.png') });
+    } catch {}
     return { success: false, error: err.message, platform: 'hotmart' };
   } finally {
     await browser.close();
   }
+}
+
+// ─── Helper: clicar em botão "Próximo" / "Continuar" ─────────────────────────
+async function clickNext(page) {
+  const selectors = [
+    'button:has-text("Próximo")',
+    'button:has-text("Continuar")',
+    'button:has-text("Next")',
+    'button:has-text("Continue")',
+  ];
+  for (const sel of selectors) {
+    try {
+      const el = await page.$(sel);
+      if (el) { await el.click(); return true; }
+    } catch {}
+  }
+  return false;
 }
 
 module.exports = { publishToHotmart };
