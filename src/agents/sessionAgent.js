@@ -121,6 +121,93 @@ async function checkSessionViaApi(platform, session) {
   return true;
 }
 
+// ─── Login com credenciais (fallback quando cookies expiram) ─────────────────
+async function tryCredentialLogin(page, platform, browser) {
+  const creds = {
+    hotmart: {
+      email:    process.env.HOTMART_EMAIL,
+      password: process.env.HOTMART_PASSWORD,
+      emailSel: 'input[type="email"], input[name="email"], input[placeholder*="e-mail" i]',
+      passSel:  'input[type="password"]',
+      btnSel:   'button[type="submit"], button:has-text("Entrar"), button:has-text("Login")',
+      waitFor:  url => !url.includes('/login') && !url.includes('sso.hotmart'),
+    },
+    cakto: {
+      email:    process.env.CAKTO_EMAIL,
+      password: process.env.CAKTO_PASSWORD,
+      emailSel: 'input[type="email"], input[name="email"]',
+      passSel:  'input[type="password"]',
+      btnSel:   'button[type="submit"], button:has-text("Entrar"), button:has-text("Login")',
+      waitFor:  url => !url.includes('/login') && !url.includes('/auth'),
+    },
+    amazon: {
+      email:    process.env.KDP_EMAIL,
+      password: process.env.KDP_PASSWORD,
+      emailSel: 'input[name="email"], input[type="email"]',
+      passSel:  'input[name="password"], input[type="password"]',
+      btnSel:   'input[id="signInSubmit"], input[type="submit"], #continue',
+      waitFor:  url => url.includes('kdp.amazon.com') && !url.includes('signin'),
+    },
+  };
+
+  const c = creds[platform];
+  if (!c?.email || !c?.password) {
+    logger.warn(`[${platform}] Sem credenciais — configure ${platform.toUpperCase()}_EMAIL e ${platform.toUpperCase()}_PASSWORD`);
+    return false;
+  }
+
+  logger.info(`[${platform}] 🔐 Tentando login com credenciais...`);
+
+  try {
+    // Preencher email
+    const emailEl = await page.$(c.emailSel);
+    if (emailEl) {
+      await emailEl.click({ clickCount: 3 });
+      await emailEl.type(c.email, { delay: 50 });
+    }
+
+    await new Promise(r => setTimeout(r, 500));
+
+    // Preencher senha
+    const passEl = await page.$(c.passSel);
+    if (passEl) {
+      await passEl.click({ clickCount: 3 });
+      await passEl.type(c.password, { delay: 50 });
+    }
+
+    await new Promise(r => setTimeout(r, 500));
+
+    // Clicar no botão
+    const btn = await page.$(c.btnSel);
+    if (btn) {
+      await btn.click();
+    } else {
+      await page.keyboard.press('Enter');
+    }
+
+    // Aguardar redirecionamento pós-login
+    await page.waitForFunction(
+      (selector) => !window.location.href.includes('/login') && !window.location.href.includes('signin'),
+      { timeout: 20000 }
+    ).catch(() => {});
+
+    await new Promise(r => setTimeout(r, 3000));
+    const url = page.url();
+    const ok = c.waitFor(url);
+
+    if (ok) {
+      logger.info(`[${platform}] ✅ Login com credenciais bem-sucedido!`);
+      return true;
+    } else {
+      logger.warn(`[${platform}] Login falhou — URL: ${url}`);
+      return false;
+    }
+  } catch (e) {
+    logger.warn(`[${platform}] Erro no login: ${e.message}`);
+    return false;
+  }
+}
+
 // ─── Renovação via Puppeteer ──────────────────────────────────────────────────
 async function renewViaPuppeteer(platform) {
   const { baseUrl, testUrl, loginUrl, loginCheck, localStorageTokenKey } = PLATFORMS[platform];
@@ -167,9 +254,14 @@ async function renewViaPuppeteer(platform) {
     const isLoggedIn = !(loginCheck ? loginCheck(currentUrl) : currentUrl.includes('/login'));
 
     if (!isLoggedIn) {
-      logger.warn(`[${platform}] Renovação falhou — redirecionado para login (${currentUrl})`);
-      await browser.close();
-      return false;
+      // ── Tentar login com credenciais se disponíveis ──────────────────────
+      const loginResult = await tryCredentialLogin(page, platform, browser);
+      if (!loginResult) {
+        logger.warn(`[${platform}] Renovação falhou — sem sessão válida nem credenciais`);
+        await browser.close();
+        return false;
+      }
+      // Login bem-sucedido, continuar para capturar sessão
     }
 
     // Capturar sessão atualizada
