@@ -47,13 +47,17 @@ function getIntervalMs() {
 
 function shouldPublishTo(platform) {
   const envKey = `AUTO_PUBLISH_${platform.toUpperCase()}`;
+  // Se explicitamente desativado, não publica
+  if (process.env[envKey] === 'false') return false;
+  // Se explicitamente ativado, publica (usa sessão salva ou credenciais)
+  if (process.env[envKey] === 'true') return true;
+  // Fallback: publica se tiver credenciais de email/senha
   const creds = {
     CAKTO:   process.env.CAKTO_EMAIL   && process.env.CAKTO_PASSWORD,
     HOTMART: process.env.HOTMART_EMAIL && process.env.HOTMART_PASSWORD,
     AMAZON:  process.env.KDP_EMAIL     && process.env.KDP_PASSWORD,
   };
-  if (!creds[platform.toUpperCase()]) return false;
-  return process.env[envKey] !== 'false'; // default true se credenciais existem
+  return !!creds[platform.toUpperCase()];
 }
 
 function setState(patch) {

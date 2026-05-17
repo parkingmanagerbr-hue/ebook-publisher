@@ -73,25 +73,27 @@ async function runPipeline(topicOverride = null) {
       const results = {};
 
       // Cakto
-      if (process.env.CAKTO_EMAIL && process.env.CAKTO_PASSWORD) {
+      if (process.env.AUTO_PUBLISH_CAKTO !== 'false' &&
+          (process.env.AUTO_PUBLISH_CAKTO === 'true' || (process.env.CAKTO_EMAIL && process.env.CAKTO_PASSWORD))) {
         logger.info('Publicando no Cakto...');
         const caktoResult = await publishToCakto(publishData);
         results.cakto = caktoResult;
         if (caktoResult.success) logger.info(`✅ Cakto: ${caktoResult.url}`);
         else logger.warn(`⚠️ Cakto falhou: ${caktoResult.error}`);
       } else {
-        logger.warn('⚠️ Cakto pulado: credenciais não configuradas');
+        logger.warn('⚠️ Cakto pulado (AUTO_PUBLISH_CAKTO não ativado)');
       }
 
       // Hotmart
-      if (process.env.HOTMART_EMAIL && process.env.HOTMART_PASSWORD) {
+      if (process.env.AUTO_PUBLISH_HOTMART !== 'false' &&
+          (process.env.AUTO_PUBLISH_HOTMART === 'true' || (process.env.HOTMART_EMAIL && process.env.HOTMART_PASSWORD))) {
         logger.info('Publicando na Hotmart...');
         const hotmartResult = await publishToHotmart(publishData);
         results.hotmart = hotmartResult;
         if (hotmartResult.success) logger.info(`✅ Hotmart: ${hotmartResult.url}`);
         else logger.warn(`⚠️ Hotmart falhou: ${hotmartResult.error}`);
       } else {
-        logger.warn('⚠️ Hotmart pulado: credenciais não configuradas');
+        logger.warn('⚠️ Hotmart pulado (AUTO_PUBLISH_HOTMART não ativado)');
       }
 
       // Atualizar status
