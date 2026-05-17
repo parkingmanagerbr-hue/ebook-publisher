@@ -265,7 +265,9 @@ async function generateWithFlux(prompt, width, height, _primaryKey) {
           headers: {
             Authorization: `Bearer ${key}`,
             'Content-Type': 'application/json',
-            'Accept': 'image/jpeg, image/png, image/webp, */*',
+            // HF router rejeita 'application/json, text/plain, */*' do axios
+            // Remover Accept padrão → envia sem Accept → retorna image/jpeg
+            'Accept': null,
             'X-Use-Cache': 'false',
           },
           responseType: 'arraybuffer',
