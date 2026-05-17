@@ -238,40 +238,32 @@ async function generateWithCloudflare(prompt, width, height, accountId, apiToken
 }
 
 // ═══════════════════════════════════════════════════
-// 2b. HUGGINGFACE — modelos gratuitos via Inference API
-//     Prioriza modelos SD que funcionam no free tier
+// 2b. HUGGINGFACE — FLUX.1-schnell via router (funciona com free tier)
+//     Usa rotação entre 4 chaves HF para evitar rate limit (402)
 // ═══════════════════════════════════════════════════
-async function generateWithFlux(prompt, width, height, apiKey) {
-  // Modelos gratuitos no HF Inference API (sem necessidade de pagamento)
-  const models = [
-    { id: 'stabilityai/stable-diffusion-xl-base-1.0', steps: 20, guidance: 7.5 },
-    { id: 'stabilityai/stable-diffusion-2-1',         steps: 20, guidance: 7.5 },
-    { id: 'Lykon/dreamshaper-7',                       steps: 20, guidance: 7.0 },
-    { id: 'SG161222/Realistic_Vision_V5.1_noVAE',      steps: 25, guidance: 7.0 },
-    { id: 'prompthero/openjourney-v4',                 steps: 25, guidance: 7.0 },
-    // FLUX como última tentativa (pode estar em waitlist/pago)
-    { id: 'black-forest-labs/FLUX.1-schnell',          steps: 4,  guidance: 0   },
-  ];
-  const base = 'https://api-inference.huggingface.co/models';
+async function generateWithFlux(prompt, width, height, _primaryKey) {
+  // Rotação entre todas as chaves HF disponíveis
+  const allKeys = [
+    process.env.HUGGINGFACE_API_KEY,
+    process.env.HUGGINGFACE_API_KEY_2,
+    process.env.HUGGINGFACE_API_KEY_3,
+    process.env.HUGGINGFACE_API_KEY_4,
+  ].filter(Boolean);
+
+  const BASE = 'https://router.huggingface.co/hf-inference/models';
+  const w = Math.min(Math.round(width  / 64) * 64, 1024);
+  const h = Math.min(Math.round(height / 64) * 64, 1024);
+
   let lastErr;
-  for (const { id: model, steps, guidance } of models) {
+  for (const key of allKeys) {
     try {
-      logger.info(`   HF model: ${model.split('/')[1]}`);
-      const w = Math.min(Math.round(width  / 8) * 8, 1024);
-      const h = Math.min(Math.round(height / 8) * 8, 1024);
+      logger.info(`   HF FLUX.1-schnell (key ...${key.slice(-8)})`);
       const response = await axios.post(
-        `${base}/${model}`,
-        {
-          inputs: prompt.slice(0, 500),
-          parameters: {
-            width: w, height: h,
-            num_inference_steps: steps,
-            guidance_scale: guidance,
-          },
-        },
+        `${BASE}/black-forest-labs/FLUX.1-schnell`,
+        { inputs: prompt.slice(0, 500) },
         {
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${key}`,
             'Content-Type': 'application/json',
             'X-Use-Cache': 'false',
           },
@@ -285,8 +277,9 @@ async function generateWithFlux(prompt, width, height, apiKey) {
     } catch (e) {
       lastErr = e;
       const status = e.response?.status;
-      logger.warn(`   HF ${model.split('/')[1]} falhou (${status || e.code}): ${e.message?.slice(0, 60)}`);
-      // 503 = model loading → aguardar e tentar próximo; outros erros → next model
+      logger.warn(`   HF FLUX.1-schnell falhou (${status || e.code}): ${e.message?.slice(0, 60)}`);
+      if (status === 402 || status === 429) continue; // tenta próxima chave
+      break; // outro erro → desiste
     }
   }
   throw lastErr;
@@ -455,27 +448,22 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
       fn: () => generateWithCloudflare(prompt, width, height, cfAccountId, cfApiToken),
     },
     {
-      name: 'DALL-E 3',           // pago (~$0.04/img)
-      enabled: !!openaiKey,
-      fn: () => generateWithDallE3(prompt, width, height, openaiKey),
-    },
-    {
-      name: 'Gemini Image Gen',   // grátis com chave Gemini
-      enabled: !!geminiKey,
-      fn: () => generateWithImagen(prompt, aspectRatio, geminiKey),
-    },
-    {
-      name: 'HuggingFace SD',     // grátis, modelos SD gratuitos
+      name: 'HuggingFace FLUX',   // ✅ grátis — router.huggingface.co, 4 chaves com rotação
       enabled: !!hfKey,
       fn: () => generateWithFlux(prompt, width, height, hfKey),
     },
     {
-      name: 'Prodia SD',          // grátis, sem chave, SD via API
-      enabled: true,
-      fn: () => generateWithProdia(prompt, width, height),
+      name: 'DALL-E 3',           // pago (~$0.04/img) — só se billing ok
+      enabled: !!openaiKey,
+      fn: () => generateWithDallE3(prompt, width, height, openaiKey),
     },
     {
-      name: 'Pollinations.ai',    // grátis, sem chave, fallback final
+      name: 'Gemini Image Gen',   // pago — Imagen 3 requer plano pago
+      enabled: !!geminiKey,
+      fn: () => generateWithImagen(prompt, aspectRatio, geminiKey),
+    },
+    {
+      name: 'Pollinations.ai',    // ✅ grátis, sem chave, fallback garantido
       enabled: true,
       fn: () => generateWithPollinations(prompt, width, height),
     },
