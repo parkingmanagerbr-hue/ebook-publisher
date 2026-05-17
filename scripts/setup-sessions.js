@@ -1,30 +1,38 @@
 #!/usr/bin/env node
 /**
- * setup-sessions.js — Captura sessões do Chrome (Hotmart + Cakto) via servidor local
+ * setup-sessions.js — Captura sessões do Chrome (Hotmart + Cakto + Amazon KDP)
  *
- * Uso: node scripts/setup-sessions.js
+ * Uso: node scripts/setup-sessions.js [platform]
+ *   node scripts/setup-sessions.js           → captura todas
+ *   node scripts/setup-sessions.js hotmart   → só Hotmart
+ *   node scripts/setup-sessions.js amazon    → só Amazon KDP
  *
- * Abre um servidor HTTP local na porta 9111.
- * O usuário cola um snippet no DevTools do Chrome → o snippet envia
- * os cookies/localStorage para o servidor → salvo automaticamente.
+ * Abre servidor HTTP local na porta 9111.
+ * Cole o snippet no DevTools Console de cada plataforma → cookies salvos automaticamente.
  */
 const http = require('http');
 const path = require('path');
 const fs   = require('fs');
 
-const PORT    = 9111;
-const SESS    = path.join(__dirname, '../data/sessions');
+const PORT   = 9111;
+const SESS   = path.join(__dirname, '../data/sessions');
 fs.mkdirSync(SESS, { recursive: true });
 
-const PLATFORMS = {
-  hotmart: 'https://app-vlc.hotmart.com/products',
-  cakto:   'https://app.cakto.com.br/dashboard',
+// Filtrar plataformas por argumento opcional
+const targetPlatform = process.argv[2]?.toLowerCase() || null;
+
+const ALL_PLATFORMS = {
+  hotmart: { url: 'https://app-vlc.hotmart.com/products',       label: 'HOTMART'    },
+  cakto:   { url: 'https://app.cakto.com.br/dashboard',         label: 'CAKTO'      },
+  amazon:  { url: 'https://kdp.amazon.com/pt_BR/bookshelf',      label: 'AMAZON KDP' },
 };
 
-// Snippet a ser colado no DevTools
+const PLATFORMS = targetPlatform
+  ? (ALL_PLATFORMS[targetPlatform] ? { [targetPlatform]: ALL_PLATFORMS[targetPlatform] } : ALL_PLATFORMS)
+  : ALL_PLATFORMS;
+
 function snippet(platform) {
-  return `
-fetch('http://localhost:${PORT}/save', {
+  return `fetch('http://localhost:${PORT}/save', {
   method: 'POST',
   headers: {'Content-Type': 'application/json'},
   body: JSON.stringify({
@@ -42,14 +50,13 @@ fetch('http://localhost:${PORT}/save', {
     ),
     savedAt: Date.now()
   })
-}).then(r=>r.text()).then(t=>console.log('✅', t)).catch(e=>console.error('❌',e.message));
-`.trim();
+}).then(r=>r.text()).then(t=>console.log('✅', t)).catch(e=>console.error('❌',e.message));`;
 }
 
 const saved = new Set();
+const total = Object.keys(PLATFORMS).length;
 
 const server = http.createServer((req, res) => {
-  // CORS para aceitar requests do browser
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -62,58 +69,55 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
       try {
         const session = JSON.parse(body);
-        const platform = session.platform;
+        const platform = session.platform?.toLowerCase();
         if (!platform) { res.writeHead(400); res.end('missing platform'); return; }
 
-        session.savedAtHuman  = new Date().toLocaleString('pt-BR');
-        session.cookieCount   = (session.cookies || []).length;
+        session.savedAtHuman = new Date().toLocaleString('pt-BR');
+        session.cookieCount  = (session.cookies || []).length;
 
         const file = path.join(SESS, `${platform}.json`);
         fs.writeFileSync(file, JSON.stringify(session, null, 2));
         saved.add(platform);
 
-        console.log(`\n✅ Sessão ${platform.toUpperCase()} salva! (${session.cookieCount} cookies, ${Object.keys(session.localStorage||{}).length} localStorage keys)`);
+        const label = ALL_PLATFORMS[platform]?.label || platform.toUpperCase();
+        console.log(`\n✅ ${label} salvo! (${session.cookieCount} cookies, ${Object.keys(session.localStorage||{}).length} localStorage keys)`);
 
         res.writeHead(200);
-        res.end(`Sessão ${platform} salva com sucesso!`);
+        res.end(`Sessão ${platform} salva!`);
 
-        // Verificar se já capturou tudo
-        if (saved.has('hotmart') && saved.has('cakto')) {
+        if (saved.size >= total) {
           console.log('\n' + '═'.repeat(60));
-          console.log('🎉 Todas as sessões capturadas! Encerrando servidor...');
-          console.log('\nPara ativar publicação automática, adicione ao .env da VPS:');
+          console.log('🎉 Todas as sessões capturadas!');
+          console.log('\nEnv vars para ativar publicação (VPS):');
           console.log('   AUTO_PUBLISH_HOTMART=true');
           console.log('   AUTO_PUBLISH_CAKTO=true');
+          console.log('   AUTO_PUBLISH_AMAZON=true');
           console.log('═'.repeat(60));
-          setTimeout(() => { server.close(); process.exit(0); }, 1000);
+          setTimeout(() => { server.close(); process.exit(0); }, 800);
         }
       } catch (e) {
-        res.writeHead(400);
-        res.end('JSON inválido: ' + e.message);
+        res.writeHead(400); res.end('JSON invalido: ' + e.message);
       }
     });
     return;
   }
-
-  res.writeHead(404);
-  res.end('Not found');
+  res.writeHead(404); res.end('Not found');
 });
 
 server.listen(PORT, () => {
   console.log('\n' + '═'.repeat(65));
-  console.log('  SETUP DE SESSÕES — Hotmart + Cakto');
+  console.log(`  SETUP DE SESSOES — ${Object.values(PLATFORMS).map(p=>p.label).join(' + ')}`);
   console.log('═'.repeat(65));
-  console.log(`\n🖥️  Servidor rodando em http://localhost:${PORT}`);
-  console.log('\nCole cada snippet no DevTools Console da página correspondente:\n');
+  console.log(`\nServidor: http://localhost:${PORT}\n`);
 
-  for (const [platform, url] of Object.entries(PLATFORMS)) {
-    console.log(`━━━ ${platform.toUpperCase()} ━━━`);
-    console.log(`1. Abra no Chrome: ${url}`);
-    console.log('2. F12 → Console → cole e execute:\n');
+  for (const [platform, { url, label }] of Object.entries(PLATFORMS)) {
+    console.log(`━━━ ${label} ━━━`);
+    console.log(`Abra: ${url}`);
+    console.log('F12 → Console → cole:\n');
     console.log(snippet(platform));
     console.log();
   }
 
   console.log('─'.repeat(65));
-  console.log('Aguardando capturas... (Ctrl+C para cancelar)\n');
+  console.log('Aguardando... (Ctrl+C para cancelar)\n');
 });

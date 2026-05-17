@@ -136,9 +136,12 @@ async function runOneCycle(topicOverride = null) {
     coverUrl:  result.coverPath ? `/covers/${path.basename(result.coverPath)}` : null,
   };
 
+  const { ensureSession } = require('../agents/sessionAgent');
+
   if (shouldPublishTo('CAKTO')) {
     setState({ currentStep: 'publishing:cakto' });
     try {
+      await ensureSession('cakto');   // renova cookies se necessário
       const { publishToCakto } = require('../agents/publisherCakto');
       publishResults.cakto = await publishToCakto(ebookData);
       if (publishResults.cakto?.success) {
@@ -151,6 +154,7 @@ async function runOneCycle(topicOverride = null) {
   if (shouldPublishTo('HOTMART')) {
     setState({ currentStep: 'publishing:hotmart' });
     try {
+      await ensureSession('hotmart'); // renova cookies se necessário
       const { publishToHotmart } = require('../agents/publisherHotmart');
       publishResults.hotmart = await publishToHotmart(ebookData);
       if (publishResults.hotmart?.success) {
@@ -163,6 +167,7 @@ async function runOneCycle(topicOverride = null) {
   if (shouldPublishTo('AMAZON')) {
     setState({ currentStep: 'publishing:amazon' });
     try {
+      await ensureSession('amazon');  // renova cookies se necessário
       const { publishToAmazon } = require('../agents/publisherAmazon');
       publishResults.amazon = await publishToAmazon(ebookData);
       if (publishResults.amazon?.success) {

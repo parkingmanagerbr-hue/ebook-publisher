@@ -27,6 +27,7 @@ const PLATFORMS = {
     baseUrl:       'https://app-vlc.hotmart.com',
     loginUrl:      'https://app-vlc.hotmart.com/login',
     apiCheck:      'https://api-sec-vlc.hotmart.com/payment/api/v1/subscription?page=0&max=1',
+    loginCheck:    url => url.includes('/login') || url.includes('/auth/login'),
     localStorageTokenKey: 'token',
     envKey:        'AUTO_PUBLISH_HOTMART',
   },
@@ -35,9 +36,20 @@ const PLATFORMS = {
     testUrl:       'https://app.cakto.com.br/dashboard',
     baseUrl:       'https://app.cakto.com.br',
     loginUrl:      'https://app.cakto.com.br/login',
-    apiCheck:      null,   // sem API pública — usa Puppeteer
+    loginCheck:    url => url.includes('/login') || url.includes('/auth'),
+    apiCheck:      null,
     localStorageTokenKey: 'token',
     envKey:        'AUTO_PUBLISH_CAKTO',
+  },
+  amazon: {
+    sessionFile:   path.join(SESS_DIR, 'amazon.json'),
+    testUrl:       'https://kdp.amazon.com/pt_BR/bookshelf',
+    baseUrl:       'https://kdp.amazon.com',
+    loginUrl:      'https://kdp.amazon.com',
+    loginCheck:    url => url.includes('signin') || url.includes('ap/signin'),
+    apiCheck:      null,
+    localStorageTokenKey: null,   // Amazon não usa localStorage para token
+    envKey:        'AUTO_PUBLISH_AMAZON',
   },
 };
 
@@ -104,7 +116,7 @@ async function checkSessionViaApi(platform, session) {
 
 // ─── Renovação via Puppeteer ──────────────────────────────────────────────────
 async function renewViaPuppeteer(platform) {
-  const { baseUrl, testUrl, loginUrl, localStorageTokenKey } = PLATFORMS[platform];
+  const { baseUrl, testUrl, loginUrl, loginCheck, localStorageTokenKey } = PLATFORMS[platform];
 
   logger.info(`🔄 [${platform}] Tentando renovar sessão via Puppeteer...`);
 
@@ -145,7 +157,7 @@ async function renewViaPuppeteer(platform) {
     await new Promise(r => setTimeout(r, 3000));
 
     const currentUrl = page.url();
-    const isLoggedIn = !currentUrl.includes('/login') && !currentUrl.includes('/auth/login');
+    const isLoggedIn = !(loginCheck ? loginCheck(currentUrl) : currentUrl.includes('/login'));
 
     if (!isLoggedIn) {
       logger.warn(`[${platform}] Renovação falhou — redirecionado para login (${currentUrl})`);
@@ -281,32 +293,77 @@ async function checkPlatform(platform) {
 
 // ─── API pública ─────────────────────────────────────────────────────────────
 
-/** Retorna true se a plataforma está degradada (sessão inválida) */
+/**
+ * Garante que a sessão de uma plataforma está válida ANTES de publicar.
+ * Se estiver expirando/expirada → renova agora via Puppeteer.
+ * Retorna true se a sessão está pronta para uso, false se não conseguiu renovar.
+ */
+async function ensureSession(platform) {
+  const { envKey } = PLATFORMS[platform];
+  if (process.env[envKey] !== 'true') return false;
+
+  const session = readSession(platform);
+  if (!session) {
+    logger.warn(`[${platform}] Sem sessão — execute: node scripts/setup-sessions.js ${platform}`);
+    return false;
+  }
+
+  const { localStorageTokenKey } = PLATFORMS[platform];
+  const token = localStorageTokenKey ? session.localStorage?.[localStorageTokenKey] : null;
+  let needsRenewal = false;
+
+  if (token) {
+    const msLeft = jwtExpiresIn(token);
+    if (msLeft !== null && msLeft < 2 * 3600000) {   // menos de 2h → renovar agora
+      logger.warn(`[${platform}] JWT expira em ${Math.round(msLeft/60000)}min — renovando agora`);
+      needsRenewal = true;
+    }
+  } else {
+    // Sem JWT — verificar por idade da sessão
+    const ageDays = (Date.now() - (session.savedAt || 0)) / 86400000;
+    if (ageDays > 6) {
+      logger.warn(`[${platform}] Sessão com ${ageDays.toFixed(1)} dias — renovando`);
+      needsRenewal = true;
+    }
+  }
+
+  if (needsRenewal) {
+    const ok = await renewViaPuppeteer(platform);
+    if (!ok) {
+      logger.error(`❌ [${platform}] Renovação falhou — execute: node scripts/setup-sessions.js ${platform}`);
+      degraded[platform] = true;
+      return false;
+    }
+    degraded[platform] = false;
+  }
+
+  return true;
+}
+
+/** Retorna true se a plataforma está degradada (renovação falhou) */
 function isPlatformDegraded(platform) {
   return degraded[platform] === true;
 }
 
-/** Verifica todas as plataformas ativas */
+/** Verifica todas as plataformas ativas (chama checkPlatform para log/aviso precoce) */
 async function checkAllSessions() {
   logger.info('🔍 Verificando saúde das sessões...');
   for (const platform of Object.keys(PLATFORMS)) {
-    await checkPlatform(platform).catch(e => logger.error(`[${platform}] checkPlatform error: ${e.message}`));
+    await checkPlatform(platform).catch(e => logger.error(`[${platform}] erro: ${e.message}`));
   }
 }
 
-/** Loop autônomo: verifica a cada CHECK_INTERVAL_HOURS horas */
+/** Loop autônomo: verifica a cada SESSION_CHECK_HOURS horas */
 async function startSessionWatcher() {
   const intervalHours = parseFloat(process.env.SESSION_CHECK_HOURS || '2');
   const intervalMs    = intervalHours * 3600 * 1000;
 
   logger.info(`🕐 Session watcher iniciado — verifica a cada ${intervalHours}h`);
 
-  // Verificação imediata no boot (após 30s para o sistema estabilizar)
   setTimeout(async () => {
     await checkAllSessions();
-    // Agendar próximas verificações
     setInterval(checkAllSessions, intervalMs);
   }, 30_000);
 }
 
-module.exports = { startSessionWatcher, checkAllSessions, isPlatformDegraded, renewViaPuppeteer };
+module.exports = { startSessionWatcher, checkAllSessions, ensureSession, isPlatformDegraded, renewViaPuppeteer };
