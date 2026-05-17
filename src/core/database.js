@@ -148,6 +148,11 @@ function getAllTopics() {
 
 // ========= EBOOKS =========
 function saveEbook(ebook) {
+  // Ensure topic exists in topics table (handles manually-triggered topics not in DB)
+  if (ebook.topic) {
+    db.prepare(`INSERT OR IGNORE INTO topics (topic, category) VALUES (?, ?)`)
+      .run(ebook.topic, ebook.category || 'geral');
+  }
   db.prepare(`
     INSERT OR REPLACE INTO ebooks
     (id, topic, title, subtitle, description, cover_path, pdf_path, status, price, ai_provider)

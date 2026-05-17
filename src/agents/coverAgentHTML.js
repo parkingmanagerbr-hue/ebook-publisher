@@ -67,7 +67,9 @@ async function generateCoverHTML(title, subtitle, topic, category) {
   logger.info('🤖 Gerando HTML da capa via AI...');
   const result = await generateText(prompt, '', { maxTokens: 4000 });
   // generate() retorna { text, provider, elapsed } — extrair o texto
-  const html = typeof result === 'string' ? result : (result?.text || '');
+  // Usar String() para garantir que sempre seja string independente do tipo retornado
+  const raw = typeof result === 'string' ? result : (result?.text ?? '');
+  const html = typeof raw === 'string' ? raw : String(raw || '');
 
   // Limpar possíveis blocos markdown
   return html
