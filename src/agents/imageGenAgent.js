@@ -171,7 +171,74 @@ async function generateWithImagen(prompt, aspectRatio, apiKey) {
 }
 
 // ═══════════════════════════════════════════════════
-// 2. HUGGINGFACE — tenta FLUX.1-schnell depois SDXL
+// 2. TOGETHER.AI — FLUX.1-schnell grátis ($25 free credit)
+//    Env var: TOGETHER_API_KEY
+// ═══════════════════════════════════════════════════
+async function generateWithTogether(prompt, width, height, apiKey) {
+  // Together.ai suporta dimensões múltiplas de 64, máx 1440
+  const snap = v => Math.min(Math.round(v / 64) * 64, 1440);
+  const w = snap(width), h = snap(height);
+
+  const models = [
+    'black-forest-labs/FLUX.1-schnell-Free', // grátis
+    'black-forest-labs/FLUX.1-schnell',
+    'black-forest-labs/FLUX.1.1-pro',
+  ];
+  let lastErr;
+  for (const model of models) {
+    try {
+      const resp = await axios.post(
+        'https://api.together.xyz/v1/images/generations',
+        { model, prompt: prompt.slice(0, 2000), width: w, height: h, steps: 4, n: 1 },
+        {
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          timeout: 90_000,
+        }
+      );
+      const imgUrl = resp.data?.data?.[0]?.url;
+      const b64    = resp.data?.data?.[0]?.b64_json;
+      if (b64) return Buffer.from(b64, 'base64');
+      if (!imgUrl) throw new Error(`${model} sem URL`);
+      const imgResp = await axios.get(imgUrl, { responseType: 'arraybuffer', timeout: 30_000 });
+      const buf = Buffer.from(imgResp.data);
+      if (buf.length < 10_000) throw new Error(`Together imagem suspeita (${buf.length} bytes)`);
+      return buf;
+    } catch (e) {
+      lastErr = e;
+      logger.warn(`   Together/${model.split('/')[1]} falhou: ${e.response?.data?.error?.message?.slice(0,80) || e.message?.slice(0,60)}`);
+      if (e.response?.status === 402 || e.response?.status === 429) break; // sem crédito/rate limit
+    }
+  }
+  throw lastErr;
+}
+
+// ═══════════════════════════════════════════════════
+// 3. CLOUDFLARE AI — FLUX.1-schnell grátis
+//    Env vars: CF_ACCOUNT_ID + CF_API_TOKEN
+// ═══════════════════════════════════════════════════
+async function generateWithCloudflare(prompt, width, height, accountId, apiToken) {
+  const snap = v => Math.min(Math.round(v / 8) * 8, 2048);
+  const w = snap(width), h = snap(height);
+
+  const resp = await axios.post(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
+    { prompt: prompt.slice(0, 2000), width: w, height: h, num_steps: 4 },
+    {
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      responseType: 'arraybuffer',
+      timeout: 90_000,
+    }
+  );
+  const buf = Buffer.from(resp.data);
+  if (buf.length < 10_000) throw new Error(`Cloudflare imagem suspeita (${buf.length} bytes)`);
+  return buf;
+}
+
+// ═══════════════════════════════════════════════════
+// 2b. HUGGINGFACE — tenta FLUX.1-schnell depois SDXL
 // ═══════════════════════════════════════════════════
 async function generateWithFlux(prompt, width, height, apiKey) {
   const models = [
@@ -305,11 +372,14 @@ async function generateWithPollinations(prompt, width, height) {
 async function generateImage({ prompt, width = 1024, height = 1024, outputPath }) {
   const higgsfieldKey = process.env.HIGGSFIELD_API_KEY;
   const openaiKey     = process.env.OPENAI_API_KEY;
+  const togetherKey   = process.env.TOGETHER_API_KEY;
+  const cfAccountId   = process.env.CF_ACCOUNT_ID;
+  const cfApiToken    = process.env.CF_API_TOKEN;
+  const falKey        = process.env.FAL_AI_API_KEY;
   const geminiKey     = process.env.GEMINI_API_KEY;
   const hfKey         = process.env.HUGGINGFACE_API_KEY;
-  const falKey        = process.env.FAL_AI_API_KEY;
 
-  // Aspect ratio para Gemini
+  // Aspect ratio para Gemini/Higgsfield
   const ratio = width / height;
   const aspectRatio = ratio > 1.4 ? '16:9' : ratio < 0.75 ? '9:16' : ratio < 0.85 ? '4:3' : '1:1';
 
@@ -320,14 +390,24 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
       fn: () => generateWithHiggsfield(prompt, width, height, higgsfieldKey),
     },
     {
-      name: 'DALL-E 3',           // ⚡ confiável (~15s, $0.04/img)
-      enabled: !!openaiKey,
-      fn: () => generateWithDallE3(prompt, width, height, openaiKey),
+      name: 'Together.ai FLUX',   // ⚡ FLUX.1-schnell grátis ($25 free credit)
+      enabled: !!togetherKey,
+      fn: () => generateWithTogether(prompt, width, height, togetherKey),
     },
     {
       name: 'fal.ai FLUX',        // ⚡ ~3s, free tier
       enabled: !!falKey,
       fn: () => generateWithFalAI(prompt, width, height, falKey),
+    },
+    {
+      name: 'Cloudflare FLUX',    // grátis via Workers AI
+      enabled: !!(cfAccountId && cfApiToken),
+      fn: () => generateWithCloudflare(prompt, width, height, cfAccountId, cfApiToken),
+    },
+    {
+      name: 'DALL-E 3',           // pago (~$0.04/img)
+      enabled: !!openaiKey,
+      fn: () => generateWithDallE3(prompt, width, height, openaiKey),
     },
     {
       name: 'Gemini Image Gen',   // grátis com chave Gemini
