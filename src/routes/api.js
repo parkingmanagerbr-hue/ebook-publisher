@@ -246,4 +246,47 @@ router.post('/reset-ai', requireAuth, (req, res) => {
   }
 });
 
+// ─── Agente Autônomo ─────────────────────────────────────────────────────────
+
+// GET /api/agent/status
+router.get('/agent/status', requireAuth, (req, res) => {
+  try {
+    const agent = require('../core/autonomousAgent');
+    res.json({ ok: true, ...agent.getStatus() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agent/pause
+router.post('/agent/pause', requireAuth, (req, res) => {
+  try {
+    require('../core/autonomousAgent').pause();
+    res.json({ ok: true, message: 'Agente pausado' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agent/resume
+router.post('/agent/resume', requireAuth, (req, res) => {
+  try {
+    require('../core/autonomousAgent').resume();
+    res.json({ ok: true, message: 'Agente retomado' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/agent/trigger — Forçar geração imediata
+router.post('/agent/trigger', requireAuth, (req, res) => {
+  try {
+    const { topic } = req.body;
+    require('../core/autonomousAgent').triggerNow(topic || null);
+    res.json({ ok: true, message: 'Ciclo forçado' + (topic ? `: "${topic}"` : '') });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

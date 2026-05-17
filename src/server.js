@@ -52,11 +52,28 @@ app.get('/login',    (req, res) => res.sendFile(path.join(__dirname, '../public/
 app.get('/register', (req, res) => res.sendFile(path.join(__dirname, '../public/register.html')));
 
 // ─── Start ───────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   logger.info(`🌐 E-book Caster rodando em http://localhost:${PORT}`);
   logger.info(`   Landing:   http://localhost:${PORT}/`);
   logger.info(`   Login:     http://localhost:${PORT}/login`);
   logger.info(`   Dashboard: http://localhost:${PORT}/dashboard`);
+
+  // Inicializar banco de tópicos + Agente Autônomo 24/7
+  try {
+    const { expandTopics } = require('./agents/topicExpander');
+    await expandTopics();
+    logger.info('📚 Banco de tópicos inicializado');
+  } catch (e) {
+    logger.warn('⚠️  topicExpander:', e.message);
+  }
+
+  try {
+    const agent = require('./core/autonomousAgent');
+    agent.loop();
+    logger.info('🤖 Agente autônomo iniciado — modo 24/7');
+  } catch (e) {
+    logger.error('❌ Falha ao iniciar agente:', e.message);
+  }
 });
 
 module.exports = app;

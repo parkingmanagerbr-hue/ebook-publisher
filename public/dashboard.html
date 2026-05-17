@@ -42,26 +42,96 @@ body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui
           justify-content:space-between; padding:0 2rem; background:var(--bg);
           position:sticky; top:0; z-index:40; }
 .topbar h1 { font-size:1.1rem; font-weight:700; }
-.btn-generate { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff;
-                border:none; padding:.6rem 1.25rem; border-radius:10px; font-size:.9rem;
-                font-weight:700; cursor:pointer; display:flex; align-items:center; gap:.5rem;
-                transition:all .2s; }
-.btn-generate:hover { transform:translateY(-1px); box-shadow:0 6px 20px rgba(99,102,241,.4); }
-.btn-generate:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+.topbar-actions { display:flex; gap:.75rem; align-items:center; }
+.btn-pill { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff;
+            border:none; padding:.5rem 1.1rem; border-radius:10px; font-size:.85rem;
+            font-weight:700; cursor:pointer; display:flex; align-items:center; gap:.4rem; transition:all .2s; }
+.btn-pill:hover { transform:translateY(-1px); box-shadow:0 6px 20px rgba(99,102,241,.4); }
+.btn-pill:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+.btn-pill.outline { background:transparent; border:1px solid var(--accent); color:var(--accent); }
+.btn-pill.outline:hover { background:rgba(99,102,241,.15); box-shadow:none; }
+.btn-pill.danger { background:linear-gradient(135deg,#ef4444,#dc2626); }
+.btn-pill.success { background:linear-gradient(135deg,#10b981,#059669); }
 
 /* CONTENT */
 .content { padding:2rem; flex:1; }
 
+/* ═══ AGENT STATUS PANEL ══════════════════════════════════════════════════════ */
+.agent-panel {
+  background:var(--card); border:1px solid var(--border); border-radius:18px;
+  padding:1.5rem; margin-bottom:2rem; transition:border-color .3s;
+}
+.agent-panel.running  { border-color:rgba(99,102,241,.5); }
+.agent-panel.paused   { border-color:rgba(245,158,11,.4); }
+.agent-panel.error    { border-color:rgba(239,68,68,.4); }
+.agent-panel.sleeping { border-color:rgba(148,163,184,.25); }
+
+.agent-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem; }
+.agent-title-row { display:flex; align-items:center; gap:.75rem; }
+.agent-pulse { width:10px; height:10px; border-radius:50%; background:var(--green);
+               box-shadow:0 0 0 0 rgba(16,185,129,.4); animation:pulse 2s infinite; flex-shrink:0; }
+.agent-pulse.paused  { background:var(--gold);  box-shadow:none; animation:none; }
+.agent-pulse.error   { background:var(--red);   box-shadow:none; animation:none; }
+.agent-pulse.sleeping { background:var(--muted); box-shadow:none; animation:none; }
+@keyframes pulse {
+  0%   { box-shadow:0 0 0 0 rgba(16,185,129,.4); }
+  70%  { box-shadow:0 0 0 8px rgba(16,185,129,0); }
+  100% { box-shadow:0 0 0 0 rgba(16,185,129,0); }
+}
+.agent-status-label { font-size:.75rem; font-weight:700; padding:.25rem .75rem;
+                      border-radius:100px; text-transform:uppercase; letter-spacing:.05em; }
+.lbl-running  { background:rgba(99,102,241,.2); color:#a5b4fc; border:1px solid rgba(99,102,241,.4); }
+.lbl-paused   { background:rgba(245,158,11,.15); color:#fcd34d; border:1px solid rgba(245,158,11,.3); }
+.lbl-error    { background:rgba(239,68,68,.15);  color:#fca5a5; border:1px solid rgba(239,68,68,.3); }
+.lbl-sleeping { background:rgba(148,163,184,.1); color:var(--muted); border:1px solid var(--border); }
+
+.agent-body { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; }
+.agent-info-item { display:flex; flex-direction:column; gap:.25rem; }
+.agent-info-label { font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; font-weight:600; }
+.agent-info-value { font-size:.9rem; font-weight:700; line-height:1.3; }
+.agent-info-value.accent { color:var(--accent); }
+.agent-info-value.gold   { color:var(--gold); }
+.agent-info-value.green  { color:var(--green); }
+.agent-info-value.muted  { color:var(--muted); font-weight:400; }
+
+.agent-step-badge { display:inline-flex; align-items:center; gap:.4rem; font-size:.82rem;
+                    font-weight:700; padding:.3rem .75rem; border-radius:100px;
+                    background:rgba(99,102,241,.12); border:1px solid rgba(99,102,241,.2);
+                    color:#a5b4fc; white-space:nowrap; }
+.step-writing   { background:rgba(99,102,241,.12); border-color:rgba(99,102,241,.3); color:#a5b4fc; }
+.step-cover     { background:rgba(139,92,246,.12);  border-color:rgba(139,92,246,.3);  color:#c4b5fd; }
+.step-pdf       { background:rgba(245,158,11,.12);  border-color:rgba(245,158,11,.3);  color:#fcd34d; }
+.step-publishing { background:rgba(16,185,129,.12); border-color:rgba(16,185,129,.3);  color:#6ee7b7; }
+.step-sleeping  { background:rgba(148,163,184,.08); border-color:var(--border);        color:var(--muted); }
+.step-selecting { background:rgba(249,115,22,.12);  border-color:rgba(249,115,22,.3);  color:#fdba74; }
+.step-paused    { background:rgba(245,158,11,.12);  border-color:rgba(245,158,11,.3);  color:#fcd34d; }
+.step-error     { background:rgba(239,68,68,.12);   border-color:rgba(239,68,68,.3);   color:#fca5a5; }
+
+.agent-countdown { font-size:1.6rem; font-weight:900; font-variant-numeric:tabular-nums;
+                   color:var(--accent); letter-spacing:.02em; }
+
+/* HISTORY LOG */
+.history-list { display:flex; flex-direction:column; gap:.5rem; margin-top:1rem; }
+.history-item { display:flex; align-items:flex-start; gap:.75rem; padding:.75rem 1rem;
+                background:rgba(255,255,255,.02); border:1px solid var(--border);
+                border-radius:10px; font-size:.82rem; }
+.hi-icon { font-size:1rem; flex-shrink:0; margin-top:1px; }
+.hi-body { flex:1; min-width:0; }
+.hi-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hi-meta { color:var(--muted); margin-top:.15rem; font-size:.75rem; }
+.hi-time { font-size:.72rem; color:var(--muted); flex-shrink:0; }
+
 /* STATS */
-.stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:1rem; margin-bottom:2rem; }
+.stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:1rem; margin-bottom:2rem; }
 .stat-card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:1.25rem; }
-.stat-label { font-size:.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:.5rem; }
-.stat-value { font-size:2rem; font-weight:900; }
-.stat-sub { font-size:.8rem; color:var(--muted); margin-top:.3rem; }
+.stat-label { font-size:.78rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:.5rem; }
+.stat-value { font-size:1.9rem; font-weight:900; }
+.stat-sub { font-size:.78rem; color:var(--muted); margin-top:.3rem; }
 .stat-card.accent .stat-value { color:var(--accent); }
 .stat-card.green  .stat-value { color:var(--green); }
 .stat-card.gold   .stat-value { color:var(--gold); }
 .stat-card.orange .stat-value { color:var(--orange); }
+.stat-card.purple .stat-value { color:#c084fc; }
 
 /* AI STATUS */
 .ai-status { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:2rem; }
@@ -112,15 +182,13 @@ body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui
 .pb-amazon  { background:rgba(245,158,11,.15); color:#fcd34d; }
 .ebook-actions { display:flex; gap:.5rem; margin-top:auto; flex-wrap:wrap; }
 .btn-action { flex:1; padding:.5rem; border-radius:8px; font-size:.75rem; font-weight:700;
-              cursor:pointer; border:none; transition:all .2s; min-width:60px; text-align:center; }
-.btn-download { background:rgba(99,102,241,.15); color:#a5b4fc; }
-.btn-download:hover { background:rgba(99,102,241,.3); }
+              cursor:pointer; border:none; transition:all .2s; min-width:60px; text-align:center; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
+.btn-view     { background:rgba(99,102,241,.15); color:#a5b4fc; }
+.btn-view:hover { background:rgba(99,102,241,.3); }
+.btn-download { background:rgba(148,163,184,.1); color:var(--muted); }
+.btn-download:hover { background:rgba(148,163,184,.2); }
 .btn-publish { background:rgba(16,185,129,.15); color:#6ee7b7; }
 .btn-publish:hover { background:rgba(16,185,129,.3); }
-.btn-hotmart { background:rgba(255,107,53,.15); color:#ff6b35; }
-.btn-hotmart:hover { background:rgba(255,107,53,.3); }
-.btn-amazon  { background:rgba(245,158,11,.15); color:#fcd34d; }
-.btn-amazon:hover { background:rgba(245,158,11,.3); }
 
 /* MODAL */
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:100;
@@ -171,17 +239,17 @@ body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui
 <aside class="sidebar">
   <div class="sidebar-logo">⚡ E-book Caster</div>
   <nav class="nav-menu">
-    <button class="nav-item active" onclick="showSection('ebooks')">
-      <span class="icon">📚</span> Meus E-books
+    <button class="nav-item active" onclick="showSection('agent', this)">
+      <span class="icon">🤖</span> Agente 24/7
     </button>
-    <button class="nav-item" onclick="showSection('generate')">
-      <span class="icon">⚡</span> Gerar Novo
+    <button class="nav-item" onclick="showSection('ebooks', this)">
+      <span class="icon">📚</span> E-books
     </button>
-    <button class="nav-item" onclick="showSection('topics')">
+    <button class="nav-item" onclick="showSection('topics', this)">
       <span class="icon">🎯</span> Tópicos
     </button>
-    <button class="nav-item" onclick="showSection('ai')">
-      <span class="icon">🤖</span> Status da IA
+    <button class="nav-item" onclick="showSection('ai', this)">
+      <span class="icon">⚙️</span> Providers IA
     </button>
     <button class="nav-item" onclick="window.open('/', '_blank')">
       <span class="icon">🌐</span> Landing Page
@@ -202,32 +270,105 @@ body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui
 <!-- MAIN -->
 <main class="main">
   <div class="topbar">
-    <h1 id="pageTitle">Meus E-books</h1>
-    <button class="btn-generate" id="btnGenerate" onclick="openGenerateModal()">
-      ⚡ Gerar E-book
-    </button>
+    <h1 id="pageTitle">Agente 24/7</h1>
+    <div class="topbar-actions">
+      <button class="btn-pill outline" id="btnPauseResume" onclick="togglePause()">⏸ Pausar</button>
+      <button class="btn-pill" onclick="openTriggerModal()">⚡ Gerar Agora</button>
+    </div>
   </div>
 
   <div class="content">
-    <!-- STATS -->
-    <div class="stats-grid" id="statsGrid">
-      <div class="stat-card accent"><div class="stat-label">Total E-books</div><div class="stat-value" id="statTotal">—</div></div>
-      <div class="stat-card green"><div class="stat-label">Publicados</div><div class="stat-value" id="statPublished">—</div></div>
-      <div class="stat-card gold"><div class="stat-label">Receita Total</div><div class="stat-value" id="statRevenue">—</div></div>
-      <div class="stat-card orange"><div class="stat-label">Vendas</div><div class="stat-value" id="statSales">—</div></div>
+
+    <!-- ══ AGENT SECTION ══════════════════════════════════════════════════════ -->
+    <div id="sectionAgent">
+
+      <!-- Agent Status Panel -->
+      <div class="agent-panel" id="agentPanel">
+        <div class="agent-header">
+          <div class="agent-title-row">
+            <div class="agent-pulse" id="agentPulse"></div>
+            <strong style="font-size:1rem;">Motor Autônomo</strong>
+            <span class="agent-status-label lbl-running" id="agentStatusLabel">Carregando...</span>
+          </div>
+          <div style="font-size:.75rem;color:var(--muted);" id="agentSessionStart"></div>
+        </div>
+
+        <div class="agent-body">
+          <div class="agent-info-item">
+            <div class="agent-info-label">Etapa atual</div>
+            <div id="agentStep"><span class="agent-step-badge step-sleeping">⏳ Aguardando...</span></div>
+          </div>
+          <div class="agent-info-item">
+            <div class="agent-info-label">Tópico em produção</div>
+            <div class="agent-info-value" id="agentTopic" style="font-size:.85rem;">—</div>
+          </div>
+          <div class="agent-info-item">
+            <div class="agent-info-label">Último gerado</div>
+            <div class="agent-info-value green" id="agentLastTitle" style="font-size:.82rem;">—</div>
+          </div>
+          <div class="agent-info-item">
+            <div class="agent-info-label">Próxima geração</div>
+            <div class="agent-countdown" id="agentCountdown">--:--:--</div>
+          </div>
+          <div class="agent-info-item">
+            <div class="agent-info-label">E-books gerados</div>
+            <div class="agent-info-value accent" id="agentGenerated">0</div>
+          </div>
+          <div class="agent-info-item">
+            <div class="agent-info-label">Publicações</div>
+            <div class="agent-info-value gold" id="agentPublished">0</div>
+          </div>
+          <div class="agent-info-item">
+            <div class="agent-info-label">Intervalo</div>
+            <div class="agent-info-value muted" id="agentInterval">—</div>
+          </div>
+          <div class="agent-info-item">
+            <div class="agent-info-label">Plataformas ativas</div>
+            <div id="agentPlatforms" style="display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.15rem;"></div>
+          </div>
+        </div>
+
+        <div id="agentError" style="display:none;margin-top:1rem;background:rgba(239,68,68,.08);
+             border:1px solid rgba(239,68,68,.25);border-radius:10px;padding:.75rem 1rem;
+             font-size:.8rem;color:#fca5a5;">
+          <strong>⚠️ Último erro:</strong> <span id="agentErrorMsg"></span>
+        </div>
+      </div>
+
+      <!-- Stats Row -->
+      <div class="stats-grid">
+        <div class="stat-card accent"><div class="stat-label">Total E-books</div><div class="stat-value" id="statTotal">—</div></div>
+        <div class="stat-card green"><div class="stat-label">Publicados</div><div class="stat-value" id="statPublished">—</div></div>
+        <div class="stat-card gold"><div class="stat-label">Receita Total</div><div class="stat-value" id="statRevenue">—</div></div>
+        <div class="stat-card orange"><div class="stat-label">Vendas</div><div class="stat-value" id="statSales">—</div></div>
+        <div class="stat-card purple"><div class="stat-label">Prontos</div><div class="stat-value" id="statReady">—</div></div>
+      </div>
+
+      <!-- History Log -->
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.5rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+          <span class="section-title">📋 Histórico de Gerações</span>
+          <span id="historyCount" class="section-count">0</span>
+        </div>
+        <div id="historyList" class="history-list">
+          <div style="text-align:center;padding:2rem;color:var(--muted);font-size:.85rem;">
+            Aguardando primeiros ciclos do agente...
+          </div>
+        </div>
+      </div>
     </div>
 
-    <!-- AI STATUS -->
-    <div id="aiStatusBar" style="margin-bottom:1.5rem;">
-      <div style="font-size:.8rem;color:var(--muted);margin-bottom:.5rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Providers de IA</div>
-      <div class="ai-status" id="aiStatusBadges"></div>
-    </div>
+    <!-- ══ EBOOKS SECTION ═══════════════════════════════════════════════════ -->
+    <div id="sectionEbooks" style="display:none;">
+      <!-- AI Status bar -->
+      <div id="aiStatusBar" style="margin-bottom:1.5rem;">
+        <div style="font-size:.78rem;color:var(--muted);margin-bottom:.5rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">Providers de IA</div>
+        <div class="ai-status" id="aiStatusBadges"></div>
+      </div>
 
-    <!-- EBOOKS SECTION -->
-    <div id="sectionEbooks">
       <div class="section-header">
         <div style="display:flex;align-items:center;gap:.75rem;">
-          <span class="section-title">E-books</span>
+          <span class="section-title">E-books Gerados</span>
           <span class="section-count" id="ebooksCount">0</span>
         </div>
         <div class="filter-bar">
@@ -240,67 +381,51 @@ body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui
       <div id="ebooksLoading" class="loading" style="display:none;">
         <div class="spinner"></div> Carregando e-books...
       </div>
-
       <div class="ebooks-grid" id="ebooksGrid"></div>
       <div class="empty" id="ebooksEmpty" style="display:none;">
         <div class="icon">📭</div>
-        <h3>Nenhum e-book encontrado</h3>
-        <p>Clique em "Gerar E-book" para criar seu primeiro e-book com IA.</p>
+        <h3>Nenhum e-book ainda</h3>
+        <p>O agente vai gerar o primeiro e-book em breve.</p>
       </div>
     </div>
 
-    <!-- GENERATE SECTION -->
-    <div id="sectionGenerate" style="display:none;max-width:600px;">
-      <div class="section-title" style="margin-bottom:1.5rem;">⚡ Gerar Novo E-book</div>
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:2rem;">
-        <label>Tópico (deixe em branco para o sistema escolher automaticamente)</label>
-        <input type="text" id="topicInput" placeholder="Ex: Inteligência artificial para iniciantes" style="width:100%;background:#0f1623;border:1px solid var(--border);border-radius:10px;padding:.75rem 1rem;color:var(--text);font-size:.9rem;outline:none;margin-bottom:1.5rem;">
-        <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:12px;padding:1rem;margin-bottom:1.5rem;font-size:.85rem;color:var(--muted);">
-          <strong style="color:var(--text);">Pipeline automático:</strong><br>
-          IA escreve → Capa gerada → PDF A4 com ilustrações → QA automático → Pronto para publicar
-        </div>
-        <button class="btn-generate" style="width:100%;justify-content:center;" onclick="generateEbook()">
-          ⚡ Iniciar Geração
-        </button>
-      </div>
-    </div>
-
-    <!-- TOPICS SECTION -->
+    <!-- ══ TOPICS SECTION ═══════════════════════════════════════════════════ -->
     <div id="sectionTopics" style="display:none;">
-      <div class="section-title" style="margin-bottom:1.5rem;">🎯 Tópicos Disponíveis</div>
+      <div class="section-title" style="margin-bottom:1.5rem;">🎯 Banco de Tópicos</div>
       <div id="topicsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem;"></div>
     </div>
 
-    <!-- AI STATUS SECTION -->
+    <!-- ══ AI SECTION ════════════════════════════════════════════════════════ -->
     <div id="sectionAI" style="display:none;">
       <div class="section-header">
-        <span class="section-title">🤖 Status dos Providers de IA</span>
-        <button class="btn-generate" onclick="resetAllAI()" style="font-size:.8rem;padding:.5rem 1rem;">
+        <span class="section-title">⚙️ Providers de IA</span>
+        <button class="btn-pill outline" onclick="resetAllAI()" style="font-size:.8rem;">
           🔄 Reset Estado
         </button>
       </div>
       <div id="aiDetailGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem;margin-top:1rem;"></div>
     </div>
+
   </div>
 </main>
 
-<!-- MODAL GENERATE -->
-<div class="modal-overlay" id="modalGenerate">
+<!-- MODAL: Forçar geração -->
+<div class="modal-overlay" id="modalTrigger">
   <div class="modal">
-    <h3>⚡ Gerar Novo E-book</h3>
-    <label>Tópico (opcional)</label>
-    <input type="text" id="modalTopic" placeholder="Deixe em branco para o sistema escolher">
-    <div style="font-size:.8rem;color:var(--muted);margin-bottom:1rem;">
-      O sistema irá: Escrever (5000+ palavras) → Criar capa → Gerar PDF A4 → QA automático
+    <h3>⚡ Forçar Geração Agora</h3>
+    <label>Tópico (deixe em branco para o agente escolher automaticamente)</label>
+    <input type="text" id="triggerTopic" placeholder="Ex: Como investir com pouco dinheiro">
+    <div style="font-size:.8rem;color:var(--muted);background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:.75rem;margin-bottom:1rem;">
+      O agente interrompe o timer atual e inicia um ciclo completo imediatamente.
     </div>
     <div class="modal-btns">
-      <button class="btn-cancel" onclick="closeModal('modalGenerate')">Cancelar</button>
-      <button class="btn-confirm" onclick="startGenerate()">🚀 Gerar Agora</button>
+      <button class="btn-cancel" onclick="closeModal('modalTrigger')">Cancelar</button>
+      <button class="btn-confirm" onclick="triggerNow()">🚀 Gerar Agora</button>
     </div>
   </div>
 </div>
 
-<!-- MODAL PUBLISH -->
+<!-- MODAL: Publicar -->
 <div class="modal-overlay" id="modalPublish">
   <div class="modal">
     <h3>🚀 Publicar E-book</h3>
@@ -323,14 +448,14 @@ body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui
 <div class="toast" id="toast"></div>
 
 <script>
-const API = { token: '', base: '' };
+const API = { token: '' };
 let allEbooks = [], currentFilter = 'all', publishingEbookId = null;
+let agentData = null, countdownTarget = null, countdownTimer = null;
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 async function init() {
   const token = localStorage.getItem('genia_token');
   if (!token) return window.location.href = '/login';
-
   try {
     const r = await fetch('/auth/me', { headers: { Authorization: 'Bearer ' + token } });
     if (!r.ok) throw new Error();
@@ -347,27 +472,184 @@ async function init() {
 }
 
 async function authFetch(url, opts = {}) {
-  return fetch(url, { ...opts, headers: { 'Authorization': 'Bearer ' + API.token, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  return fetch(url, { ...opts, headers: {
+    'Authorization': 'Bearer ' + API.token,
+    'Content-Type': 'application/json',
+    ...(opts.headers || {})
+  }});
 }
 
-// ─── Load All Data ───────────────────────────────────────────────────────────
+// ─── Load All ────────────────────────────────────────────────────────────────
 async function loadAll() {
+  loadAgentStatus();
   loadStats();
-  loadEbooks();
   loadAIStatus();
 }
 
+// ─── Agent Status ─────────────────────────────────────────────────────────────
+async function loadAgentStatus() {
+  try {
+    const r = await authFetch('/api/agent/status');
+    agentData = await r.json();
+    renderAgentPanel(agentData);
+  } catch (e) { console.error('agent-status:', e); }
+}
+
+function renderAgentPanel(d) {
+  if (!d) return;
+
+  // Panel border class
+  const panel = document.getElementById('agentPanel');
+  panel.className = 'agent-panel';
+  if (d.paused) panel.classList.add('paused');
+  else if (d.currentStep === 'error') panel.classList.add('error');
+  else if (d.currentStep === 'sleeping' || !d.currentStep) panel.classList.add('sleeping');
+  else panel.classList.add('running');
+
+  // Pulse
+  const pulse = document.getElementById('agentPulse');
+  pulse.className = 'agent-pulse';
+  if (d.paused) pulse.classList.add('paused');
+  else if (d.currentStep === 'error') pulse.classList.add('error');
+  else if (d.currentStep === 'sleeping' || !d.currentStep) pulse.classList.add('sleeping');
+
+  // Label
+  const lbl = document.getElementById('agentStatusLabel');
+  if (d.paused)                        { lbl.textContent = '⏸ Pausado';   lbl.className = 'agent-status-label lbl-paused'; }
+  else if (d.currentStep === 'error')  { lbl.textContent = '❌ Erro';      lbl.className = 'agent-status-label lbl-error'; }
+  else if (d.currentStep === 'sleeping') { lbl.textContent = '💤 Dormindo'; lbl.className = 'agent-status-label lbl-sleeping'; }
+  else if (d.currentStep)              { lbl.textContent = '▶ Rodando';   lbl.className = 'agent-status-label lbl-running'; }
+  else                                 { lbl.textContent = '⚡ Ativo';     lbl.className = 'agent-status-label lbl-running'; }
+
+  // Step badge
+  const stepMap = {
+    selecting:          ['step-selecting', '🔍 Selecionando tópico'],
+    writing:            ['step-writing',   '✍️ Escrevendo e-book'],
+    cover:              ['step-cover',     '🎨 Gerando capa'],
+    pdf:                ['step-pdf',       '📄 Gerando PDF'],
+    'publishing:cakto': ['step-publishing','🚀 Publicando no Cakto'],
+    'publishing:hotmart':['step-publishing','🚀 Publicando no Hotmart'],
+    'publishing:amazon':['step-publishing','🚀 Publicando na Amazon'],
+    publishing:         ['step-publishing','🚀 Publicando...'],
+    sleeping:           ['step-sleeping',  '💤 Aguardando próximo ciclo'],
+    paused:             ['step-paused',    '⏸ Pausado pelo usuário'],
+    error:              ['step-error',     '❌ Erro — aguardando backoff'],
+  };
+  const [cls, label] = stepMap[d.currentStep] || ['step-sleeping', '⏳ Iniciando...'];
+  document.getElementById('agentStep').innerHTML =
+    `<span class="agent-step-badge ${cls}">${label}</span>`;
+
+  // Topic & title
+  document.getElementById('agentTopic').textContent = d.currentTopic || '—';
+  document.getElementById('agentLastTitle').textContent =
+    d.history?.[0]?.title || d.currentTitle || '—';
+
+  // Counters
+  document.getElementById('agentGenerated').textContent = d.totalGenerated ?? 0;
+  document.getElementById('agentPublished').textContent = d.totalPublished ?? 0;
+  document.getElementById('agentInterval').textContent  =
+    d.intervalMinutes ? `${d.intervalMinutes} min` : '—';
+
+  // Session start
+  if (d.sessionStart) {
+    document.getElementById('agentSessionStart').textContent =
+      'Sessão iniciada: ' + new Date(d.sessionStart).toLocaleString('pt-BR');
+  }
+
+  // Platforms
+  const ptEl = document.getElementById('agentPlatforms');
+  if (d.publishTo) {
+    ptEl.innerHTML = [
+      d.publishTo.cakto   ? '<span style="font-size:.72rem;background:rgba(99,102,241,.15);color:#a5b4fc;padding:.2rem .5rem;border-radius:6px;font-weight:700;">Cakto</span>' : '',
+      d.publishTo.hotmart ? '<span style="font-size:.72rem;background:rgba(255,107,53,.15);color:#ff6b35;padding:.2rem .5rem;border-radius:6px;font-weight:700;">Hotmart</span>' : '',
+      d.publishTo.amazon  ? '<span style="font-size:.72rem;background:rgba(245,158,11,.15);color:#fcd34d;padding:.2rem .5rem;border-radius:6px;font-weight:700;">Amazon</span>' : '',
+    ].filter(Boolean).join('') || '<span style="font-size:.75rem;color:var(--muted);">Nenhuma configurada</span>';
+  }
+
+  // Error
+  const errEl = document.getElementById('agentError');
+  if (d.lastError) {
+    errEl.style.display = 'block';
+    document.getElementById('agentErrorMsg').textContent = d.lastError;
+  } else {
+    errEl.style.display = 'none';
+  }
+
+  // Pause/resume button
+  const btn = document.getElementById('btnPauseResume');
+  if (d.paused) { btn.textContent = '▶ Retomar'; btn.classList.add('success'); btn.classList.remove('outline'); }
+  else          { btn.textContent = '⏸ Pausar';  btn.classList.remove('success'); btn.classList.add('outline'); }
+
+  // Countdown
+  if (d.nextRunAt) {
+    countdownTarget = new Date(d.nextRunAt).getTime();
+    if (!countdownTimer) startCountdown();
+  } else {
+    countdownTarget = null;
+    document.getElementById('agentCountdown').textContent =
+      d.paused ? '— pausado —' : d.currentStep && d.currentStep !== 'sleeping' ? '⚡ Gerando...' : '--:--:--';
+  }
+
+  // History
+  renderHistory(d.history || []);
+}
+
+function startCountdown() {
+  if (countdownTimer) clearInterval(countdownTimer);
+  countdownTimer = setInterval(() => {
+    if (!countdownTarget) return;
+    const diff = countdownTarget - Date.now();
+    const el = document.getElementById('agentCountdown');
+    if (diff <= 0) {
+      el.textContent = '⚡ Iniciando...';
+      clearInterval(countdownTimer); countdownTimer = null;
+      return;
+    }
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    el.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }, 1000);
+}
+
+function renderHistory(history) {
+  const list = document.getElementById('historyList');
+  document.getElementById('historyCount').textContent = history.length;
+  if (!history.length) {
+    list.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--muted);font-size:.85rem;">Aguardando primeiros ciclos do agente...</div>';
+    return;
+  }
+  list.innerHTML = history.slice(0, 20).map(h => {
+    const icon = h.status === 'published' ? '✅' : h.status === 'error' ? '❌' : h.status === 'generated' ? '📄' : '🔄';
+    const time = new Date(h.at).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    const plats = h.platforms?.length ? h.platforms.map(p => `<span style="font-size:.7rem;background:rgba(16,185,129,.1);color:#6ee7b7;padding:.1rem .4rem;border-radius:4px;">${p}</span>`).join(' ') : '';
+    const errTxt = h.error ? `<span style="color:#fca5a5;">${h.error.slice(0,80)}</span>` : '';
+    return `
+    <div class="history-item">
+      <span class="hi-icon">${icon}</span>
+      <div class="hi-body">
+        <div class="hi-title">${h.title || h.topic || 'Ciclo'}</div>
+        <div class="hi-meta">${h.topic ? `<span>${h.topic}</span> · ` : ''}${plats}${errTxt}</div>
+      </div>
+      <span class="hi-time">${time}</span>
+    </div>`;
+  }).join('');
+}
+
+// ─── Stats ───────────────────────────────────────────────────────────────────
 async function loadStats() {
   try {
     const r = await authFetch('/api/stats');
-    const { totalEbooks, published, totalRevenue, totalSales } = await r.json();
-    document.getElementById('statTotal').textContent = totalEbooks;
-    document.getElementById('statPublished').textContent = published;
-    document.getElementById('statRevenue').textContent = 'R$ ' + parseFloat(totalRevenue || 0).toFixed(2);
-    document.getElementById('statSales').textContent = totalSales || 0;
+    const { totalEbooks, published, totalRevenue, totalSales, ready } = await r.json();
+    document.getElementById('statTotal').textContent     = totalEbooks ?? 0;
+    document.getElementById('statPublished').textContent = published ?? 0;
+    document.getElementById('statRevenue').textContent   = 'R$ ' + parseFloat(totalRevenue || 0).toFixed(2);
+    document.getElementById('statSales').textContent     = totalSales ?? 0;
+    document.getElementById('statReady').textContent     = ready ?? (totalEbooks - published) ?? 0;
   } catch (e) { console.error('stats:', e); }
 }
 
+// ─── E-books ─────────────────────────────────────────────────────────────────
 async function loadEbooks() {
   document.getElementById('ebooksLoading').style.display = 'flex';
   document.getElementById('ebooksGrid').innerHTML = '';
@@ -377,13 +659,66 @@ async function loadEbooks() {
     allEbooks = ebooks || [];
     document.getElementById('ebooksCount').textContent = allEbooks.length;
     renderEbooks(allEbooks);
-  } catch (e) {
-    showToast('Erro ao carregar e-books: ' + e.message, 'error');
-  } finally {
-    document.getElementById('ebooksLoading').style.display = 'none';
-  }
+  } catch (e) { showToast('Erro ao carregar e-books: ' + e.message, 'error'); }
+  finally { document.getElementById('ebooksLoading').style.display = 'none'; }
 }
 
+function renderEbooks(ebooks) {
+  const grid  = document.getElementById('ebooksGrid');
+  const empty = document.getElementById('ebooksEmpty');
+  const filtered = currentFilter === 'all' ? ebooks : ebooks.filter(e => e.status === currentFilter);
+  if (!filtered.length) { grid.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+
+  grid.innerHTML = filtered.map(e => {
+    const date  = new Date(e.createdAt).toLocaleDateString('pt-BR');
+    const cover = e.coverUrl
+      ? `<img src="${e.coverUrl}" alt="capa" loading="lazy" onerror="this.parentElement.innerHTML='📚'">`
+      : `📚`;
+    const platforms = [
+      e.hotmartUrl ? `<a href="${e.hotmartUrl}" target="_blank" class="platform-badge pb-hotmart">Hotmart</a>` : '',
+      e.caktoUrl   ? `<a href="${e.caktoUrl}"   target="_blank" class="platform-badge pb-cakto">Cakto</a>`   : '',
+      e.amazonUrl  ? `<a href="${e.amazonUrl}"  target="_blank" class="platform-badge pb-amazon">Amazon</a>` : '',
+    ].filter(Boolean).join('');
+    const viewUrl = `/pdfs/${e.pdfFile}?token=${API.token}`;
+    return `
+    <div class="ebook-card">
+      <div class="ebook-cover">${cover}</div>
+      <div class="ebook-body">
+        <div class="ebook-status status-${e.status}">${
+          e.status==='published' ? '✅ Publicado' : e.status==='ready' ? '⚡ Pronto' : '⏳ Pendente'}</div>
+        <div class="ebook-title">${e.title}</div>
+        <div class="ebook-meta">
+          <span>📅 ${date}</span>
+          <span>📦 ${e.sizeKb}KB</span>
+          ${e.price ? `<span>💰 R$ ${e.price}</span>` : ''}
+        </div>
+        ${platforms ? `<div class="ebook-platforms">${platforms}</div>` : ''}
+        <div class="ebook-actions">
+          <a class="btn-action btn-view" href="${viewUrl}" target="_blank">👁 Ver PDF</a>
+          <button class="btn-action btn-download" onclick="downloadEbook('${e.pdfFile}')">⬇</button>
+          <button class="btn-action btn-publish" onclick="openPublishModal('${e.id || e.pdfFile}','${e.title.replace(/'/g,"\\'").replace(/"/g,'&quot;')}')">🚀</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterEbooks(filter, btn) {
+  currentFilter = filter;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn?.classList.add('active');
+  renderEbooks(allEbooks);
+}
+
+function downloadEbook(pdfFile) {
+  const a = document.createElement('a');
+  a.href = `/pdfs/${pdfFile}?token=${API.token}`;
+  a.download = pdfFile;
+  a.click();
+}
+
+// ─── AI Status ───────────────────────────────────────────────────────────────
 async function loadAIStatus() {
   try {
     const r = await authFetch('/api/ai-status');
@@ -393,6 +728,39 @@ async function loadAIStatus() {
   } catch (e) { console.error('ai-status:', e); }
 }
 
+function renderAIBadges(providers) {
+  const bar = document.getElementById('aiStatusBadges');
+  if (!providers || !bar) return;
+  bar.innerHTML = Object.entries(providers).filter(([k]) => !k.startsWith('_')).map(([name, p]) => {
+    const cls = !p.configured ? 'na' : p.degraded ? 'bad' : p.availableKeys === 0 ? 'bad' : 'ok';
+    const label = !p.configured ? 'sem chave' : p.degraded ? 'degradado' : p.availableKeys === 0 ? 'esgotado' : `${p.availableKeys}/${p.totalKeys || 1} chaves`;
+    return `<div class="ai-badge ${cls}"><div class="ai-dot"></div><strong>${name}</strong> <span>${label}</span></div>`;
+  }).join('');
+}
+
+function renderAIDetail(providers) {
+  const grid = document.getElementById('aiDetailGrid');
+  if (!providers || !grid) return;
+  grid.innerHTML = Object.entries(providers).filter(([k]) => !k.startsWith('_')).map(([name, p]) => {
+    const ok = p.configured && !p.degraded && p.availableKeys > 0;
+    const color = ok ? 'var(--green)' : 'var(--red)';
+    const status = !p.configured ? '⚪ Sem chave' : p.degraded ? '🔴 Degradado' : p.availableKeys === 0 ? '🟡 Esgotado' : '🟢 Operacional';
+    return `
+    <div style="background:var(--card);border:1px solid ${ok ? 'rgba(16,185,129,.3)' : 'var(--border)'};border-radius:12px;padding:1.25rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;">
+        <strong>${name}</strong>
+        <span style="font-size:.75rem;color:${color};">${status}</span>
+      </div>
+      <div style="font-size:.75rem;color:var(--muted);">
+        ${p.totalKeys ? `${p.availableKeys}/${p.totalKeys} chaves ativas` : 'Local / sem limite'}<br>
+        ${p.limits ? `${p.limits.rpm} RPM · ${p.limits.rpd === 999999 ? '∞' : p.limits.rpd} RPD` : ''}
+        ${p.degradedUntil ? `<br>Disponível: ${new Date(p.degradedUntil).toLocaleTimeString('pt-BR')}` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─── Topics ──────────────────────────────────────────────────────────────────
 async function loadTopics() {
   try {
     const r = await authFetch('/api/topics');
@@ -408,147 +776,47 @@ async function loadTopics() {
         <div style="font-size:.75rem;color:var(--muted);margin-top:.5rem;">
           Usado ${t.times_used}× · Vendas: ${t.total_sales} · ML: ${t.ml_score?.toFixed(2)}
         </div>
-        <button onclick="setTopicAndGenerate('${t.topic.replace(/'/g, "\\'")}')"
-                style="margin-top:.75rem;width:100%;background:rgba(99,102,241,.15);color:#a5b4fc;border:none;padding:.4rem;border-radius:8px;cursor:pointer;font-size:.8rem;font-weight:600;">
-          ⚡ Gerar com este tópico
-        </button>
       </div>`).join('');
   } catch (e) { console.error('topics:', e); }
 }
 
-// ─── Render ──────────────────────────────────────────────────────────────────
-function renderEbooks(ebooks) {
-  const grid = document.getElementById('ebooksGrid');
-  const empty = document.getElementById('ebooksEmpty');
-  const filtered = currentFilter === 'all' ? ebooks : ebooks.filter(e => e.status === currentFilter);
-
-  if (!filtered.length) {
-    grid.innerHTML = '';
-    empty.style.display = 'block';
-    return;
-  }
-  empty.style.display = 'none';
-
-  grid.innerHTML = filtered.map(e => {
-    const date = new Date(e.createdAt).toLocaleDateString('pt-BR');
-    const cover = e.coverUrl
-      ? `<img src="${e.coverUrl}" alt="capa" loading="lazy" onerror="this.parentElement.innerHTML='📚'">`
-      : `📚`;
-    const platforms = [
-      e.hotmartUrl ? `<a href="${e.hotmartUrl}" target="_blank" class="platform-badge pb-hotmart">Hotmart</a>` : '',
-      e.caktoUrl   ? `<a href="${e.caktoUrl}"   target="_blank" class="platform-badge pb-cakto">Cakto</a>`   : '',
-      e.amazonUrl  ? `<a href="${e.amazonUrl}"  target="_blank" class="platform-badge pb-amazon">Amazon</a>` : '',
-    ].filter(Boolean).join('');
-    return `
-    <div class="ebook-card">
-      <div class="ebook-cover">${cover}</div>
-      <div class="ebook-body">
-        <div class="ebook-status status-${e.status}">${
-          e.status === 'published' ? '✅ Publicado' :
-          e.status === 'ready' ? '⚡ Pronto' : '⏳ Pendente'}</div>
-        <div class="ebook-title">${e.title}</div>
-        <div class="ebook-meta">
-          <span>📅 ${date}</span>
-          <span>📦 ${e.sizeKb}KB</span>
-          ${e.price ? `<span>💰 R$ ${e.price}</span>` : ''}
-        </div>
-        ${platforms ? `<div class="ebook-platforms">${platforms}</div>` : ''}
-        <div class="ebook-actions">
-          <button class="btn-action btn-download" onclick="downloadEbook('${e.pdfFile}')">⬇ Baixar</button>
-          <button class="btn-action btn-publish" onclick="openPublishModal('${e.id || e.pdfFile}', '${e.title.replace(/'/g, "\\'")}')" >🚀 Publicar</button>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function renderAIBadges(providers) {
-  const bar = document.getElementById('aiStatusBadges');
-  if (!providers) return;
-  bar.innerHTML = Object.entries(providers).filter(([k]) => !k.startsWith('_')).map(([name, p]) => {
-    const cls = !p.configured ? 'na' : p.degraded ? 'bad' : p.availableKeys === 0 ? 'bad' : 'ok';
-    const label = !p.configured ? 'sem chave' : p.degraded ? 'degradado' : p.availableKeys === 0 ? 'esgotado' : `${p.availableKeys}/${p.totalKeys || 1} chaves`;
-    return `<div class="ai-badge ${cls}"><div class="ai-dot"></div><strong>${name}</strong> <span>${label}</span></div>`;
-  }).join('');
-}
-
-function renderAIDetail(providers) {
-  const grid = document.getElementById('aiDetailGrid');
-  if (!providers) return;
-  grid.innerHTML = Object.entries(providers).filter(([k]) => !k.startsWith('_')).map(([name, p]) => {
-    const ok = p.configured && !p.degraded && p.availableKeys > 0;
-    const color = ok ? 'var(--green)' : 'var(--red)';
-    const status = !p.configured ? '⚪ Sem chave' : p.degraded ? '🔴 Degradado' : p.availableKeys === 0 ? '🟡 Esgotado' : '🟢 Operacional';
-    return `
-    <div style="background:var(--card);border:1px solid ${ok ? 'rgba(16,185,129,.3)' : 'var(--border)'};border-radius:12px;padding:1.25rem;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;">
-        <strong style="font-size:.95rem;">${name}</strong>
-        <span style="font-size:.75rem;color:${color};">${status}</span>
-      </div>
-      <div style="font-size:.75rem;color:var(--muted);">
-        ${p.totalKeys ? `${p.availableKeys}/${p.totalKeys} chaves ativas` : 'Local/sem chave'}<br>
-        ${p.limits ? `${p.limits.rpm} RPM · ${p.limits.rpd === 999999 ? '∞' : p.limits.rpd} RPD` : ''}
-        ${p.degradedUntil ? `<br>Disponível às: ${new Date(p.degradedUntil).toLocaleTimeString('pt-BR')}` : ''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-// ─── Actions ─────────────────────────────────────────────────────────────────
-function filterEbooks(filter, btn) {
-  currentFilter = filter;
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  renderEbooks(allEbooks);
-}
-
-function downloadEbook(pdfFile) {
-  const a = document.createElement('a');
-  a.href = `/pdfs/${pdfFile}?token=${API.token}`;
-  a.download = pdfFile;
-  a.click();
-}
-
-function openGenerateModal() { document.getElementById('modalGenerate').classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-
-async function startGenerate() {
-  const topic = document.getElementById('modalTopic').value.trim();
-  closeModal('modalGenerate');
-  showToast('⚡ Geração iniciada! Pode demorar alguns minutos.', 'success');
+// ─── Agent Controls ───────────────────────────────────────────────────────────
+async function togglePause() {
+  if (!agentData) return;
+  const endpoint = agentData.paused ? '/api/agent/resume' : '/api/agent/pause';
   try {
-    await authFetch('/api/generate', { method: 'POST', body: JSON.stringify({ topic: topic || null }) });
-    setTimeout(() => { loadEbooks(); loadStats(); }, 5000);
+    await authFetch(endpoint, { method: 'POST' });
+    showToast(agentData.paused ? '▶ Agente retomado!' : '⏸ Agente pausado!', 'success');
+    setTimeout(loadAgentStatus, 800);
   } catch (e) { showToast('Erro: ' + e.message, 'error'); }
 }
 
-function setTopicAndGenerate(topic) {
-  document.getElementById('modalTopic').value = topic;
-  showSection('generate');
-  showToast(`Tópico selecionado: "${topic}"`, 'success');
+function openTriggerModal() { document.getElementById('modalTrigger').classList.add('open'); }
+
+async function triggerNow() {
+  const topic = document.getElementById('triggerTopic').value.trim();
+  closeModal('modalTrigger');
+  showToast('⚡ Ciclo forçado! O agente começa a gerar agora.', 'success');
+  try {
+    await authFetch('/api/agent/trigger', { method: 'POST', body: JSON.stringify({ topic: topic || null }) });
+    setTimeout(loadAgentStatus, 2000);
+  } catch (e) { showToast('Erro: ' + e.message, 'error'); }
 }
 
-function generateEbook() {
-  const topic = document.getElementById('topicInput').value.trim();
-  openGenerateModal();
-  document.getElementById('modalTopic').value = topic;
-}
-
+// ─── Publish Modal ────────────────────────────────────────────────────────────
 function openPublishModal(ebookId, title) {
   publishingEbookId = ebookId;
   document.getElementById('publishEbookTitle').textContent = title;
   updatePublishNote();
   document.getElementById('modalPublish').classList.add('open');
 }
-
 function updatePublishNote() {
-  const platform = document.getElementById('publishPlatform').value;
   const notes = {
-    cakto:   '⚠️ Necessário: CAKTO_EMAIL e CAKTO_PASSWORD no .env. O sistema fará login automático e criará o produto.',
-    hotmart: '⚠️ Necessário: HOTMART_EMAIL e HOTMART_PASSWORD no .env. O sistema fará upload do PDF automaticamente.',
-    amazon:  '⚠️ Necessário: AMAZON_EMAIL e AMAZON_PASSWORD no .env. O sistema irá ao KDP e publicará o e-book. Dados bancários devem ser preenchidos por você na Amazon.',
+    cakto:   '⚠️ Requer CAKTO_EMAIL e CAKTO_PASSWORD no .env',
+    hotmart: '⚠️ Requer HOTMART_EMAIL e HOTMART_PASSWORD no .env',
+    amazon:  '⚠️ Requer KDP_EMAIL e KDP_PASSWORD no .env. Dados bancários devem ser preenchidos por você na Amazon.',
   };
-  document.getElementById('publishNote').textContent = notes[platform] || '';
+  document.getElementById('publishNote').textContent = notes[document.getElementById('publishPlatform').value] || '';
 }
 document.getElementById('publishPlatform')?.addEventListener('change', updatePublishNote);
 
@@ -558,8 +826,7 @@ async function confirmPublish() {
   showToast(`🚀 Publicando no ${platform}...`, 'success');
   try {
     await authFetch(`/api/publish/${platform}`, {
-      method: 'POST',
-      body: JSON.stringify({ ebookId: publishingEbookId }),
+      method: 'POST', body: JSON.stringify({ ebookId: publishingEbookId }),
     });
     showToast(`Publicação no ${platform} iniciada! Verifique os logs.`, 'success');
     setTimeout(() => { loadEbooks(); loadStats(); }, 8000);
@@ -574,26 +841,36 @@ async function resetAllAI() {
   } catch (e) { showToast('Erro: ' + e.message, 'error'); }
 }
 
-function logout() {
-  localStorage.removeItem('genia_token');
-  localStorage.removeItem('genia_user');
-  window.location.href = '/login';
+// ─── Navigation ───────────────────────────────────────────────────────────────
+const SECTIONS = {
+  agent:  { el: 'sectionAgent',  title: 'Agente 24/7' },
+  ebooks: { el: 'sectionEbooks', title: 'E-books Gerados' },
+  topics: { el: 'sectionTopics', title: 'Banco de Tópicos' },
+  ai:     { el: 'sectionAI',     title: 'Providers de IA' },
+};
+function showSection(name, btn) {
+  Object.values(SECTIONS).forEach(s => document.getElementById(s.el).style.display = 'none');
+  document.getElementById(SECTIONS[name].el).style.display = 'block';
+  document.getElementById('pageTitle').textContent = SECTIONS[name].title;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  btn?.classList.add('active');
+
+  // Topbar buttons
+  const topbarActions = document.querySelector('.topbar-actions');
+  if (name === 'agent') {
+    topbarActions.style.display = 'flex';
+    document.getElementById('btnPauseResume').style.display = '';
+  } else {
+    document.getElementById('btnPauseResume').style.display = 'none';
+  }
+
+  if (name === 'ebooks') loadEbooks();
+  if (name === 'topics') loadTopics();
+  if (name === 'ai')     loadAIStatus();
 }
 
-// ─── Navigation ──────────────────────────────────────────────────────────────
-function showSection(name) {
-  const sections = { ebooks: 'sectionEbooks', generate: 'sectionGenerate',
-                     topics: 'sectionTopics', ai: 'sectionAI' };
-  const titles   = { ebooks: 'Meus E-books', generate: 'Gerar E-book',
-                     topics: 'Tópicos', ai: 'Status da IA' };
-  Object.values(sections).forEach(id => document.getElementById(id).style.display = 'none');
-  document.getElementById(sections[name]).style.display = 'block';
-  document.getElementById('pageTitle').textContent = titles[name];
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  event?.currentTarget?.classList.add('active');
-  if (name === 'topics') loadTopics();
-  if (name === 'ai') loadAIStatus();
-}
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function logout() { localStorage.removeItem('genia_token'); window.location.href = '/login'; }
 
 // ─── Toast ───────────────────────────────────────────────────────────────────
 function showToast(msg, type = 'success') {
@@ -606,7 +883,10 @@ function showToast(msg, type = 'success') {
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 init();
-setInterval(loadAll, 30000); // Auto-refresh a cada 30s
+
+// Auto-refresh: agent status every 8s, full data every 30s
+setInterval(loadAgentStatus, 8000);
+setInterval(() => { loadStats(); }, 30000);
 </script>
 </body>
 </html>
