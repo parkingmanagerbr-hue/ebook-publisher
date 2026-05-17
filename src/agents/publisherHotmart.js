@@ -76,37 +76,45 @@ async function publishToHotmart(ebook) {
   });
 
   try {
-    // ── Injetar cookies da sessão salva ──────────────────────────────────────
-    logger.info('🍪 Injetando sessão salva...');
-    if (session.cookies?.length) {
-      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
-      for (const cookie of session.cookies) {
-        try { await page.setCookie(cookie); } catch {}
-      }
+    // ── Extrair Bearer token (access_token CAS embutido no JWT) ──────────────
+    const rawToken = session.localStorage?.['token'];
+    let bearerToken = rawToken;
+    if (rawToken) {
+      try {
+        const payload = JSON.parse(Buffer.from(rawToken.split('.')[1], 'base64url').toString());
+        bearerToken = payload.access_token || rawToken;
+      } catch {}
     }
 
-    // ── Injetar localStorage e sessionStorage se disponíveis ────────────────
-    if (session.localStorage || session.sessionStorage) {
-      await page.evaluateOnNewDocument((ls, ss) => {
-        if (ls) Object.entries(ls).forEach(([k, v]) => localStorage.setItem(k, v));
-        if (ss) Object.entries(ss).forEach(([k, v]) => sessionStorage.setItem(k, v));
-      }, session.localStorage || {}, session.sessionStorage || {});
+    // ── Injetar localStorage antes da navegação ───────────────────────────────
+    if (session.localStorage) {
+      await page.evaluateOnNewDocument(ls => {
+        Object.entries(ls).forEach(([k, v]) => { try { localStorage.setItem(k, v); } catch {} });
+      }, session.localStorage);
+    }
+
+    // ── Injetar cookies + Authorization header ────────────────────────────────
+    logger.info('🍪 Injetando sessão Hotmart...');
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    for (const cookie of (session.cookies || [])) {
+      try { await page.setCookie(cookie); } catch {}
+    }
+    if (bearerToken) {
+      await page.setExtraHTTPHeaders({ 'Authorization': `Bearer ${bearerToken}` });
     }
 
     // ── Navegar para painel ──────────────────────────────────────────────────
     await page.goto(`${BASE_URL}/products`, { waitUntil: 'networkidle2', timeout: 30000 });
     await sleep(3000);
 
-    // Verificar login
-    const loggedIn = await isLoggedIn(page);
-    if (!loggedIn) {
-      const url = page.url();
-      logger.warn(`⚠️  Sessão Hotmart expirada (URL: ${url}). Execute: node scripts/setup-hotmart.js`);
+    const curUrl = page.url();
+    if (curUrl.includes('/login') || curUrl.includes('sso.hotmart')) {
+      logger.warn(`⚠️  Sessão Hotmart expirada. Execute: node scripts/setup-sessions.js hotmart`);
       await browser.close();
-      return { success: false, error: 'Sessão expirada. Execute setup-hotmart.js para renovar.', platform: 'hotmart' };
+      return { success: false, error: 'Sessão expirada. Execute setup-sessions.js hotmart', platform: 'hotmart' };
     }
 
-    logger.info('✅ Sessão válida — iniciando criação de produto');
+    logger.info('✅ Sessão Hotmart válida — iniciando criação de produto');
 
     // ── Navegar para novo produto ────────────────────────────────────────────
     await page.goto(`${BASE_URL}/products/new`, { waitUntil: 'networkidle2', timeout: 30000 });

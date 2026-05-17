@@ -105,13 +105,20 @@ function httpGet(url, headers) {
 async function checkSessionViaApi(platform, session) {
   const { apiCheck, localStorageTokenKey } = PLATFORMS[platform];
   if (!apiCheck) return null;
-  const token = session.localStorage?.[localStorageTokenKey];
-  if (!token) return false;
+  const tokenRaw = session.localStorage?.[localStorageTokenKey];
+  if (!tokenRaw) return false;
+  // Usar access_token embutido no JWT payload se disponível (Hotmart CAS)
+  const payload = decodeJwt(tokenRaw);
+  const bearer  = payload?.access_token || tokenRaw;
   const { status } = await httpGet(apiCheck, {
-    'Authorization': `Bearer ${token}`,
+    'Authorization': `Bearer ${bearer}`,
     'User-Agent': 'Mozilla/5.0',
+    'Accept': 'application/json',
   });
-  return status === 200 || status === 204;
+  // 401/403 → sessão inválida; 404/5xx → endpoint mudou, não é erro de sessão
+  if (status === 401 || status === 403) return false;
+  if (status === 0 || status >= 500) return null; // inconclusivo
+  return true;
 }
 
 // ─── Renovação via Puppeteer ──────────────────────────────────────────────────
