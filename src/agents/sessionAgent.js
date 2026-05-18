@@ -105,8 +105,23 @@ function httpGet(url, headers) {
 async function checkSessionViaApi(platform, session) {
   const { apiCheck, localStorageTokenKey } = PLATFORMS[platform];
   if (!apiCheck) return null;
-  const tokenRaw = session.localStorage?.[localStorageTokenKey];
-  if (!tokenRaw) return false;
+
+  // Hotmart usa OIDC token com chave dinâmica (oidc.user:https://sso.hotmart.com/oidc:...)
+  const ls = session.localStorage || {};
+  const oidcKey = Object.keys(ls).find(k => k.startsWith('oidc.user:'));
+  if (oidcKey) {
+    try {
+      const oidcData = JSON.parse(ls[oidcKey]);
+      // Verificar expires_at antes de fazer chamada HTTP
+      if (oidcData.expires_at && oidcData.expires_at * 1000 > Date.now()) {
+        return true; // Token OIDC ainda válido — sessão ok
+      }
+    } catch {}
+  }
+
+  // Fallback: chave padrão no localStorage
+  const tokenRaw = ls[localStorageTokenKey];
+  if (!tokenRaw) return null; // inconclusivo, não bloquear publisher
   // Usar access_token embutido no JWT payload se disponível (Hotmart CAS)
   const payload = decodeJwt(tokenRaw);
   const bearer  = payload?.access_token || tokenRaw;
