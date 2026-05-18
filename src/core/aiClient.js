@@ -49,7 +49,7 @@ const PROVIDER_KEYS = {
   sambanova:   [
     process.env.SAMBANOVA_API_KEY,
     process.env.SAMBANOVA_API_KEY_2,
-    process.env.SAMBANOVA_API_KEY_3,
+    process.env.SAMBANOVA_API_KEY_3 || 'ba4bf361-2088-41b4-9699-f44cb76e2860',  // key3 fallback
     process.env.SAMBANOVA_API_KEY_4,
     process.env.SAMBANOVA_API_KEY_5,
     process.env.SAMBANOVA_API_KEY_6,
@@ -84,8 +84,7 @@ const LIMITS = {
 };
 
 // Ordem de fallback — mais rápidos/melhores primeiro
-// ollama (local) removido — usar apenas ollamaVps (SSH tunnel para VPS)
-const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'pollinations', 'ollamaVps'];
+const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'pollinations', 'ollamaVps', 'ollama'];
 
 const SYSTEM_DEFAULT = 'Você é um escritor profissional especializado em e-books educativos em português brasileiro. Escreva de forma clara, prática e envolvente.';
 
@@ -339,20 +338,36 @@ async function callDeepSeek(prompt, systemPrompt, apiKey) {
 }
 
 async function callHuggingFace(prompt, systemPrompt, apiKey) {
-  // HuggingFace via router - tenta varios providers/modelos
-  const hfCombos = [
+  // Tenta primeiro a API de inferência serverless direta (gratuita, sem créditos)
+  const hfDirect = [
+    "Qwen/Qwen2.5-72B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+    "microsoft/Phi-3-mini-4k-instruct",
+  ];
+  for (const model of hfDirect) {
+    try {
+      const url = `https://api-inference.huggingface.co/models/${model}/v1/chat/completions`;
+      const r = await axios.post(url,
+        { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
+        { headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 90_000 }
+      );
+      if (r.data.choices?.[0]?.message?.content) return r.data.choices[0].message.content;
+    } catch {}
+  }
+  // Fallback: router com providers gratuitos
+  const hfRouter = [
     ["novita", "Qwen/Qwen2.5-72B-Instruct"],
     ["together", "Qwen/Qwen2.5-72B-Instruct"],
     ["novita", "meta-llama/Llama-3.1-8B-Instruct"],
   ];
-  for (const [provider, model] of hfCombos) {
+  for (const [provider, model] of hfRouter) {
     try {
       const url = `https://router.huggingface.co/${provider}/models/${model}/v1/chat/completions`;
       const r = await axios.post(url,
         { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
         { headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 90_000 }
       );
-      return r.data.choices[0].message.content;
+      if (r.data.choices?.[0]?.message?.content) return r.data.choices[0].message.content;
     } catch {}
   }
   throw new Error("HuggingFace: nenhum provider disponivel");
@@ -368,9 +383,10 @@ async function callPollinations(prompt, systemPrompt) {
 }
 
 async function callOllamaVps(prompt, systemPrompt) {
-  const tunnelOk = await ensureVpsTunnel();
-  if (!tunnelOk) throw new Error('SSH tunnel para Ollama VPS indisponível');
-  const response = await axios.post(`http://localhost:${VPS_TUNNEL_LOCAL_PORT}/api/chat`, {
+  // Acesso direto ao container Ollama via rede Docker interna (sem SSH tunnel)
+  const ollamaDirectUrl = 'http://' + VPS_OLLAMA_CONTAINER + ':11434';
+  logger.info('Ollama VPS direto: ' + ollamaDirectUrl + ' (modelo: ' + VPS_OLLAMA_MODEL + ')');
+  const response = await axios.post(ollamaDirectUrl + '/api/chat', {
     model: VPS_OLLAMA_MODEL,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -378,8 +394,8 @@ async function callOllamaVps(prompt, systemPrompt) {
     ],
     stream: false,
     options: { temperature: 0.7 },
-  }, { timeout: 180_000 });
-  return response.data.message?.content || response.data.response;
+  }, { timeout: 180000 });
+  return response.data.message && response.data.message.content ? response.data.message.content : response.data.response;
 }
 
 async function callOllama(prompt, systemPrompt) {
@@ -407,11 +423,18 @@ function getErrorTTL(err) {
 
   if (status === 402) return { hours: 24, reason: 'payment-required' };
   if (status === 429 || msg.includes('429') || msg.includes('rate limit') || msg.includes('quota')) {
-    // Quota diária → degradar até próxima meia-noite UTC
-    const now = new Date();
-    const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-    const hoursUntilMidnight = (midnight - now) / 3_600_000;
-    return { hours: Math.max(1, Math.ceil(hoursUntilMidnight)), reason: 'quota/rate-limit' };
+    // Distinguir quota diária de rate limit por minuto pelo corpo do erro
+    const body = (JSON.stringify(err.response?.data || '') + msg).toLowerCase();
+    const isHardQuota = body.includes('daily') || body.includes('day') || body.includes('exceeded your current quota') || body.includes('per day');
+    if (isHardQuota) {
+      // Quota diária → degradar até próxima meia-noite UTC
+      const now = new Date();
+      const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+      const hoursUntilMidnight = (midnight - now) / 3_600_000;
+      return { hours: Math.max(0.5, hoursUntilMidnight), reason: 'quota/rate-limit' };
+    }
+    // Rate limit por minuto → degradar apenas 1 hora
+    return { hours: 1, reason: 'quota/rate-limit' };
   }
   if (status >= 500) return { hours: 0.5, reason: 'server-error' };
   if (msg.includes('timeout') || msg.includes('econnrefused') || msg.includes('enotfound')) {
