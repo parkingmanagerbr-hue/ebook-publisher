@@ -84,7 +84,8 @@ const LIMITS = {
 };
 
 // Ordem de fallback — mais rápidos/melhores primeiro
-const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'pollinations', 'ollamaVps', 'ollama'];
+// ollama (local) removido — usar apenas ollamaVps (SSH tunnel para VPS)
+const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'pollinations', 'ollamaVps'];
 
 const SYSTEM_DEFAULT = 'Você é um escritor profissional especializado em e-books educativos em português brasileiro. Escreva de forma clara, prática e envolvente.';
 
