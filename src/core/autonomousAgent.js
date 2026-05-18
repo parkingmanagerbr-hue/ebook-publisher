@@ -216,10 +216,20 @@ async function loop() {
       setState({ lastRunAt: new Date().toISOString(), nextRunAt: null });
       await runOneCycle();
     } catch (err) {
-      logger.error(`❌ Ciclo falhou: ${err.message}`);
+      logger.error('Ciclo falhou: ' + err.message);
       setState({ lastError: err.message, currentStep: 'error' });
-      // Backoff de 15 minutos em caso de erro
-      await sleep(15 * 60 * 1000);
+      // Backoff adaptativo por tipo de erro
+      if (err.message && err.message.startsWith('PAID_PROVIDER_RECOVERED:')) {
+        // Provider pago voltou -- reiniciar imediatamente
+        logger.info('Provider pago recuperado -- reiniciando em 5s...');
+        await sleep(5000);
+      } else if (getIntervalMs() === 0) {
+        // Modo continuo: backoff curto (30s)
+        await sleep(30000);
+      } else {
+        // Modo intervalo: backoff 5 min
+        await sleep(5 * 60 * 1000);
+      }
     }
 
     // Pausa mínima entre ciclos (cooldown de 5s para logs drenarem)
