@@ -556,10 +556,24 @@ async function generate(prompt, systemPrompt = '', options = {}) {
   try { await axios.get(_ollamaFallbackUrl + '/api/tags', { timeout: 5000 }); _ollamaAvail = true; } catch {}
 
   if (_ollamaAvail) {
-    logger.info('Ollama VPS disponivel -- ativando fallback infinito (modelo: ' + VPS_OLLAMA_MODEL + ')');
+    logger.info('Ollama VPS disponivel -- ativando fallback (modelo: ' + VPS_OLLAMA_MODEL + ')');
     let _att = 0;
     while (true) {
       _att++;
+      // Antes de cada tentativa Ollama: verificar se algum provider pago recuperou
+      if (_att > 1) {
+        const _freshState = loadState();
+        const _recovered = PAID_PROVIDERS.find(p => {
+          if (isDegraded(_freshState, p)) return false;
+          const _keys = PROVIDER_KEYS[p];
+          if (!_keys || _keys.length === 0) return false;
+          return _keys.some(k => !isDegraded(_freshState, p + ':' + k.slice(-8)));
+        });
+        if (_recovered) {
+          logger.info('Provider pago recuperado: ' + _recovered + ' -- reiniciando ciclo com providers pagos');
+          throw new Error('PAID_PROVIDER_RECOVERED:' + _recovered);
+        }
+      }
       try {
         logger.info('Ollama VPS gerando (tentativa ' + _att + ')...');
         const _ollamaResult = await callOllamaVps(prompt, sys);
@@ -568,10 +582,11 @@ async function generate(prompt, systemPrompt = '', options = {}) {
       } catch (_ollamaErr) {
         const _isConn = (_ollamaErr.message||'').includes('ECONNREFUSED') || (_ollamaErr.message||'').includes('ENOTFOUND');
         const _isTout = _ollamaErr.code === 'ECONNABORTED' || (_ollamaErr.message||'').includes('timeout');
-        logger.warn('Ollama VPS tentativa ' + _att + ' falhou: ' + (_ollamaErr.message||'').slice(0, 80));
-        if (_isConn) break; // Ollama ficou offline -- sair do loop
+        logger.warn('Ollama VPS tentativa ' + _att + ': ' + (_ollamaErr.message||'').slice(0, 80));
+        if (_isConn) break; // Ollama offline
+        if (_ollamaErr.message && _ollamaErr.message.startsWith('PAID_PROVIDER_RECOVERED:')) throw _ollamaErr;
         const _delay = _isTout ? 60000 : 30000;
-        logger.info('Re-tentando Ollama VPS em ' + (_delay/1000) + 's...');
+        logger.info('Aguardando ' + (_delay/1000) + 's antes do proximo Ollama...');
         await new Promise(r => setTimeout(r, _delay));
       }
     }
