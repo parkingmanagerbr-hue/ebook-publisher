@@ -41,7 +41,7 @@ let _running   = false;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function getIntervalMs() {
   const mins = parseInt(process.env.GENERATE_INTERVAL_MINUTES ?? '0');
-  if (mins === 0) return 45 * 60 * 1000; // modo proteção quota: mínimo 45min
+  if (mins === 0) return 0; // modo continuo: sem pausa entre ciclos
   return Math.max(5, mins) * 60 * 1000; // mínimo 5 minutos
 }
 

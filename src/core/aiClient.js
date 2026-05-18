@@ -84,7 +84,9 @@ const LIMITS = {
 };
 
 // Ordem de fallback — mais rápidos/melhores primeiro
-const PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'pollinations', 'ollamaVps', 'ollama'];
+// Providers pagos (com quota) -- fallback infinito Ollama tratado separadamente
+const PAID_PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'pollinations'];
+const PROVIDERS = PAID_PROVIDERS;
 
 const SYSTEM_DEFAULT = 'Você é um escritor profissional especializado em e-books educativos em português brasileiro. Escreva de forma clara, prática e envolvente.';
 
@@ -547,10 +549,55 @@ async function generate(prompt, systemPrompt = '', options = {}) {
     }
   }
 
-  // Todos os providers falharam
-  const summary = errors.map(e => `${e.provider}(${e.reason})`).join(', ');
-  logger.error(`🔴 Todos os providers falharam: ${summary}`);
-  throw new Error(`Todos os providers de AI falharam. Providers tentados: ${triedProviders.join(', ')}. Erros: ${summary}`);
+  // Fallback infinito: Ollama VPS -- sem quota, sem limite, nunca desiste.
+  // Ativado automaticamente quando todos os providers pagos estao esgotados.
+  const _ollamaFallbackUrl = 'http://' + VPS_OLLAMA_CONTAINER + ':11434';
+  let _ollamaAvail = false;
+  try { await axios.get(_ollamaFallbackUrl + '/api/tags', { timeout: 5000 }); _ollamaAvail = true; } catch {}
+
+  if (_ollamaAvail) {
+    logger.info('Ollama VPS disponivel -- ativando fallback infinito (modelo: ' + VPS_OLLAMA_MODEL + ')');
+    let _att = 0;
+    while (true) {
+      _att++;
+      try {
+        logger.info('Ollama VPS gerando (tentativa ' + _att + ')...');
+        const _ollamaResult = await callOllamaVps(prompt, sys);
+        logger.info('Ollama VPS gerou ' + _ollamaResult.length + ' chars em ' + _att + ' tentativa(s)');
+        return { text: _ollamaResult, provider: 'ollamaVps', elapsed: 0 };
+      } catch (_ollamaErr) {
+        const _isConn = (_ollamaErr.message||'').includes('ECONNREFUSED') || (_ollamaErr.message||'').includes('ENOTFOUND');
+        const _isTout = _ollamaErr.code === 'ECONNABORTED' || (_ollamaErr.message||'').includes('timeout');
+        logger.warn('Ollama VPS tentativa ' + _att + ' falhou: ' + (_ollamaErr.message||'').slice(0, 80));
+        if (_isConn) break; // Ollama ficou offline -- sair do loop
+        const _delay = _isTout ? 60000 : 30000;
+        logger.info('Re-tentando Ollama VPS em ' + (_delay/1000) + 's...');
+        await new Promise(r => setTimeout(r, _delay));
+      }
+    }
+  }
+
+  // Ollama local como ultimo recurso
+  const _localOllamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
+  let _localAvail = false;
+  try { await axios.get(_localOllamaUrl + '/api/tags', { timeout: 3000 }); _localAvail = true; } catch {}
+  if (_localAvail) {
+    logger.info('Ollama local disponivel -- fallback infinito');
+    while (true) {
+      try {
+        const _localResult = await callOllama(prompt, sys);
+        return { text: _localResult, provider: 'ollama', elapsed: 0 };
+      } catch (_localErr) {
+        if ((_localErr.message||'').includes('ECONNREFUSED')) break;
+        await new Promise(r => setTimeout(r, 30000));
+      }
+    }
+  }
+
+  // Absolutamente tudo falhou (nem Ollama disponivel)
+  const summary = errors.map(e => e.provider + '(' + e.reason + ')').join(', ');
+  logger.error('Todos os providers falharam sem Ollama disponivel: ' + summary);
+  throw new Error('Todos os providers de AI falharam. Providers tentados: ' + triedProviders.join(', ') + '. Erros: ' + summary);
 }
 
 // ═══════════════════════════════════════════════════
