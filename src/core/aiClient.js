@@ -49,7 +49,7 @@ const PROVIDER_KEYS = {
   sambanova:   [
     process.env.SAMBANOVA_API_KEY,
     process.env.SAMBANOVA_API_KEY_2,
-    process.env.SAMBANOVA_API_KEY_3 || 'ba4bf361-2088-41b4-9699-f44cb76e2860',  // key3 fallback
+    process.env.SAMBANOVA_API_KEY_3,
     process.env.SAMBANOVA_API_KEY_4,
     process.env.SAMBANOVA_API_KEY_5,
     process.env.SAMBANOVA_API_KEY_6,
@@ -394,7 +394,7 @@ async function callOllamaVps(prompt, systemPrompt) {
     ],
     stream: false,
     options: { temperature: 0.7 },
-  }, { timeout: 180000 });
+  }, { timeout: 360000 });
   return response.data.message && response.data.message.content ? response.data.message.content : response.data.response;
 }
 
