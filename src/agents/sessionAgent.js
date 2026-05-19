@@ -142,7 +142,7 @@ async function tryCredentialLogin(page, platform, browser) {
     hotmart: {
       email:    process.env.HOTMART_EMAIL,
       password: process.env.HOTMART_PASSWORD,
-      emailSel: 'input[type="email"], input[name="email"], input[placeholder*="e-mail" i]',
+      emailSel: 'input[name="username"], input[type="email"], input[name="email"], input[placeholder*="e-mail" i]',
       passSel:  'input[type="password"]',
       btnSel:   'button[type=submit]',
       waitFor:  url => !url.includes('/login') && !url.includes('sso.hotmart'),
@@ -444,11 +444,18 @@ async function ensureSession(platform) {
   if (needsRenewal) {
     const ok = await renewViaPuppeteer(platform);
     if (!ok) {
-      logger.error(`❌ [${platform}] Renovação falhou — execute: node scripts/setup-sessions.js ${platform}`);
-      degraded[platform] = true;
-      return false;
+      // Se JWT ainda tem tempo, usar sessao existente em vez de bloquear
+      const minsLeft = token ? Math.round((jwtExpiresIn(token) || 0) / 60000) : 0;
+      if (minsLeft > 30) {
+        logger.warn('[' + platform + '] Renovacao falhou mas JWT valido por ' + minsLeft + 'min — publicando com sessao existente');
+      } else {
+        logger.error('[' + platform + '] Renovacao falhou — execute: node scripts/setup-sessions.js ' + platform);
+        degraded[platform] = true;
+        return false;
+      }
+    } else {
+      degraded[platform] = false;
     }
-    degraded[platform] = false;
   }
 
   return true;
