@@ -393,15 +393,22 @@ async function checkPlatform(platform) {
     return;
   }
 
-  // ── 3. Tentar renovação ────────────────────────────────────────────────────
+    // -- 3. Tentar renovacao
   const ok = await renewViaPuppeteer(platform);
   if (ok) {
     degraded[platform] = false;
-    logger.info(`✅ [${platform}] Publisher ativo`);
+    logger.info('[' + platform + '] Publisher ativo');
   } else {
-    degraded[platform] = true;
-    logger.error(`❌ [${platform}] Renovação falhou — publisher pausado até próxima tentativa`);
-    logger.error(`   Execute: node scripts/setup-sessions.js  para reconfigurar`);
+    // Se JWT ainda tem tempo, nao bloquear publicacao
+    const tok2 = session.localStorage && session.localStorage[PLATFORMS[platform].localStorageTokenKey];
+    const minsLeft2 = tok2 ? Math.round((jwtExpiresIn(tok2) || 0) / 60000) : 0;
+    if (minsLeft2 > 30) {
+      logger.warn('[' + platform + '] Renovacao falhou mas JWT valido por ' + minsLeft2 + 'min — continuando');
+    } else {
+      degraded[platform] = true;
+      logger.error('[' + platform + '] Renovacao falhou — publisher pausado ate proxima tentativa');
+      logger.error('   Execute: node scripts/setup-sessions.js para reconfigurar');
+    }
   }
 }
 
