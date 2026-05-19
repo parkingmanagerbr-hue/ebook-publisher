@@ -1,322 +1,233 @@
 /**
- * PublisherHotmart — Publica e-book na Hotmart via Puppeteer com sessão salva.
- *
- * Fluxo:
- *   1. Carrega sessão salva de data/sessions/hotmart.json
- *   2. Injeta cookies no browser → pula login
- *   3. Navega para criação de produto → preenche → faz upload → publica
- *
- * Setup inicial (one-time):
- *   node scripts/setup-hotmart.js
+ * publisherHotmart.js — GENIA E-book Publisher
  */
 const puppeteer = require('puppeteer');
-const path = require('path');
+const https = require('https');
 const fs = require('fs');
-const { createLogger } = require('../core/logger');
-const logger = createLogger('publisherHotmart');
-
-const BASE_URL     = 'https://app-vlc.hotmart.com';
-const SESSION_FILE = path.join(__dirname, '../../data/sessions/hotmart.json');
-
-async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ─── Carregar sessão salva ────────────────────────────────────────────────────
-function loadSession() {
-  try {
-    if (!fs.existsSync(SESSION_FILE)) return null;
-    const data = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
-    // Verificar se a sessão não expirou (> 7 dias = considerar inválida)
-    if (data.savedAt && Date.now() - data.savedAt > 7 * 24 * 60 * 60 * 1000) {
-      logger.warn('⚠️  Sessão Hotmart com mais de 7 dias — pode estar expirada');
-    }
-    return data;
-  } catch (e) {
-    logger.warn(`Erro ao carregar sessão Hotmart: ${e.message}`);
-    return null;
+const path = require('path');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const SESSION_FILE = process.env.HOTMART_SESSION_FILE || '/app/data/sessions/hotmart.json';
+const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR || '/app/data/landing_screenshots';
+const DEFAULT_PRICE = process.env.HOTMART_PRICE || '4,99';
+let log;
+try { const L = require('../core/Logger'); log = L.createLogger ? L.createLogger('hotmart') : console; } catch(e) { log = { info: (...a) => console.log('[hotmart]', ...a), warn: (...a) => console.warn('[hotmart]', ...a), error: (...a) => console.error('[hotmart]', ...a) }; }
+const TECH_KW = ['web3','blockchain','programar','chatbot','cloud','saas','tecnologia','inteligencia artificial',' ia ','python','javascript','codigo','algoritmo','digital','nft','criptomoeda','linux','docker'];
+const HEALTH_KW = ['saude','sono','depressao','panico','menopausa','hipertrofia','pressao','alcalina','alimentac','dieta','emagrecimento','fitness','exercicio','musculacao','mental','ansiedade','yoga','meditacao','hormonio','diabetes','colesterol'];
+const FINANCE_KW = ['investimento','financ','dinheiro','consorcio','franquia','airbnb','freelancer','renda','patrimonio','aposentadoria','acoes','fundo','bitcoin','trading','bolsa','credito','emprestimo'];
+const BUSINESS_KW = ['nomade','negocio','empreend','carreira','marketing','vendas','produtividade','lideranca','gestao','startup','cliente','lucro','estrategia','branding','copywriting','persona'];
+function norm(s) { return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+function getCategoryPT(title, topic) {
+  const t = norm(title + ' ' + (topic||''));
+  if (TECH_KW.some(k => t.includes(k)))     return 'Tecnologia e Programação';
+  if (HEALTH_KW.some(k => t.includes(k)))   return 'Saúde e Esportes';
+  if (FINANCE_KW.some(k => t.includes(k)))  return 'Negócios e Carreira';
+  if (BUSINESS_KW.some(k => t.includes(k))) return 'Negócios e Carreira';
+  return 'Desenvolvimento Pessoal';
+}
+function getCASTicket(tgt, serviceUrl) {
+  return new Promise((resolve, reject) => {
+    const body = 'service=' + encodeURIComponent(serviceUrl);
+    const opts = { hostname: 'sso.hotmart.com', path: '/v1/tickets/' + tgt, method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'text/plain', 'Content-Length': Buffer.byteLength(body) } };
+    const req = https.request(opts, res => { let d=''; res.on('data',c=>d+=c); res.on('end',()=>resolve({status:res.statusCode,body:d.trim()})); });
+    req.on('error',reject); req.write(body); req.end();
+  });
+}
+async function refreshJWT(browser, session) {
+  const hmSso = session.cookies.find(c => c.name === 'hmSsoExp');
+  if (!hmSso) throw new Error('hmSsoExp cookie not found');
+  const tgt = hmSso.value.split('|').slice(1).join('|');
+  const oauth2Service = 'https://sso.hotmart.com/oauth2.0/callbackAuthorize?client_id=8cef361b-94f8-4679-bd92-9d1cb496452d&scope=openid+profile+email&redirect_uri=https%3A%2F%2Fapp.hotmart.com%2Flogout&response_type=code';
+  const st = await getCASTicket(tgt, oauth2Service);
+  log.info('CAS ST:', st.status);
+  const lp = await browser.newPage();
+  for (const c of session.cookies) {
+    try { const x={...c}; delete x.sameSite; delete x.sameParty; if(x.expires===-1)delete x.expires; if(!x.url)x.url=x.domain&&x.domain.startsWith('.')?'https://'+x.domain.slice(1):'https://'+(x.domain||'hotmart.com'); await lp.setCookie(x); } catch(e) {}
+  }
+  try { await lp.goto(oauth2Service+'&ticket='+st.body,{waitUntil:'networkidle2',timeout:30000}); } catch(e) {}
+  await sleep(6000);
+  const tok = await lp.evaluate(()=>localStorage.getItem('token')).catch(()=>null);
+  log.info('JWT:', tok ? 'OK' : 'MISSING');
+  await lp.close();
+  return tok;
+}
+async function setupPage(page, session, jwt) {
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+  await page.evaluateOnNewDocument(()=>{Object.defineProperty(navigator,'webdriver',{get:()=>undefined});});
+  const ls = {...(session.localStorage||{})}; if(jwt) ls.token=jwt;
+  await page.evaluateOnNewDocument((ls)=>{Object.entries(ls).forEach(([k,v])=>{try{localStorage.setItem(k,v);}catch{}});}, ls);
+  for (const c of session.cookies) {
+    try { const x={...c}; delete x.sameSite; delete x.sameParty; if(x.expires===-1)delete x.expires; if(!x.url)x.url=x.domain&&x.domain.startsWith('.')?'https://'+x.domain.slice(1):'https://'+(x.domain||'hotmart.com'); await page.setCookie(x); } catch(e) {}
   }
 }
-
-// ─── Verificar se está logado na página atual ─────────────────────────────────
-async function isLoggedIn(page) {
-  try {
-    const url = page.url();
-    if (url.includes('/login') || url.includes('/auth')) return false;
-    // Procura por elementos de usuário logado
-    const userEl = await page.$('[data-test="user-avatar"], .user-avatar, [aria-label*="conta"], .hotmart-avatar');
-    return !!userEl;
-  } catch { return false; }
+async function waitForDDP(page, minLen, maxSec) {
+  for (let i=0; i<maxSec; i++) {
+    await sleep(1000);
+    const len = await page.evaluate(()=>document.body&&document.body.innerText?document.body.innerText.length:0).catch(()=>0);
+    if(i%5===4) log.info('DDP t='+(i+1)+'s len='+len);
+    if(len>=minLen){log.info('DDP ready t='+(i+1)+'s'); return len;}
+  }
+  return 0;
 }
-
-// ─── Publicar produto na Hotmart ──────────────────────────────────────────────
+async function createProduct(page, session, ebook) {
+  const { title, description, coverPath, pdfPath, topic } = ebook;
+  const category = getCategoryPT(title, topic);
+  log.info('Creating: '+JSON.stringify(title)+' => '+category);
+  await page.goto('https://app.hotmart.com/products/add/4/info',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
+  await waitForDDP(page, 500, 20);
+  let nameInput = null;
+  for(let i=0;i<20;i++){
+    await sleep(1000);
+    nameInput = await page.$('input#name,input[name="name"],input[placeholder*="nome"],input[placeholder*="produto"]').catch(()=>null);
+    if(nameInput) break;
+  }
+  if(!nameInput) nameInput = await page.$('input[type="text"]').catch(()=>null);
+  if(!nameInput) throw new Error('Name input not found');
+  await nameInput.click({clickCount:3});
+  await nameInput.type(title,{delay:30});
+  await sleep(500);
+  const descInput = await page.$('textarea#description,textarea[name="description"],textarea[placeholder*="descri"]').catch(()=>null);
+  if(descInput){ await descInput.click({clickCount:3}); await descInput.type(description||title,{delay:10}); await sleep(300); }
+  if(coverPath && fs.existsSync(coverPath)){
+    const fi = await page.$('input[type="file"]').catch(()=>null);
+    if(fi){ await fi.uploadFile(coverPath); await sleep(3000); }
+  }
+  const catClicked = await page.evaluate((cat)=>{
+    const all = Array.from(document.querySelectorAll('button,[class*="categor"],[class*="card"]'));
+    const b = all.find(b=>b.textContent.trim()===cat||b.textContent.includes(cat.split(' ')[0]));
+    if(b){b.click();return true;} return false;
+  }, category);
+  log.info('Category clicked: '+catClicked);
+  await sleep(800);
+  await page.evaluate(()=>{const s=document.querySelectorAll('[class*="subcategor"] button,[class*="subcategor"]');if(s.length>0)s[0].click();});
+  await sleep(500);
+  let capturedNumericId=null, capturedUcode=null;
+  const client = await page.target().createCDPSession();
+  await client.send('Network.enable');
+  client.on('Network.responseReceived', async(evt)=>{
+    const u=evt.response.url;
+    if((u.includes('vulcano')||u.includes('hotmart'))&&evt.response.status===200&&(u.includes('/product'))){
+      try{const rb=await client.send('Network.getResponseBody',{requestId:evt.requestId}).catch(()=>null);
+        if(rb){const d=JSON.parse(rb.body);if(d.id)capturedNumericId=String(d.id);if(d.ucode)capturedUcode=d.ucode;}
+      }catch(e){}
+    }
+  });
+  const contClicked = await page.evaluate(()=>{
+    const b=Array.from(document.querySelectorAll('button')).find(b=>{const t=b.textContent.trim().toLowerCase();return t==='continuar'||t==='next'||t==='salvar e continuar';});
+    if(b){b.click();return b.textContent.trim();} return false;
+  });
+  log.info('Continuar: '+contClicked);
+  await sleep(4000);
+  await waitForDDP(page, 300, 10);
+  await page.evaluate((n,v)=>{const s=document.querySelector('hot-select[name="'+n+'"]')||document.querySelector('[name="'+n+'"]');if(s){s.value=v;s.dispatchEvent(new Event('change',{bubbles:true}));}},'currency','BRL');
+  await sleep(300);
+  await page.evaluate((n,v)=>{const s=document.querySelector('hot-select[name="'+n+'"]')||document.querySelector('[name="'+n+'"]');if(s){s.value=v;s.dispatchEvent(new Event('change',{bubbles:true}));}},'paymentMode','PAY_IN_FULL');
+  await sleep(300);
+  const priceInput = await page.$('input[name="price"],input[placeholder*="valor"],input[type="number"]').catch(()=>null);
+  if(priceInput){await priceInput.click({clickCount:3});await priceInput.type(DEFAULT_PRICE,{delay:50});}
+  else{await page.keyboard.press('Tab');await sleep(200);await page.keyboard.type(DEFAULT_PRICE,{delay:50});}
+  await sleep(300);
+  const saveClicked = await page.evaluate(()=>{
+    const b=Array.from(document.querySelectorAll('button[type="submit"],button')).find(b=>{const t=b.textContent.trim().toLowerCase();return t==='salvar'||t==='criar produto'||t==='criar'||t==='finalizar';});
+    if(b){b.click();return b.textContent.trim();} return false;
+  });
+  log.info('Save: '+saveClicked);
+  await sleep(6000);
+  let numericId=capturedNumericId;
+  const urlM=page.url().match(/\/products\/manage\/(\d+)/);
+  if(urlM) numericId=urlM[1];
+  if(!numericId && capturedUcode){
+    const token=await page.evaluate(()=>localStorage.getItem('token')).catch(()=>null);
+    if(token){try{const resp=await page.evaluate(async(tok)=>{const r=await fetch('https://api-product.vulcano.hotmart.com/product/v1/user/product/list?max=200&page=0',{headers:{'Authorization':'Bearer '+tok}});return r.json();},token);const item=(resp.items||[]).find(x=>x.ucode===capturedUcode);if(item)numericId=String(item.id);}catch(e){}}
+  }
+  await client.detach().catch(()=>{});
+  log.info('numericId='+numericId);
+  return { numericId, category };
+}
+async function uploadPDF(page, numericId, pdfPath) {
+  log.info('Uploading PDF to '+numericId);
+  await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
+  await waitForDDP(page, 1200, 40);
+  await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Painel');if(b)b.click();});
+  await sleep(3000);
+  let configs=[];
+  for(let i=0;i<20;i++){
+    await sleep(1000);
+    configs=await page.evaluate(()=>Array.from(document.querySelectorAll('button')).filter(b=>b.textContent.trim()==='Configurar').map(b=>{const r=b.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2,vis:r.width>0};}).filter(b=>b.vis));
+    if(configs.length>0){log.info('Configurar at t='+(i+1)+'s');break;}
+  }
+  if(!configs.length){log.warn('No Configurar');return false;}
+  const cfg=configs.find(c=>c.y<700)||configs[0];
+  await page.mouse.click(cfg.x,cfg.y);
+  await sleep(4000);
+  for(let att=0;att<3;att++){
+    const inp=await page.$('input[type="file"]').catch(()=>null);
+    if(inp){log.info('File input found!');await inp.uploadFile(pdfPath);await sleep(15000);return true;}
+    const bi=await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>['selecione','upload','enviar','arquivo','escolher'].some(k=>(b.textContent||'').toLowerCase().includes(k)));if(b){const r=b.getBoundingClientRect();return{text:b.textContent.trim(),x:r.left+r.width/2,y:r.top+r.height/2};}return null;});
+    if(bi){log.info('Clicking "'+bi.text+'"');await page.mouse.click(bi.x,bi.y);await sleep(2000);const i2=await page.$('input[type="file"]').catch(()=>null);if(i2){log.info('Input appeared!');await i2.uploadFile(pdfPath);await sleep(15000);return true;}}
+    await sleep(3000);
+  }
+  log.warn('Upload failed');return false;
+}
+async function finalizarCadastro(page, numericId) {
+  log.info('Finalizing '+numericId);
+  await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
+  await waitForDDP(page, 1200, 40);
+  await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Painel');if(b)b.click();});
+  let fInfo=null;
+  for(let i=0;i<30;i++){
+    await sleep(1000);
+    fInfo=await page.evaluate(()=>{const btn=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Finalizar cadastro');if(!btn)return null;const r=btn.getBoundingClientRect();return{disabled:btn.disabled,x:r.left+r.width/2,y:r.top+r.height/2};}).catch(()=>null);
+    if(fInfo){log.info('Finalizar t='+(i+1)+'s disabled='+fInfo.disabled);break;}
+  }
+  if(!fInfo){log.warn('Finalizar not found');return false;}
+  if(fInfo.disabled){log.warn('Finalizar disabled');return false;}
+  await page.mouse.click(fInfo.x,fInfo.y);
+  await sleep(5000);
+  await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>['confirmar','sim','ok','publicar','finalizar','ativar'].includes((b.textContent||'').trim().toLowerCase()));if(b)b.click();});
+  await sleep(4000);
+  const after=await page.evaluate(()=>document.body&&document.body.innerText?document.body.innerText.slice(0,200):'').catch(()=>'');
+  log.info('After: '+after.replace(/\n/g,' ').slice(0,100));
+  return true;
+}
+async function screenshotSalesPage(page, numericId, title) {
+  try {
+    const st=title.replace(/[^a-zA-Z0-9]/g,'_').slice(0,40);
+    const outPath=path.join(SCREENSHOTS_DIR,numericId+'_'+st+'.png');
+    fs.mkdirSync(SCREENSHOTS_DIR,{recursive:true});
+    await page.goto('https://pay.hotmart.com/product/'+numericId,{waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+    await sleep(3000);
+    await page.screenshot({path:outPath,fullPage:false});
+    log.info('Screenshot: '+outPath);
+    return outPath;
+  }catch(e){log.warn('Screenshot failed: '+e.message);return null;}
+}
 async function publishToHotmart(ebook) {
-  logger.info(`📤 Hotmart: publicando "${ebook.title}"`);
-
-  const session = loadSession();
-  if (!session) {
-    logger.warn('⚠️  Sessão Hotmart não encontrada. Execute: node scripts/setup-hotmart.js');
-    return { success: false, error: 'Sessão não configurada. Execute setup-hotmart.js', platform: 'hotmart' };
-  }
-
-  const browser = await puppeteer.launch({
-    headless: process.env.HEADLESS !== 'false',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled',
-    ],
-    defaultViewport: { width: 1280, height: 900 },
-  });
-
-  const page = await browser.newPage();
-
-  // Disfarçar automação
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  });
-
+  const { title, topic, pdfPath, coverPath, description } = ebook;
+  if(!fs.existsSync(SESSION_FILE)) throw new Error('Session not found: '+SESSION_FILE);
+  if(!pdfPath||!fs.existsSync(pdfPath)) throw new Error('PDF not found: '+pdfPath);
+  const session=JSON.parse(fs.readFileSync(SESSION_FILE,'utf8'));
+  const browser=await puppeteer.launch({headless:true,args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process'],defaultViewport:{width:1280,height:900}});
   try {
-    // ── Extrair Bearer token (access_token CAS embutido no JWT) ──────────────
-    const rawToken = session.localStorage?.['token'];
-    let bearerToken = rawToken;
-    if (rawToken) {
-      try {
-        const payload = JSON.parse(Buffer.from(rawToken.split('.')[1], 'base64url').toString());
-        bearerToken = payload.access_token || rawToken;
-      } catch {}
-    }
-
-    // ── Injetar localStorage antes da navegação ───────────────────────────────
-    if (session.localStorage) {
-      await page.evaluateOnNewDocument(ls => {
-        Object.entries(ls).forEach(([k, v]) => { try { localStorage.setItem(k, v); } catch {} });
-      }, session.localStorage);
-    }
-
-    // ── Injetar cookies + Authorization header ────────────────────────────────
-    logger.info('🍪 Injetando sessão Hotmart...');
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    for (const cookie of (session.cookies || [])) {
-      try { await page.setCookie(cookie); } catch {}
-    }
-    if (bearerToken) {
-      await page.setExtraHTTPHeaders({ 'Authorization': `Bearer ${bearerToken}` });
-    }
-
-    // ── Navegar para painel ──────────────────────────────────────────────────
-    await page.goto(`${BASE_URL}/products`, { waitUntil: 'networkidle2', timeout: 30000 });
-    await sleep(3000);
-
-    const curUrl = page.url();
-    if (curUrl.includes('/login') || curUrl.includes('sso.hotmart')) {
-      logger.warn(`⚠️  Sessão Hotmart expirada. Execute: node scripts/setup-sessions.js hotmart`);
-      await browser.close();
-      return { success: false, error: 'Sessão expirada. Execute setup-sessions.js hotmart', platform: 'hotmart' };
-    }
-
-    logger.info('✅ Sessão Hotmart válida — iniciando criação de produto');
-
-    // ── Navegar para novo produto ────────────────────────────────────────────
-    await page.goto(`${BASE_URL}/products/new`, { waitUntil: 'networkidle2', timeout: 30000 });
-    await sleep(3000);
-
-    // ── ETAPA 1: Tipo de produto — selecionar E-book ─────────────────────────
-    const ebookSelectors = [
-      '[data-format="EBOOK"]',
-      'button:has-text("E-book")',
-      'label:has-text("E-book")',
-      '[data-product-type="EBOOK"]',
-      '.product-type-ebook',
-    ];
-    for (const sel of ebookSelectors) {
-      try {
-        const el = await page.$(sel);
-        if (el) { await el.click(); await sleep(1000); break; }
-      } catch {}
-    }
-
-    // ── ETAPA 2: Informações básicas ─────────────────────────────────────────
-    // Nome do produto
-    const nameSelectors = [
-      'input[name="productName"]',
-      'input[placeholder*="nome do produto" i]',
-      'input[placeholder*="título" i]',
-      'input[placeholder*="name" i]',
-      '#product-name',
-    ];
-    for (const sel of nameSelectors) {
-      try {
-        const el = await page.$(sel);
-        if (el) {
-          await el.click({ clickCount: 3 });
-          await el.type(ebook.title, { delay: 30 });
-          break;
-        }
-      } catch {}
-    }
-    await sleep(500);
-
-    // Descrição
-    const descSelectors = [
-      'textarea[name="productDescription"]',
-      'textarea[placeholder*="descrição" i]',
-      'textarea[placeholder*="description" i]',
-      '#product-description',
-    ];
-    const description = ebook.description || ebook.subtitle || `E-book completo sobre ${ebook.topic || ebook.title}`;
-    for (const sel of descSelectors) {
-      try {
-        const el = await page.$(sel);
-        if (el) {
-          await el.click();
-          await el.type(description.substring(0, 500), { delay: 10 });
-          break;
-        }
-      } catch {}
-    }
-    await sleep(500);
-
-    // Idioma (Português)
-    try {
-      const langSelect = await page.$('select[name="language"], select[id*="language"]');
-      if (langSelect) await page.select('select[name="language"], select[id*="language"]', 'pt');
-    } catch {}
-
-    // Próxima etapa
-    await clickNext(page);
-    await sleep(3000);
-
-    // ── ETAPA 3: Upload do arquivo PDF ────────────────────────────────────────
-    if (ebook.pdfPath && fs.existsSync(ebook.pdfPath)) {
-      logger.info('📄 Fazendo upload do PDF...');
-      const fileInputSelectors = [
-        'input[type="file"][accept*="pdf"]',
-        'input[type="file"][name*="file"]',
-        'input[type="file"][name*="content"]',
-        'input[type="file"]',
-      ];
-      for (const sel of fileInputSelectors) {
-        try {
-          const fileInput = await page.$(sel);
-          if (fileInput) {
-            await fileInput.uploadFile(ebook.pdfPath);
-            logger.info('📤 PDF enviado, aguardando processamento...');
-            await sleep(10000); // Upload pode demorar
-            break;
-          }
-        } catch {}
-      }
-    }
-
-    // Próxima etapa
-    await clickNext(page);
-    await sleep(3000);
-
-    // ── ETAPA 4: Preço ───────────────────────────────────────────────────────
-    logger.info('💰 Configurando preço...');
-    const priceTab = await page.$('[href*="price"], button:has-text("Preço"), a:has-text("Precificação"), a:has-text("Price")');
-    if (priceTab) { await priceTab.click(); await sleep(2000); }
-
-    const price = (ebook.price || 4.99).toFixed(2);
-    const priceSelectors = [
-      'input[name="price"]',
-      'input[placeholder*="preço" i]',
-      'input[placeholder*="valor" i]',
-      'input[placeholder*="price" i]',
-      '#product-price',
-    ];
-    for (const sel of priceSelectors) {
-      try {
-        const el = await page.$(sel);
-        if (el) {
-          await el.click({ clickCount: 3 });
-          await el.type(price, { delay: 30 });
-          break;
-        }
-      } catch {}
-    }
-
-    // Moeda BRL
-    try {
-      const currencySelect = await page.$('select[name="currency"]');
-      if (currencySelect) await page.select('select[name="currency"]', 'BRL');
-    } catch {}
-
-    // ── ETAPA 5: Capa (thumbnail) ─────────────────────────────────────────────
-    if (ebook.coverPath && fs.existsSync(ebook.coverPath)) {
-      logger.info('🖼️  Fazendo upload da capa...');
-      const coverSelectors = [
-        'input[type="file"][accept*="image"]',
-        'input[type="file"][name*="thumbnail"]',
-        'input[type="file"][name*="cover"]',
-        'input[type="file"][name*="image"]',
-      ];
-      for (const sel of coverSelectors) {
-        try {
-          const el = await page.$(sel);
-          if (el) {
-            await el.uploadFile(ebook.coverPath);
-            await sleep(5000);
-            break;
-          }
-        } catch {}
-      }
-    }
-
-    // ── ETAPA 6: Publicar ─────────────────────────────────────────────────────
-    logger.info('🚀 Publicando produto...');
-    const publishSelectors = [
-      'button:has-text("Publicar")',
-      'button:has-text("Salvar e publicar")',
-      'button:has-text("Publish")',
-      'button:has-text("Salvar")',
-    ];
-    let published = false;
-    for (const sel of publishSelectors) {
-      try {
-        const el = await page.$(sel);
-        if (el) { await el.click(); published = true; await sleep(4000); break; }
-      } catch {}
-    }
-
-    if (!published) {
-      // Tentar submit genérico
-      try { await page.keyboard.press('Enter'); await sleep(3000); } catch {}
-    }
-
-    const finalUrl = page.url();
-    logger.info(`✅ Hotmart: produto criado! URL: ${finalUrl}`);
-
-    return { success: true, url: finalUrl, platform: 'hotmart' };
-
-  } catch (err) {
-    logger.error(`❌ Hotmart: ${err.message}`);
-    try {
-      const screenshotDir = path.join(__dirname, '../../logs');
-      fs.mkdirSync(screenshotDir, { recursive: true });
-      await page.screenshot({ path: path.join(screenshotDir, 'hotmart_error.png') });
-    } catch {}
-    return { success: false, error: err.message, platform: 'hotmart' };
-  } finally {
+    const jwt=await refreshJWT(browser,session);
+    const page=await browser.newPage();
+    await setupPage(page,session,jwt);
+    page.on('framenavigated',f=>{if(f===page.mainFrame())log.info('NAV',f.url().slice(0,90));});
+    await page.goto('https://app.hotmart.com/products/producer',{waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+    await sleep(5000);
+    const {numericId,category}=await createProduct(page,session,{title,topic,description,coverPath,pdfPath});
+    if(!numericId) throw new Error('No product ID after creation');
+    const uploaded=await uploadPDF(page,numericId,pdfPath);
+    if(!uploaded) log.warn('PDF upload failed');
+    const finalized=await finalizarCadastro(page,numericId);
+    const screenshot=await screenshotSalesPage(page,numericId,title);
     await browser.close();
+    log.info('Done: '+title+' id='+numericId+' ok='+finalized);
+    return{success:finalized,hotmartProductId:numericId,url:'https://hotmart.com/product/'+numericId,screenshot,category,platform:'hotmart',uploaded};
+  }catch(err){
+    await browser.close().catch(()=>{});
+    log.error('Error: '+err.message);
+    throw err;
   }
 }
-
-// ─── Helper: clicar em botão "Próximo" / "Continuar" ─────────────────────────
-async function clickNext(page) {
-  const selectors = [
-    'button:has-text("Próximo")',
-    'button:has-text("Continuar")',
-    'button:has-text("Next")',
-    'button:has-text("Continue")',
-  ];
-  for (const sel of selectors) {
-    try {
-      const el = await page.$(sel);
-      if (el) { await el.click(); return true; }
-    } catch {}
-  }
-  return false;
-}
-
-module.exports = { publishToHotmart };
+module.exports = { publishToHotmart, getCategory: getCategoryPT };
