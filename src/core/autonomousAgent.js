@@ -75,6 +75,61 @@ function sleep(ms) {
   });
 }
 
+// --- Publica ebooks que ja estao prontos (status=ready) antes de gerar novos ---
+async function publishReadyEbooks() {
+  const db = require('./database');
+  const { getDb } = db;
+  const rawDb = getDb();
+  const readyEbooks = rawDb.prepare("SELECT * FROM ebooks WHERE status='ready' ORDER BY rowid ASC LIMIT 3").all();
+  if (readyEbooks.length === 0) return 0;
+
+  logger.info('[publish-ready] ' + readyEbooks.length + ' ebooks prontos — publicando antes de gerar novos');
+  const { ensureSession } = require('../agents/sessionAgent');
+  const { publishToHotmart } = require('../agents/publisherHotmart');
+  const { publishToCakto } = require('../agents/publisherCakto');
+  const { publishToAmazon } = require('../agents/publisherAmazon');
+  const { updateEbookStatus } = db;
+
+  let published = 0;
+  for (const ebook of readyEbooks) {
+    logger.info('[publish-ready] => ' + ebook.title.slice(0, 50));
+    const ebookData = {
+      id: ebook.id, title: ebook.title, subtitle: ebook.subtitle || '',
+      description: ebook.description || '', price: ebook.price || 4.99,
+      pdfPath: ebook.pdf_path, coverPath: ebook.cover_path,
+    };
+    const results = {};
+    try {
+      if (shouldPublishTo('HOTMART') && await ensureSession('hotmart')) {
+        setState({ currentStep: 'publishing:hotmart' });
+        results.hotmart = await publishToHotmart(ebookData);
+        if (results.hotmart?.success) logger.info('[publish-ready] Hotmart OK: ' + (results.hotmart.url || results.hotmart.productId));
+        else logger.warn('[publish-ready] Hotmart falhou: ' + (results.hotmart?.error || 'desconhecido'));
+      }
+      await new Promise(r => setTimeout(r, 3000));
+      if (shouldPublishTo('CAKTO') && await ensureSession('cakto')) {
+        setState({ currentStep: 'publishing:cakto' });
+        results.cakto = await publishToCakto(ebookData);
+        if (results.cakto?.success) logger.info('[publish-ready] Cakto OK: ' + (results.cakto.url || ''));
+        else logger.warn('[publish-ready] Cakto falhou: ' + (results.cakto?.error || 'desconhecido'));
+      }
+    } catch (e) {
+      logger.error('[publish-ready] Erro: ' + e.message.slice(0, 100));
+    }
+    const anyOk = Object.values(results).some(r => r?.success);
+    updateEbookStatus(ebook.id, anyOk ? 'published' : 'ready', {
+      hotmartUrl: results.hotmart?.url || null,
+      hotmartProductId: results.hotmart?.productId || null,
+      caktoUrl: results.cakto?.url || null,
+      caktoProductId: results.cakto?.productId || null,
+    });
+    if (anyOk) published++;
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  logger.info('[publish-ready] Concluido: ' + published + '/' + readyEbooks.length + ' publicados');
+  return published;
+}
+
 // ─── Um ciclo completo de geração + publicação ───────────────────────────────
 async function runOneCycle(topicOverride = null) {
   const { runPipeline } = require('../index');
@@ -205,6 +260,9 @@ async function loop() {
   await sleep(15_000);
 
   while (state.enabled) {
+    // Publicar ebooks ready antes de gerar novos
+    await publishReadyEbooks().catch(e => logger.error('publishReady erro: ' + e.message));
+
     if (state.paused) {
       setState({ currentStep: 'paused', nextRunAt: null });
       logger.info('⏸️  Agente pausado — aguardando retomada...');
