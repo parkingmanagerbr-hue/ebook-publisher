@@ -144,8 +144,8 @@ async function tryCredentialLogin(page, platform, browser) {
       password: process.env.HOTMART_PASSWORD,
       emailSel: 'input[name="username"], input[type="email"], input[name="email"], input[placeholder*="e-mail" i]',
       passSel:  'input[type="password"]',
-      btnSel:   'button[type=submit]',
-      waitFor:  url => !url.includes('/login') && !url.includes('sso.hotmart'),
+      btnSel:   'input[type="submit"], button[type=submit]',
+      waitFor:  url => !url.includes("/login") && !url.includes("sso.hotmart") && !url.includes("signin"),
     },
     cakto: {
       email:    process.env.CAKTO_EMAIL,
@@ -174,36 +174,60 @@ async function tryCredentialLogin(page, platform, browser) {
   logger.info(`[${platform}] 🔐 Tentando login com credenciais...`);
 
   try {
+    // Esperar pagina carregar (ate 8s)
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      const emailEl2 = await page.$(c.emailSel).catch(() => null);
+      if (emailEl2) break;
+    }
+
     // Preencher email
-    const emailEl = await page.$(c.emailSel);
+    const emailEl = await page.$(c.emailSel).catch(() => null);
     if (emailEl) {
       await emailEl.click({ clickCount: 3 });
-      await emailEl.type(c.email, { delay: 50 });
+      await emailEl.type(c.email, { delay: 80 });
+      logger.info(`[${platform}] email preenchido`);
+    } else {
+      logger.warn(`[${platform}] Campo email nao encontrado: ${c.emailSel}`);
     }
 
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 800));
+
+    // Clicar continuar/next se senha ainda nao apareceu (formulario multi-step)
+    const passEl0 = await page.$(c.passSel).catch(() => null);
+    if (!passEl0) {
+      const continuar = await page.$('button, input[type=submit]').catch(() => null);
+      if (continuar) { await continuar.click(); await new Promise(r => setTimeout(r, 2000)); }
+      else await page.keyboard.press('Enter');
+      await new Promise(r => setTimeout(r, 2000));
+    }
 
     // Preencher senha
-    const passEl = await page.$(c.passSel);
+    const passEl = await page.$(c.passSel).catch(() => null);
     if (passEl) {
       await passEl.click({ clickCount: 3 });
-      await passEl.type(c.password, { delay: 50 });
+      await passEl.type(c.password, { delay: 80 });
+      logger.info(`[${platform}] senha preenchida`);
+    } else {
+      logger.warn(`[${platform}] Campo senha nao encontrado: ${c.passSel}`);
     }
 
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 800));
 
-    // Clicar no botão
-    const btn = await page.$(c.btnSel);
+    // Clicar no botão submit
+    const btn = await page.$(c.btnSel).catch(() => null);
     if (btn) {
       await btn.click();
+      logger.info(`[${platform}] botao submit clicado`);
     } else {
+      logger.warn(`[${platform}] Botao nao encontrado — pressionando Enter`);
       await page.keyboard.press('Enter');
     }
 
-    // Aguardar redirecionamento pós-login
+    // Aguardar redirecionamento pos-login (ate 25s)
     await page.waitForFunction(
-      (selector) => !window.location.href.includes('/login') && !window.location.href.includes('signin'),
-      { timeout: 20000 }
+      () => !window.location.href.includes('/login') && !window.location.href.includes('signin') && !window.location.href.includes('sso.hotmart'),
+      { timeout: 25000 }
     ).catch(() => {});
 
     await new Promise(r => setTimeout(r, 3000));

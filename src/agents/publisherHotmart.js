@@ -59,9 +59,13 @@ async function refreshJWT(browser, session) {
   try { await lp.goto(oauth2Service+'&ticket='+st.body,{waitUntil:'networkidle2',timeout:30000}); } catch(e) {}
   await sleep(6000);
   const tok = await lp.evaluate(()=>localStorage.getItem('token')).catch(()=>null);
-  log.info('JWT:', tok ? 'OK' : 'MISSING');
   await lp.close();
-  return tok;
+  if (tok) { log.info('JWT: OK (via CAS)'); return tok; }
+  // Fallback: use existing JWT from session localStorage (still valid)
+  const existingTok = session.localStorage && session.localStorage.token;
+  if (existingTok) { log.info('JWT: using existing session token (CAS expired)'); return existingTok; }
+  log.warn('JWT: MISSING — no valid token found');
+  return null;
 }
 
 async function setupPage(page, session, jwt) {
