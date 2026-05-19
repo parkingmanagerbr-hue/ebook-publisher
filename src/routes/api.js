@@ -308,7 +308,7 @@ router.get('/status', (req, res) => {
     const pending   = db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status IN ('processing','ready')").get().n;
 
     // Last 10 ebooks
-    const last10 = db.prepare("SELECT id, title, status, hotmart_url, cakto_url, ai_provider, created_at, published_at FROM ebooks ORDER BY created_at DESC LIMIT 10").all();
+    const last10 = db.prepare("SELECT id, title, status, hotmart_url, cakto_url, NULL as amazon_url, ai_provider, created_at, published_at FROM ebooks ORDER BY created_at DESC LIMIT 20").all();
 
     // Recent errors (last 5)
     const recentErrors = db.prepare("SELECT id, title, created_at FROM ebooks WHERE status='error' ORDER BY created_at DESC LIMIT 5").all();
@@ -341,7 +341,7 @@ router.get('/status', (req, res) => {
       uptime: uptimeSec,
       uptimeHuman: _formatUptime(uptimeSec),
       timestamp: new Date().toISOString(),
-      ebooks: { total, published, errors, pending, last10 },
+      ebooks: { total, published, errors, pending, last20: last10 },
       recentErrors,
       aiState,
       aiProviders,
