@@ -289,4 +289,75 @@ router.post('/agent/trigger', requireAuth, (req, res) => {
   }
 });
 
+
+// ─── Public Status Route (no auth required) ──────────────────────────────────
+
+// GET /api/status — Monitoring endpoint (no auth required)
+router.get('/status', (req, res) => {
+  try {
+    const db  = getDb();
+    const fs2 = require('fs');
+
+    // Uptime
+    const uptimeSec = process.uptime();
+
+    // E-book counts
+    const total     = db.prepare("SELECT COUNT(*) as n FROM ebooks").get().n;
+    const published = db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status='published'").get().n;
+    const errors    = db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status='error'").get().n;
+    const pending   = db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status IN ('processing','ready')").get().n;
+
+    // Last 10 ebooks
+    const last10 = db.prepare("SELECT id, title, status, hotmart_url, cakto_url, ai_provider, created_at, published_at FROM ebooks ORDER BY created_at DESC LIMIT 10").all();
+
+    // Recent errors (last 5)
+    const recentErrors = db.prepare("SELECT id, title, created_at FROM ebooks WHERE status='error' ORDER BY created_at DESC LIMIT 5").all();
+
+    // AI state from file
+    let aiState = null;
+    const aiStatePath = '/app/data/ai_state.json';
+    if (fs2.existsSync(aiStatePath)) {
+      try { aiState = JSON.parse(fs2.readFileSync(aiStatePath, 'utf8')); } catch(_) {}
+    }
+    // Live AI provider status
+    let aiProviders = {};
+    try {
+      const { getStatus } = require('../core/aiClient');
+      aiProviders = getStatus();
+    } catch(_) {}
+
+    // Sessions
+    const sessionsDir = '/app/data/sessions';
+    const sessions = { hotmart: false, cakto: false, amazon: false };
+    if (fs2.existsSync(sessionsDir)) {
+      const files = fs2.readdirSync(sessionsDir);
+      ['hotmart', 'cakto', 'amazon'].forEach(p => {
+        sessions[p] = files.some(f => f.toLowerCase().includes(p));
+      });
+    }
+
+    res.json({
+      ok: true,
+      uptime: uptimeSec,
+      uptimeHuman: _formatUptime(uptimeSec),
+      timestamp: new Date().toISOString(),
+      ebooks: { total, published, errors, pending, last10 },
+      recentErrors,
+      aiState,
+      aiProviders,
+      sessions,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+function _formatUptime(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  return (d > 0 ? d + 'd ' : '') + h + 'h ' + m + 'm ' + s + 's';
+}
+
 module.exports = router;

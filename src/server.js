@@ -85,4 +85,10 @@ app.listen(PORT, async () => {
   }
 });
 
+
+// ─── Status Dashboard (public, no auth) ─────────────────────────────────────
+app.get('/status', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/status.html'));
+});
+
 module.exports = app;

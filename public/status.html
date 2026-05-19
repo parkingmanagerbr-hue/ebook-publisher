@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GENIA E-book Publisher - Status</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f0f13; color: #e0e0e0; padding: 20px; }
+    h1 { color: #7c6af7; font-size: 1.5rem; margin-bottom: 4px; }
+    .subtitle { color: #888; font-size: 0.85rem; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .card { background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 10px; padding: 16px; }
+    .card .label { font-size: 0.75rem; color: #888; text-transform: uppercase; margin-bottom: 6px; }
+    .card .value { font-size: 2rem; font-weight: 700; color: #fff; }
+    .card .value.green { color: #4ade80; }
+    .card .value.red   { color: #f87171; }
+    .card .value.yellow{ color: #fbbf24; }
+    .card .value.purple{ color: #a78bfa; }
+    section { margin-bottom: 24px; }
+    section h2 { font-size: 1rem; color: #a0a0c0; margin-bottom: 10px; border-bottom: 1px solid #2a2a3a; padding-bottom: 6px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+    th { text-align: left; color: #666; font-weight: 600; padding: 6px 8px; }
+    td { padding: 5px 8px; border-bottom: 1px solid #1e1e2e; }
+    tr:hover td { background: #1e1e2e; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 0.75rem; font-weight: 600; }
+    .badge.published { background: #14532d; color: #4ade80; }
+    .badge.error     { background: #7f1d1d; color: #f87171; }
+    .badge.ready     { background: #1c1917; color: #fbbf24; }
+    .badge.processing{ background: #1e3a5f; color: #60a5fa; }
+    .sessions { display: flex; gap: 12px; flex-wrap: wrap; }
+    .sess { padding: 8px 16px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; }
+    .sess.on  { background: #14532d; color: #4ade80; }
+    .sess.off { background: #1f1f2e; color: #666; }
+    .log-box { background: #0a0a0f; border: 1px solid #2a2a3a; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 0.78rem; color: #aaa; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
+    .uptime-bar { background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; display: flex; gap: 24px; font-size: 0.85rem; }
+    .uptime-bar span { color: #888; } .uptime-bar b { color: #c0c0e0; }
+    .ai-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+    .ai-chip { background: #1a1a24; border: 1px solid #2a2a3a; border-radius: 8px; padding: 8px 12px; font-size: 0.8rem; }
+    .ai-chip .name { font-weight: 600; }
+    .ai-chip .info { color: #666; font-size: 0.72rem; margin-top: 2px; }
+    #error-msg { color: #f87171; font-size: 0.85rem; padding: 8px; display: none; }
+    .refresh-info { font-size: 0.78rem; color: #555; text-align: right; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>GENIA E-book Publisher</h1>
+  <p class="subtitle">Monitor de Publicacoes - auto-refresh a cada 30s</p>
+  <div id="error-msg"></div>
+  <div class="uptime-bar">
+    <div><span>Uptime: </span><b id="uptime">-</b></div>
+    <div><span>Atualizado: </span><b id="ts">-</b></div>
+  </div>
+  <div class="grid">
+    <div class="card"><div class="label">Total E-books</div><div class="value purple" id="stat-total">-</div></div>
+    <div class="card"><div class="label">Publicados</div><div class="value green" id="stat-pub">-</div></div>
+    <div class="card"><div class="label">Pendentes</div><div class="value yellow" id="stat-pend">-</div></div>
+    <div class="card"><div class="label">Erros</div><div class="value red" id="stat-err">-</div></div>
+  </div>
+  <section>
+    <h2>Sessoes de Plataformas</h2>
+    <div class="sessions" id="sessions">
+      <div class="sess off">Hotmart</div><div class="sess off">Cakto</div><div class="sess off">Amazon</div>
+    </div>
+  </section>
+  <section>
+    <h2>Ultimos 20 E-books</h2>
+    <table>
+      <thead><tr><th>#</th><th>Titulo</th><th>Status</th><th>Provider IA</th><th>Hotmart</th><th>Cakto</th><th>Criado em</th></tr></thead>
+      <tbody id="ebooks-tbody"><tr><td colspan="7" style="color:#555;padding:20px">Carregando...</td></tr></tbody>
+    </table>
+  </section>
+  <section>
+    <h2>Provedores de IA</h2>
+    <div class="ai-grid" id="ai-grid"><div style="color:#555;font-size:0.8rem">Carregando...</div></div>
+  </section>
+  <section>
+    <h2>Erros Recentes</h2>
+    <div class="log-box" id="errors-box">Carregando...</div>
+  </section>
+  <div class="refresh-info">Proximo refresh em <span id="countdown">30</span>s</div>
+<script>
+var countdown = 30;
+function badge(s){var m={published:"published",error:"error",ready:"ready",processing:"processing"};return '<span class="badge '+(m[s]||"ready")+'">'+( s||"-")+"</span>";}
+function fmtDate(iso){if(!iso)return"-";var d=new Date(iso);return d.toLocaleDateString("pt-BR")+" "+d.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});}
+function lnk(url){if(!url)return'<span style="color:#555">-</span>';return'<a href="'+url+'" target="_blank" style="color:#7c6af7;text-decoration:none">link</a>';}
+function refresh(){
+  fetch("/api/status").then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();}).then(function(d){
+    document.getElementById("error-msg").style.display="none";
+    document.getElementById("uptime").textContent=d.uptimeHuman||"-";
+    document.getElementById("ts").textContent=d.timestamp?new Date(d.timestamp).toLocaleTimeString("pt-BR"):"-";
+    document.getElementById("stat-total").textContent=d.ebooks?d.ebooks.total:"-";
+    document.getElementById("stat-pub").textContent=d.ebooks?d.ebooks.published:"-";
+    document.getElementById("stat-pend").textContent=d.ebooks?d.ebooks.pending:"-";
+    document.getElementById("stat-err").textContent=d.ebooks?d.ebooks.errors:"-";
+    var sess=d.sessions||{};
+    document.getElementById("sessions").innerHTML=["hotmart","cakto","amazon"].map(function(p){
+      return'<div class="sess '+(sess[p]?"on":"off")+'">'+(sess[p]?"[OK]":"[OFF]")+" "+p.charAt(0).toUpperCase()+p.slice(1)+"</div>";
+    }).join("");
+    var list=d.ebooks&&d.ebooks.last10?d.ebooks.last10.slice(0,20):[];
+    document.getElementById("ebooks-tbody").innerHTML=!list.length?'<tr><td colspan="7" style="color:#555;padding:20px">Nenhum e-book</td></tr>':list.map(function(e,i){
+      return"<tr><td style='color:#555'>"+(i+1)+"</td><td style='max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>"+(e.title||"-")+"</td><td>"+badge(e.status)+"</td><td style='color:#888;font-size:0.78rem'>"+(e.ai_provider||"-")+"</td><td>"+lnk(e.hotmart_url)+"</td><td>"+lnk(e.cakto_url)+"</td><td style='color:#666;font-size:0.78rem'>"+fmtDate(e.created_at)+"</td></tr>";
+    }).join("");
+    var ai=d.aiProviders||{};var aiK=Object.keys(ai);
+    document.getElementById("ai-grid").innerHTML=!aiK.length?'<div style="color:#555;font-size:0.8rem">Sem dados</div>':aiK.map(function(k){
+      var p=ai[k];var ok=!p.degraded&&!p.failed;
+      return'<div class="ai-chip"><div class="name" style="color:'+(ok?"#4ade80":"#f87171")+'">'+(ok?"OK":"FAIL")+" "+k+'</div><div class="info">calls:'+(p.calls||0)+' fails:'+(p.failures||0)+'</div>'+(p.degraded?'<div class="info" style="color:#fbbf24">degraded</div>':'')+'</div>';
+    }).join("");
+    var errs=d.recentErrors||[];
+    document.getElementById("errors-box").textContent=!errs.length?"Nenhum erro recente":errs.map(function(e){return"["+fmtDate(e.created_at)+"] "+(e.title||e.id);}).join("\n");
+  }).catch(function(err){var el=document.getElementById("error-msg");el.textContent="Erro: "+err.message;el.style.display="block";});
+  countdown=30;
+}
+refresh();setInterval(refresh,30000);
+setInterval(function(){countdown--;var el=document.getElementById("countdown");if(el)el.textContent=Math.max(0,countdown);},1000);
+</script>
+</body>
+</html>
