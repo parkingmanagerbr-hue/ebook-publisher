@@ -32,6 +32,7 @@ RUN npm ci --omit=dev
 # Copiar código fonte
 COPY src/ ./src/
 COPY public/ ./public/
+COPY scripts/ ./scripts/
 
 # Criar diretórios de dados com permissões corretas
 RUN mkdir -p data/pdfs data/covers logs && \
