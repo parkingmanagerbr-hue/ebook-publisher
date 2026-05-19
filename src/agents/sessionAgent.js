@@ -144,7 +144,7 @@ async function tryCredentialLogin(page, platform, browser) {
       password: process.env.HOTMART_PASSWORD,
       emailSel: 'input[type="email"], input[name="email"], input[placeholder*="e-mail" i]',
       passSel:  'input[type="password"]',
-      btnSel:   'button[type="submit"], button:has-text("Entrar"), button:has-text("Login")',
+      btnSel:   'button[type=submit]',
       waitFor:  url => !url.includes('/login') && !url.includes('sso.hotmart'),
     },
     cakto: {
@@ -152,7 +152,7 @@ async function tryCredentialLogin(page, platform, browser) {
       password: process.env.CAKTO_PASSWORD,
       emailSel: 'input[type="email"], input[name="email"]',
       passSel:  'input[type="password"]',
-      btnSel:   'button[type="submit"], button:has-text("Entrar"), button:has-text("Login")',
+      btnSel:   'button[type=submit]',
       waitFor:  url => !url.includes('/login') && !url.includes('/auth'),
     },
     amazon: {
