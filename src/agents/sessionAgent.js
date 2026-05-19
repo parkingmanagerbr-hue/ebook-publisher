@@ -360,7 +360,7 @@ async function checkPlatform(platform) {
     } else if (msLeft <= 0) {
       logger.warn(`[${platform}] JWT expirado há ${Math.abs(Math.round(msLeft / 60000))} min — renovando`);
       needsRenewal = true;
-    } else if (msLeft < 24 * 3600000) {
+    } else if (msLeft < 30 * 60000) {
       logger.warn(`[${platform}] JWT expira em ${Math.round(msLeft / 3600000)}h — renovando preventivamente`);
       needsRenewal = true;
     } else {
@@ -435,7 +435,7 @@ async function ensureSession(platform) {
 
   if (token) {
     const msLeft = jwtExpiresIn(token);
-    if (msLeft !== null && msLeft < 2 * 3600000) {   // menos de 2h → renovar agora
+    if (msLeft !== null && msLeft < 30 * 60000) {   // menos de 2h → renovar agora
       logger.warn(`[${platform}] JWT expira em ${Math.round(msLeft/60000)}min — renovando agora`);
       needsRenewal = true;
     }
