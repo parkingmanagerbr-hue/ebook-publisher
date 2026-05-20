@@ -2,11 +2,11 @@
  * ImageGenAgent — Geração de imagens via AI com fallback chain
  *
  * Ordem (velocidade/qualidade → custo):
- *   0. Higgsfield FLUX Pro  (~10s, FLUX Pro Kontext Max — MELHOR qualidade)
- *   1. DALL-E 3             (~15s, $0.04/img, alta qualidade)
- *   2. fal.ai FLUX/schnell  (~3s, free tier — muito rápido!)
- *   3. Gemini Image Gen     (grátis com chave Gemini)
- *   4. HuggingFace FLUX     (grátis, mais lento)
+ *   0. Gemini Image Gen     (PRIMÁRIO — grátis com chave Gemini, Imagen 4 / gemini flash)
+ *   1. HuggingFace FLUX     (grátis, fallback 2)
+ *   2. fal.ai FLUX/schnell  (~3s, free tier)
+ *   3. Higgsfield FLUX Pro  (~10s, FLUX Pro Kontext Max)
+ *   4. DALL-E 3             (~15s, $0.04/img, alta qualidade)
  *   5. Pollinations.ai FLUX (grátis, sem chave, fallback final)
  *
  * IMPORTANTE: Nunca incluir texto nos prompts de capa/ilustração —
@@ -436,19 +436,9 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
 
   const providers = [
     {
-      name: 'Together.ai FLUX',   // ⚡ FLUX.1-schnell grátis ($25 free credit)
-      enabled: !!togetherKey,
-      fn: () => generateWithTogether(prompt, width, height, togetherKey),
-    },
-    {
-      name: 'fal.ai FLUX',        // ⚡ ~3s, free tier
-      enabled: !!falKey,
-      fn: () => generateWithFalAI(prompt, width, height, falKey),
-    },
-    {
-      name: 'Cloudflare FLUX',    // grátis via Workers AI
-      enabled: !!(cfAccountId && cfApiToken),
-      fn: () => generateWithCloudflare(prompt, width, height, cfAccountId, cfApiToken),
+      name: 'Gemini Image Gen',   // ✅ PRIMÁRIO — grátis com chaves Gemini já configuradas
+      enabled: !!geminiKey,
+      fn: () => generateWithImagen(prompt, aspectRatio, geminiKey),
     },
     {
       name: 'HuggingFace FLUX',   // ✅ grátis — router.huggingface.co, 4 chaves com rotação
@@ -456,14 +446,29 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
       fn: () => generateWithFlux(prompt, width, height, hfKey),
     },
     {
+      name: 'fal.ai FLUX',        // ⚡ ~3s, free tier
+      enabled: !!falKey,
+      fn: () => generateWithFalAI(prompt, width, height, falKey),
+    },
+    {
+      name: 'Together.ai FLUX',   // ⚡ FLUX.1-schnell grátis ($25 free credit)
+      enabled: !!togetherKey,
+      fn: () => generateWithTogether(prompt, width, height, togetherKey),
+    },
+    {
+      name: 'Cloudflare FLUX',    // grátis via Workers AI
+      enabled: !!(cfAccountId && cfApiToken),
+      fn: () => generateWithCloudflare(prompt, width, height, cfAccountId, cfApiToken),
+    },
+    {
+      name: 'Higgsfield FLUX Pro', // FLUX Pro Kontext Max
+      enabled: !!higgsfieldKey,
+      fn: () => generateWithHiggsfield(prompt, width, height, higgsfieldKey),
+    },
+    {
       name: 'DALL-E 3',           // pago (~$0.04/img) — só se billing ok
       enabled: !!openaiKey,
       fn: () => generateWithDallE3(prompt, width, height, openaiKey),
-    },
-    {
-      name: 'Gemini Image Gen',   // pago — Imagen 3 requer plano pago
-      enabled: !!geminiKey,
-      fn: () => generateWithImagen(prompt, aspectRatio, geminiKey),
     },
     {
       name: 'Pollinations.ai',    // ✅ grátis, sem chave, fallback garantido
