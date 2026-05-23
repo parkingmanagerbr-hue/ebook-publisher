@@ -1,94 +1,147 @@
 /**
- * GENIA EbookPublisher — Web Server
- * Dashboard, Landing Page, Auth, API
+ * server.js - GENIA Publisher v2 Web Server
+ * Adds Socket.io + DDD publishing routes on top of existing server.
+ * Fully backward-compatible: all existing routes remain functional.
  */
-require('dotenv').config();
-const express  = require('express');
-const path     = require('path');
-const fs       = require('fs');
-const { createLogger } = require('./core/logger');
-const authRoutes = require('./routes/auth');
-const apiRoutes  = require('./routes/api');
+'use strict';
 
-// Inicializar banco de dados (cria tabelas se não existirem)
-require('./core/database');
+require('dotenv').config();
+const express    = require('express');
+const http       = require('http');
+const path       = require('path');
+const fs         = require('fs');
+const jwt        = require('jsonwebtoken');
+
+const { createLogger }   = require('./core/logger');
+const authRoutes         = require('./routes/auth');
+const legacyApiRoutes    = require('./routes/api');
+
+// ── DDD Infrastructure ────────────────────────────────────────────────────────
+const { getDb }              = require('./core/database');
+const { runMigrations }      = require('./infrastructure/db/schema');
+const { EbookRepository }    = require('./infrastructure/db/EbookRepository');
+const { SessionManager }     = require('./infrastructure/session/SessionManager');
+
+// ── Application Layer ──────────────────────────────────────────────────────────
+const { PublishingOrchestrator } = require('./application/orchestrator/PublishingOrchestrator');
+const { PriorityScorer }         = require('./application/ml/PriorityScorer');
+
+// ── Presentation Routes ────────────────────────────────────────────────────────
+const ebooksRoutes  = require('./presentation/api/routes/ebooks');
+const publishRoutes = require('./presentation/api/routes/publish');
+const storesRoutes  = require('./presentation/api/routes/stores');
+const statsRoutes   = require('./presentation/api/routes/stats');
 
 const logger = createLogger('server');
 const app    = express();
 const PORT   = process.env.DASHBOARD_PORT || 3100;
+const JWT_SECRET = process.env.JWT_SECRET || 'genia-ebook-secret-2026-change-in-prod';
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
+// ── Bootstrap DB + Migrations ─────────────────────────────────────────────────
+const db   = getDb();
+runMigrations(db);
+const repo = new EbookRepository(db);
+
+// ── HTTP + Socket.io ───────────────────────────────────────────────────────────
+const server = http.createServer(app);
+
+let io = null;
+let dashboardSocket = null;
+let orchestrator = null;
+
+try {
+  const { Server } = require('socket.io');
+  io = new Server(server, {
+    cors: { origin: '*', methods: ['GET', 'POST'] },
+  });
+  logger.info('Socket.io initialized');
+} catch (e) {
+  logger.warn('Socket.io not available (install socket.io): ' + e.message);
+}
+
+// ── Orchestrator ───────────────────────────────────────────────────────────────
+orchestrator = new PublishingOrchestrator(repo);
+
+if (io) {
+  const { DashboardSocket } = require('./presentation/websocket/DashboardSocket');
+  dashboardSocket = new DashboardSocket(io, orchestrator, repo);
+  dashboardSocket.init();
+  logger.info('DashboardSocket initialized');
+}
+
+// ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Servir capas e PDFs diretamente (com proteção por token)
 app.use('/covers', express.static(path.join(__dirname, '../data/covers')));
-app.use('/pdfs',   (req, res, next) => {
-  // Verificar token na query string para downloads
-  const token = req.query.token || req.headers.authorization?.replace('Bearer ', '');
+app.use('/pdfs', (req, res, next) => {
+  const token = req.query.token || (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Token required' });
-  next();
+  try { jwt.verify(token, JWT_SECRET); next(); }
+  catch { res.status(401).json({ error: 'Invalid token' }); }
 }, express.static(path.join(__dirname, '../data/pdfs')));
 
-// Servir assets públicos
 app.use(express.static(path.join(__dirname, '../public')));
 
-// ─── Routes ──────────────────────────────────────────────────────────────────
-app.use('/auth', authRoutes);
-app.use('/api',  apiRoutes);
+// ── Auth middleware for new routes ─────────────────────────────────────────────
+function requireAuth(req, res, next) {
+  const token = (req.headers.authorization || '').replace('Bearer ', '') || req.query.token;
+  if (!token) return res.status(401).json({ error: 'Token required' });
+  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
+  catch { res.status(401).json({ error: 'Invalid token' }); }
+}
 
-// ─── SPA fallback para páginas protegidas ────────────────────────────────────
-const pages = ['dashboard', 'ebooks', 'settings', 'publish'];
-pages.forEach(p => {
-  app.get(`/${p}`, (req, res) => {
+// ── Routes ─────────────────────────────────────────────────────────────────────
+app.use('/auth', authRoutes);
+
+// Legacy API (keeps all existing routes working)
+app.use('/api', legacyApiRoutes);
+
+// New DDD API routes (mounted under /api/v2 to avoid conflict)
+app.use('/api/v2/ebooks',  requireAuth, ebooksRoutes(repo, PriorityScorer));
+app.use('/api/v2/publish', requireAuth, publishRoutes(orchestrator));
+app.use('/api/v2/stores',  requireAuth, storesRoutes(SessionManager, orchestrator));
+app.use('/api/v2/stats',   requireAuth, statsRoutes(repo));
+
+// SPA routes
+['dashboard', 'ebooks', 'settings', 'publish'].forEach(p => {
+  app.get('/' + p, (req, res) => {
     res.sendFile(path.join(__dirname, '../public/dashboard.html'));
   });
 });
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
-});
+app.get('/',         (req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
 app.get('/login',    (req, res) => res.sendFile(path.join(__dirname, '../public/login.html')));
 app.get('/register', (req, res) => res.sendFile(path.join(__dirname, '../public/register.html')));
+app.get('/status',   (req, res) => res.sendFile(path.join(__dirname, '../public/status.html')));
 
-// ─── Start ───────────────────────────────────────────────────────────────────
-app.listen(PORT, async () => {
-  logger.info(`🌐 E-book Caster rodando em http://localhost:${PORT}`);
-  logger.info(`   Landing:   http://localhost:${PORT}/`);
-  logger.info(`   Login:     http://localhost:${PORT}/login`);
-  logger.info(`   Dashboard: http://localhost:${PORT}/dashboard`);
+// ── Start ──────────────────────────────────────────────────────────────────────
+server.listen(PORT, async () => {
+  logger.info('GENIA Publisher v2 running on port ' + PORT);
+  logger.info('  Dashboard: http://localhost:' + PORT + '/dashboard');
+  logger.info('  Status:    http://localhost:' + PORT + '/status');
+  logger.info('  API v2:    http://localhost:' + PORT + '/api/v2/stats');
 
-  // Inicializar banco de tópicos + Agente Autônomo 24/7
+  // Topic expander
   try {
     const { expandTopics } = require('./agents/topicExpander');
     await expandTopics();
-    logger.info('📚 Banco de tópicos inicializado');
-  } catch (e) {
-    logger.warn('⚠️  topicExpander:', e.message);
-  }
+    logger.info('Topic DB initialized');
+  } catch (e) { logger.warn('topicExpander: ' + e.message); }
 
-  // Iniciar session watcher (verifica/renova sessões Hotmart+Cakto a cada 2h)
+  // Session watcher
   try {
     const { startSessionWatcher } = require('./agents/sessionAgent');
     startSessionWatcher();
-    logger.info('🔑 Session watcher iniciado');
-  } catch (e) {
-    logger.warn('⚠️  sessionAgent:', e.message);
-  }
+    logger.info('Session watcher started');
+  } catch (e) { logger.warn('sessionAgent: ' + e.message); }
 
+  // Autonomous agent
   try {
     const agent = require('./core/autonomousAgent');
     agent.loop();
-    logger.info('🤖 Agente autônomo iniciado — modo 24/7');
-  } catch (e) {
-    logger.error('❌ Falha ao iniciar agente:', e.message);
-  }
-});
-
-
-// ─── Status Dashboard (public, no auth) ─────────────────────────────────────
-app.get('/status', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/status.html'));
+    logger.info('Autonomous agent started (24/7 mode)');
+  } catch (e) { logger.error('Failed to start autonomous agent: ' + e.message); }
 });
 
 module.exports = app;
