@@ -27,7 +27,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instalar dependências (sem devDependencies)
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 # Copiar código fonte
 COPY src/ ./src/
