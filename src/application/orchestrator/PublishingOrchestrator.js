@@ -54,7 +54,7 @@ class PublishingOrchestrator extends EventEmitter {
         if (!valid) { skipped++; continue; }
         await this.queue.enqueue(store, ebook.id, { title: ebook.title, score, ebookId: ebook.id });
         queued++;
-        this._emit("log", { level: "info", store, message:  });
+        this._emit("log", { level: "info", store, message: `Enqueued: ${ebook.title}` });
       }
     }
     for (const store of stores) this._startProcessing(store);
@@ -63,9 +63,9 @@ class PublishingOrchestrator extends EventEmitter {
 
   async publishSingle(ebookId, stores) {
     const ebook = await this.repo.findById(ebookId);
-    if (!ebook) throw new Error();
+    if (!ebook) throw new Error(`Ebook ${ebookId} not found`);
     const { valid, reasons } = this.domainSvc.validateForPublishing(ebook);
-    if (!valid) throw new Error();
+    if (!valid) throw new Error(`Validation failed: ${reasons.join(", ")}`);
     const results = {};
     for (const store of stores) {
       if (ebook.isPublishedOn(store)) {
@@ -90,14 +90,14 @@ class PublishingOrchestrator extends EventEmitter {
   cancelQueue(store) {
     this.queue.clearQueue(store);
     this._processing[store] = false;
-    this._emit("log", { level: "warn", store, message:  });
+    this._emit("log", { level: "warn", store, message: `Queue cancelled for ${store}` });
   }
 
   _startProcessing(store) {
     if (this._processing[store]) return;
     this._processing[store] = true;
     (async () => {
-      log.info();
+      log.info(`[${store}] Processing started`);
       const q = this.queue.getQueue(store);
       while (true) {
         const pending = q.getPendingJobs().filter(j => j.status === "waiting");
@@ -108,7 +108,7 @@ class PublishingOrchestrator extends EventEmitter {
           const ebook = await this.repo.findById(job.data.ebookId);
           if (!ebook) { q.markFailed(job.id, new Error("Ebook not found")); continue; }
           if (ebook.isPublishedOn(store)) { q.markCompleted(job.id, { skipped: true }); continue; }
-          this._emit("log", { level: "info", store, message:  });
+          this._emit("log", { level: "info", store, message: `Enqueued: ${ebook.title}` });
           this._emitQueueUpdate();
           const result = await this._publishToStore(store, ebook, (pct, msg) => {
             q.updateProgress(job.id, pct);
@@ -121,28 +121,28 @@ class PublishingOrchestrator extends EventEmitter {
             this._emit("ebook_updated", { id: ebook.id, store, ...result });
           } else {
             q.markFailed(job.id, new Error(result.error || "Unknown error"));
-            this._emit("log", { level: "error", store, message:  });
+            this._emit("log", { level: "error", store, message: `Failed: ${result.error || "Unknown error"}` });
           }
         } catch (err) {
           q.markFailed(job.id, err);
-          this._emit("log", { level: "error", store, message:  });
+          this._emit("log", { level: "error", store, message: `Error: ${err.message}` });
         }
         this._emitQueueUpdate();
         await sleep(2000);
       }
       this._processing[store] = false;
-      log.info();
-      this._emit("log", { level: "info", store: "system", message:  });
+      log.info(`[${store}] Processing complete`);
+      this._emit("log", { level: "info", store: "system", message: `${store} queue exhausted` });
       this._emitQueueUpdate();
     })().catch(err => {
       this._processing[store] = false;
-      log.error();
+      log.error(`[${store}] Processing error: ${err.message}`);
     });
   }
 
   async _publishToStore(store, ebook, onProgress = () => {}) {
     const agent = this.agents[store];
-    if (!agent) return { success: false, error:  };
+    if (!agent) return { success: false, error: `Unknown store: ${store}` };
     try {
       const result = await agent.publish(ebook, onProgress);
       if (result.success) {
