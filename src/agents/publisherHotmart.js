@@ -331,48 +331,55 @@ async function createProduct(page, session, ebook) {
   },'paymentMode','PAY_IN_FULL').catch(()=>{});
   await sleep(300);
 
-  // Fill price: try hot-input shadow DOM first, then native input, then click+type
-  const priceFilled = await page.evaluate((price) => {
-    // 1. Try hot-input web component with shadow DOM
-    const hotInputs = Array.from(document.querySelectorAll('hot-input'));
-    for (const hi of hotInputs) {
-      const n = (hi.getAttribute('name') || hi.name || '').toLowerCase();
-      if (n.includes('price') || n.includes('valor') || n.includes('amount') || hotInputs.length === 1) {
-        if (hi.shadowRoot) {
-          const inner = hi.shadowRoot.querySelector('input');
-          if (inner) {
-            const ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-            if (ns && ns.set) ns.set.call(inner, price); else inner.value = price;
-            inner.dispatchEvent(new Event('input', {bubbles:true}));
-            inner.dispatchEvent(new Event('change', {bubbles:true}));
-            return 'hot-input-shadow';
-          }
-        }
-        // Try setting attribute
-        hi.value = price;
-        hi.setAttribute('value', price);
-        return 'hot-input-attr';
-      }
-    }
-    // 2. Try standard input
-    const inp = document.querySelector('input[name="price"], input[placeholder*="valor"], input[placeholder*="preco"], input[type="number"]');
-    if (inp) {
-      const ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-      if (ns && ns.set) ns.set.call(inp, price); else inp.value = price;
-      inp.dispatchEvent(new Event('input', {bubbles:true}));
-      inp.dispatchEvent(new Event('change', {bubbles:true}));
-      return 'native-input';
-    }
-    return false;
-  }, DEFAULT_PRICE);
-  log.info('Price filled: ' + priceFilled);
+  // Wait for pricing page to fully render
+  await sleep(3000);
+  log.info('Pricing page body len=' + await page.evaluate(()=>document.body?document.body.innerHTML.length:0).catch(()=>0));
 
-  if (!priceFilled) {
-    // Fallback: click somewhere on the form and type price
-    await page.keyboard.press('Tab');
+  // Fill price field: use mouse.click to find and focus the price input, then type
+  // The price field may be a hot-input web component; we click it by coordinates then type
+  const priceFieldInfo = await page.evaluate(() => {
+    // Try to find price-related elements for click targeting
+    const candidates = [
+      document.querySelector('input[name="price"], input[type="number"]'),
+      document.querySelector('hot-input[name="price"], hot-input[name="amount"], hot-input[name="valor"]'),
+      document.querySelector('hot-input'),
+      document.querySelector('[class*="price"] input, [class*="valor"] input, [class*="amount"] input'),
+    ].filter(Boolean);
+
+    for (const el of candidates) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2, tag: el.tagName, name: el.getAttribute('name')||el.name||'' };
+    }
+    // Fallback: list all visible inputs for debugging
+    const allInputs = Array.from(document.querySelectorAll('input, hot-input')).map(el => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 ? { x: r.left+r.width/2, y: r.top+r.height/2, tag: el.tagName, name: el.getAttribute('name')||el.name||el.id||'' } : null;
+    }).filter(Boolean);
+    return { inputs: allInputs.slice(0,5) };
+  });
+  log.info('Price field info: ' + JSON.stringify(priceFieldInfo).slice(0,100));
+
+  if (priceFieldInfo && priceFieldInfo.x) {
+    // Click price field and type
+    await page.mouse.click(priceFieldInfo.x, priceFieldInfo.y);
     await sleep(300);
+    await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control');
+    await sleep(100);
     await page.keyboard.type(DEFAULT_PRICE, {delay:50});
-    log.info('Price: keyboard-fallback');
+    log.info('Price filled via mouse.click+type');
+  } else {
+    // Broad fallback: find first visible input on page and type into it
+    const firstInput = priceFieldInfo && priceFieldInfo.inputs && priceFieldInfo.inputs[0];
+    if (firstInput) {
+      log.info('Price fallback: clicking first input at ' + JSON.stringify(firstInput));
+      await page.mouse.click(firstInput.x, firstInput.y);
+      await sleep(300);
+      await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control');
+      await sleep(100);
+      await page.keyboard.type(DEFAULT_PRICE, {delay:50});
+    } else {
+      log.warn('No price input found at all on pricing page');
+    }
   }
   await sleep(500);
 
@@ -424,7 +431,7 @@ async function createProduct(page, session, ebook) {
     if (token) {
       try {
         const resp = await page.evaluate(async(tok, tit) => {
-          const r = await fetch('https://api-product.vulcano.hotmart.com/product/v1/user/product/list?max=10&page=0&orderBy=creationDate&order=DESC',
+          const r = await fetch('https://api-product.vulcano.hotmart.com/product/v1/user/product/list?max=10&page=0',
             {headers:{'Authorization':'Bearer '+tok}});
           const data = await r.json();
           return data;
