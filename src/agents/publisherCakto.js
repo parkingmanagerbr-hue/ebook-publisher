@@ -215,8 +215,8 @@ async function publishToCakto(ebook) {
     log.info('Name filled: ' + nameFilled);
     await sleep(400);
 
-    // ── Description ───────────────────────────────────────────────────────────
-    const desc = (ebook.description || ebook.subtitle || 'Guia completo sobre ' + (ebook.topic || ebook.title)).slice(0, 500);
+    // ── Description (max 99 chars to respect Cakto's 100-char limit) ─────────
+    const desc = (ebook.description || ebook.subtitle || 'Guia completo sobre ' + (ebook.topic || ebook.title)).slice(0, 99);
     await fillInput(page, [
       'textarea[name="description"]',
       'textarea[placeholder*="descri" i]',
@@ -226,9 +226,21 @@ async function publishToCakto(ebook) {
     ], desc).catch(() => {});
     await sleep(300);
 
-    // ── Price ─────────────────────────────────────────────────────────────────
-    const price = String((ebook.price || DEFAULT_PRICE).toFixed(2)).replace('.', ',');
+    // ── Sales page URL (required field — use Hotmart URL or generic) ──────────
+    const salesUrl = ebook.hotmartUrl || ebook.caktoUrl || 'https://hotmart.com';
     await fillInput(page, [
+      'input[name="salesPage"]',
+      'input[placeholder*="https" i]',
+      'input[type="url"]',
+    ], salesUrl).catch(() => {});
+    await sleep(200);
+
+    // ── Price (Cakto minimum is R$ 5,00; field selector uses placeholder "R$ 0,00") ─
+    const rawPrice = Math.max(5.00, ebook.price || DEFAULT_PRICE);
+    const price = String(rawPrice.toFixed(2)).replace('.', ',');
+    await fillInput(page, [
+      'input[placeholder*="0,00"]',
+      'input[placeholder*="R$" i]',
       'input[name="price"]',
       'input[placeholder*="preço" i]',
       'input[placeholder*="valor" i]',
@@ -240,7 +252,18 @@ async function publishToCakto(ebook) {
     await screenshot(page, 'form_filled');
     await dumpFormState(page, 'before_upload');
 
-    // ── Upload PDF ────────────────────────────────────────────────────────────
+    // ── Step 1 → Step 2: Click Continuar ─────────────────────────────────────
+    log.info('Avançando para step 2...');
+    const beforeStep1Url = page.url();
+    const step1ok = await clickByText(page, ['Continuar', 'Avançar', 'Próximo', 'Next'], 8000);
+    if (step1ok) {
+      await sleep(3000);
+      await screenshot(page, 'step2_after_continuar');
+      await dumpFormState(page, 'step2');
+    }
+
+    // ── Step 2: Upload PDF and Cover ──────────────────────────────────────────
+    // After "Continuar", Cakto might show file upload step
     if (ebook.pdfPath && fs.existsSync(ebook.pdfPath)) {
       log.info('Upload PDF: ' + ebook.pdfPath);
 
@@ -269,12 +292,11 @@ async function publishToCakto(ebook) {
         await sleep(8000);
         await screenshot(page, 'after_pdf_upload');
       } else {
-        log.warn('PDF file input not found');
+        log.warn('PDF file input not found on step 2');
         await dumpFormState(page, 'no_pdf_input');
       }
     }
 
-    // ── Upload cover ──────────────────────────────────────────────────────────
     if (ebook.coverPath && fs.existsSync(ebook.coverPath)) {
       log.info('Upload capa: ' + ebook.coverPath);
 
@@ -301,22 +323,23 @@ async function publishToCakto(ebook) {
         await coverInput.uploadFile(ebook.coverPath);
         log.info('Cover upload triggered');
         await sleep(5000);
-      } else { log.warn('Cover file input not found'); }
+      } else { log.warn('Cover file input not found on step 2'); }
     }
 
-    // ── Save / Publish ────────────────────────────────────────────────────────
+    // ── Save / Publish ─────────────────────────────────────────────────────────
     log.info('Publicando...');
     const beforeUrl = page.url();
 
     const published = await clickByText(page, [
-      'Publicar', 'Salvar e publicar', 'Criar produto', 'Criar', 'Salvar', 'Save', 'Avançar', 'Continuar',
+      'Publicar', 'Salvar e publicar', 'Criar produto', 'Criar', 'Salvar', 'Save',
+      'Continuar', 'Avançar', 'Finalizar',
     ], 10000);
 
     if (published) {
       // Wait for URL change (product created → navigate to product page or shortlink)
       await sleep(3000);
       let waited = 0;
-      while (page.url() === beforeUrl && waited < 10000) {
+      while (page.url() === beforeUrl && waited < 12000) {
         await sleep(1000);
         waited += 1000;
       }
