@@ -82,29 +82,74 @@ async function doSignin(page) {
 
   // Email step
   try {
-    const emailInput = await page.$('input[type="email"],input[name="email"],input[id*="email" i]');
-    if (emailInput) {
-      await emailInput.click({ clickCount: 3 });
-      await emailInput.type(KDP_EMAIL, { delay: 30 });
+    // Use coordinates-based click to avoid "not clickable" element handle issues
+    const emailPos = await page.evaluate(() => {
+      const sel = ['input[type="email"]', 'input[name="email"]', '#ap_email', 'input[id*="email"]'];
+      for (const s of sel) {
+        const el = document.querySelector(s);
+        if (el) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 };
+        }
+      }
+      return null;
+    });
+    if (emailPos) {
+      await page.mouse.click(emailPos.x, emailPos.y, { clickCount: 3 });
+      await sleep(200);
+      await page.keyboard.type(KDP_EMAIL, { delay: 30 });
       await sleep(400);
-      // Click "Continuar" / "Continue"
-      const cont = await page.$('#continue, input[id="continue"], button[type="submit"], input[type="submit"]');
-      if (cont) { await cont.click(); await sleep(3000); }
-    }
+      // Click "Continuar" / "Continue" button
+      const contPos = await page.evaluate(() => {
+        const sel = ['#continue', 'input[id="continue"]', 'input[type="submit"]', 'button[type="submit"]'];
+        for (const s of sel) {
+          const el = document.querySelector(s);
+          if (el) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 };
+          }
+        }
+        return null;
+      });
+      if (contPos) { await page.mouse.click(contPos.x, contPos.y); await sleep(3000); }
+      else { log.warn('Email continue button not found'); }
+    } else { log.warn('Email input not found on signin page'); }
   } catch(e) { log.warn('Email step error: ' + e.message); }
 
   await screenshot(page, 'signin_after_email');
 
   // Password step
   try {
-    const passInput = await page.$('input[type="password"],input[name="password"],input[id*="password" i]');
-    if (passInput) {
-      await passInput.click({ clickCount: 3 });
-      await passInput.type(KDP_PASSWORD, { delay: 30 });
+    const passPos = await page.evaluate(() => {
+      const sel = ['input[type="password"]', 'input[name="password"]', '#ap_password', 'input[id*="password"]'];
+      for (const s of sel) {
+        const el = document.querySelector(s);
+        if (el) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 };
+        }
+      }
+      return null;
+    });
+    if (passPos) {
+      await page.mouse.click(passPos.x, passPos.y, { clickCount: 3 });
+      await sleep(200);
+      await page.keyboard.type(KDP_PASSWORD, { delay: 30 });
       await sleep(400);
-      const signInBtn = await page.$('#signInSubmit, input[id="signInSubmit"], button[type="submit"], input[type="submit"]');
-      if (signInBtn) { await signInBtn.click(); await sleep(6000); }
-    }
+      const signInPos = await page.evaluate(() => {
+        const sel = ['#signInSubmit', 'input[id="signInSubmit"]', 'input[type="submit"]', 'button[type="submit"]'];
+        for (const s of sel) {
+          const el = document.querySelector(s);
+          if (el) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 };
+          }
+        }
+        return null;
+      });
+      if (signInPos) { await page.mouse.click(signInPos.x, signInPos.y); await sleep(6000); }
+      else { log.warn('Password submit button not found'); }
+    } else { log.warn('Password input not found'); }
   } catch(e) { log.warn('Password step error: ' + e.message); }
 
   await screenshot(page, 'signin_after_password');

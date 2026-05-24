@@ -48,27 +48,43 @@ async function screenshot(page, label) {
   } catch {}
 }
 
-// ── Click button by text — searches ALL elements, uses trusted mouse click ────
+// ── Click button by text — two-stage: standard selectors then ALL elements ────
 async function clickByText(page, texts, timeout = 12000) {
   const arr = Array.isArray(texts) ? texts : [texts];
   const deadline = Date.now() + timeout;
 
   while (Date.now() < deadline) {
     const pos = await page.evaluate((arr) => {
-      // Search ALL elements (not just button/role=button — Cakto uses custom components)
+      function norm(s) { return (s || '').toLowerCase().trim(); }
+
+      // Stage 1: standard button/role/a selectors (fast, works for regular buttons)
+      const btns = Array.from(document.querySelectorAll(
+        'button, [role="button"], a[class*="btn"], a[class*="button"], input[type="submit"], input[type="button"]'
+      ));
+      for (const text of arr) {
+        const tl = norm(text);
+        for (const el of btns) {
+          const t = norm(el.textContent || el.value || '');
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && r.height < 120 && (t === tl || t.startsWith(tl) || t.includes(tl))) {
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 40), tag: el.tagName, stage: 1 };
+          }
+        }
+      }
+
+      // Stage 2: ANY visible element in the form area (x > 280) — catches custom React components
       const all = Array.from(document.querySelectorAll('*'));
       for (const text of arr) {
-        const tl = text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+        const tl = norm(text);
         for (const el of all) {
-          // Skip elements with too many children (containers)
-          if (el.children.length > 3) continue;
-          const t = (el.textContent || '').trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-          if (!t || t.length > 80) continue;
+          const t = norm(el.textContent || '');
+          // Only near-leaf nodes with short text content
+          if (!t || t.length > 100) continue;
+          if (el.children.length > 4) continue;
           const r = el.getBoundingClientRect();
-          // Must be visible, in form area (x > 280 to avoid sidebar), reasonable height
-          if (r.width > 20 && r.height > 10 && r.height < 100 && r.x > 280 &&
+          if (r.width > 10 && r.height > 8 && r.height < 120 && r.x > 280 &&
               (t === tl || t.startsWith(tl) || t.includes(tl))) {
-            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 40), tag: el.tagName };
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 40), tag: el.tagName, stage: 2 };
           }
         }
       }
@@ -76,7 +92,7 @@ async function clickByText(page, texts, timeout = 12000) {
     }, arr);
 
     if (pos && pos.x > 0) {
-      log.info('Clicking "' + pos.text + '" [' + pos.tag + '] at (' + Math.round(pos.x) + ',' + Math.round(pos.y) + ')');
+      log.info('Clicking "' + pos.text + '" [' + pos.tag + '] @(' + Math.round(pos.x) + ',' + Math.round(pos.y) + ') stage=' + pos.stage);
       await page.mouse.click(pos.x, pos.y);
       return true;
     }
@@ -87,20 +103,80 @@ async function clickByText(page, texts, timeout = 12000) {
   return false;
 }
 
-// ── Fill input ────────────────────────────────────────────────────────────────
+// ── Fill input — React-compatible via native value setter ─────────────────────
 async function fillInput(page, selectors, value) {
   const arr = Array.isArray(selectors) ? selectors : [selectors];
+  const strVal = String(value);
   for (const sel of arr) {
     try {
-      const el = await page.$(sel);
-      if (el) {
-        await el.click({ clickCount: 3 });
-        await sleep(100);
-        await el.type(String(value), { delay: 20 });
+      const found = await page.evaluate((sel, val) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0) return null;
+        // Click to focus
+        el.focus();
+        el.click();
+        // Try React native value setter first (handles controlled inputs)
+        const nativeProto = el.tagName === 'TEXTAREA'
+          ? window.HTMLTextAreaElement.prototype
+          : window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(nativeProto, 'value');
+        if (nativeSetter && nativeSetter.set) {
+          nativeSetter.set.call(el, val);
+        } else {
+          el.value = val;
+        }
+        // Dispatch events so React detects the change
+        el.dispatchEvent(new Event('input',  { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return { tag: el.tagName, name: el.name || '', val: el.value.slice(0, 30) };
+      }, sel, strVal);
+      if (found) {
+        log.info('fillInput [' + sel + '] => "' + found.val + '"');
         return true;
       }
-    } catch {}
+    } catch(e) { log.warn('fillInput err [' + sel + ']: ' + e.message.slice(0, 60)); }
   }
+  return false;
+}
+
+// ── Fill price field — special handling for currency inputs ───────────────────
+async function fillPrice(page, price) {
+  const strPrice = String(price); // e.g. "5,99"
+  const result = await page.evaluate((strPrice) => {
+    // Try all likely price selectors
+    const selectors = [
+      'input[placeholder*="0,00"]',
+      'input[name="price"]',
+      'input[placeholder*="R$" i]',
+      'input[id*="price" i]',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (!el || el.getBoundingClientRect().width === 0) continue;
+      el.focus();
+      el.click();
+      // Select all
+      el.setSelectionRange(0, el.value.length);
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+      if (nativeSetter && nativeSetter.set) {
+        nativeSetter.set.call(el, strPrice);
+      } else {
+        el.value = strPrice;
+      }
+      el.dispatchEvent(new InputEvent('input',  { bubbles: true, data: strPrice }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur',   { bubbles: true }));
+      return { sel, val: el.value };
+    }
+    return null;
+  }, strPrice);
+  if (result) {
+    log.info('fillPrice => "' + result.val + '" via ' + result.sel);
+    return true;
+  }
+  log.warn('fillPrice: price field not found');
   return false;
 }
 
@@ -109,7 +185,7 @@ async function dumpFormState(page, label) {
   const info = await page.evaluate(() => {
     const inputs = Array.from(document.querySelectorAll('input, textarea, select'))
       .filter(e => e.getBoundingClientRect().width > 0)
-      .map(e => ({ tag: e.tagName, name: e.name, id: e.id, ph: e.placeholder ? e.placeholder.slice(0, 30) : '', type: e.type }))
+      .map(e => ({ tag: e.tagName, name: e.name, id: e.id, ph: e.placeholder ? e.placeholder.slice(0, 30) : '', type: e.type, val: (e.value || '').slice(0, 30) }))
       .slice(0, 15);
     const btns = Array.from(document.querySelectorAll('button, [role="button"]'))
       .filter(e => e.getBoundingClientRect().width > 0)
@@ -117,12 +193,18 @@ async function dumpFormState(page, label) {
       .filter(Boolean);
     const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'))
       .map(e => ({ id: e.id, name: e.name, accept: e.accept }));
-    return { url: location.href.slice(-60), inputs: inputs.slice(0, 10), btns: btns.slice(0, 10), fileInputs };
+    // Also check for any validation errors
+    const errors = Array.from(document.querySelectorAll('[class*="error" i], [class*="invalid" i], [aria-invalid="true"]'))
+      .filter(e => e.getBoundingClientRect().width > 0)
+      .map(e => (e.textContent || '').trim().slice(0, 50))
+      .filter(Boolean).slice(0, 5);
+    return { url: location.href.slice(-60), inputs: inputs.slice(0, 10), btns: btns.slice(0, 10), fileInputs, errors };
   }).catch(() => ({}));
   log.info('[' + label + '] url=' + info.url);
   log.info('[' + label + '] inputs: ' + JSON.stringify(info.inputs));
   log.info('[' + label + '] btns: ' + JSON.stringify(info.btns));
   log.info('[' + label + '] files: ' + JSON.stringify(info.fileInputs));
+  if (info.errors && info.errors.length > 0) log.warn('[' + label + '] ERRORS: ' + JSON.stringify(info.errors));
 }
 
 // ── Main publisher ────────────────────────────────────────────────────────────
@@ -248,19 +330,11 @@ async function publishToCakto(ebook) {
     ], salesUrl).catch(() => {});
     await sleep(200);
 
-    // ── Price (Cakto minimum is R$ 5,00; field selector uses placeholder "R$ 0,00") ─
+    // ── Price (Cakto minimum is R$ 5,00 — use special fillPrice for currency inputs) ─
     const rawPrice = Math.max(5.00, ebook.price || DEFAULT_PRICE);
     const price = String(rawPrice.toFixed(2)).replace('.', ',');
-    await fillInput(page, [
-      'input[placeholder*="0,00"]',
-      'input[placeholder*="R$" i]',
-      'input[name="price"]',
-      'input[placeholder*="preço" i]',
-      'input[placeholder*="valor" i]',
-      'input[placeholder*="price" i]',
-      'input[id*="price" i]',
-    ], price).catch(() => {});
-    await sleep(300);
+    await fillPrice(page, price);
+    await sleep(500);
 
     await screenshot(page, 'form_filled');
     await dumpFormState(page, 'before_upload');
@@ -268,11 +342,33 @@ async function publishToCakto(ebook) {
     // ── Step 1 → Step 2: Click Continuar ─────────────────────────────────────
     log.info('Avançando para step 2...');
     const beforeStep1Url = page.url();
-    const step1ok = await clickByText(page, ['Continuar', 'Avançar', 'Próximo', 'Next'], 8000);
-    if (step1ok) {
-      await sleep(3000);
-      await screenshot(page, 'step2_after_continuar');
-      await dumpFormState(page, 'step2');
+
+    // Try clicking Continuar up to 3 times — wait for form validation to settle
+    let step2reached = false;
+    for (let attempt = 0; attempt < 3 && !step2reached; attempt++) {
+      if (attempt > 0) {
+        log.info('Tentativa ' + (attempt + 1) + ' de avançar para step 2...');
+        // Re-fill price in case it was reset
+        await fillPrice(page, price);
+        await sleep(300);
+      }
+      const step1ok = await clickByText(page, ['Continuar', 'Avançar', 'Próximo', 'Next'], 8000);
+      if (step1ok) {
+        await sleep(4000);
+        await screenshot(page, 'step2_attempt' + attempt);
+        await dumpFormState(page, 'step2_attempt' + attempt);
+        // Check if we actually advanced (new file inputs appear, or URL changes)
+        const newState = await page.evaluate(() => {
+          const files = document.querySelectorAll('input[type="file"]');
+          const url = location.href;
+          return { fileCount: files.length, url: url.slice(-80) };
+        });
+        log.info('Step2 check: fileCount=' + newState.fileCount + ' url=' + newState.url);
+        if (newState.fileCount > 0 || page.url() !== beforeStep1Url) {
+          step2reached = true;
+          log.info('Avançou para step 2!');
+        }
+      }
     }
 
     // ── Step 2: Upload PDF and Cover ──────────────────────────────────────────
