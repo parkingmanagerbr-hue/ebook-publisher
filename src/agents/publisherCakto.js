@@ -48,28 +48,41 @@ async function screenshot(page, label) {
   } catch {}
 }
 
-// ── Click button by text ──────────────────────────────────────────────────────
+// ── Click button by text — searches ALL elements, uses trusted mouse click ────
 async function clickByText(page, texts, timeout = 12000) {
   const arr = Array.isArray(texts) ? texts : [texts];
   const deadline = Date.now() + timeout;
+
   while (Date.now() < deadline) {
-    const clicked = await page.evaluate((arr) => {
-      const btns = Array.from(document.querySelectorAll(
-        'button, [role="button"], a[class*="btn"], a[class*="button"], span[class*="btn"]'
-      ));
-      for (const t of arr) {
-        const tl = t.toLowerCase();
-        const el = btns.find(b => (b.textContent || '').trim().toLowerCase().includes(tl));
-        if (el) {
+    const pos = await page.evaluate((arr) => {
+      // Search ALL elements (not just button/role=button — Cakto uses custom components)
+      const all = Array.from(document.querySelectorAll('*'));
+      for (const text of arr) {
+        const tl = text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+        for (const el of all) {
+          // Skip elements with too many children (containers)
+          if (el.children.length > 3) continue;
+          const t = (el.textContent || '').trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+          if (!t || t.length > 80) continue;
           const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) { el.click(); return (el.textContent || '').trim().slice(0, 40); }
+          // Must be visible, in form area (x > 280 to avoid sidebar), reasonable height
+          if (r.width > 20 && r.height > 10 && r.height < 100 && r.x > 280 &&
+              (t === tl || t.startsWith(tl) || t.includes(tl))) {
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 40), tag: el.tagName };
+          }
         }
       }
       return null;
     }, arr);
-    if (clicked) { log.info('Clicked: "' + clicked + '"'); return true; }
+
+    if (pos && pos.x > 0) {
+      log.info('Clicking "' + pos.text + '" [' + pos.tag + '] at (' + Math.round(pos.x) + ',' + Math.round(pos.y) + ')');
+      await page.mouse.click(pos.x, pos.y);
+      return true;
+    }
     await sleep(500);
   }
+
   log.warn('Button not found: ' + arr.join(', '));
   return false;
 }
@@ -177,7 +190,7 @@ async function publishToCakto(ebook) {
       await sleep(2000);
     }
 
-    await sleep(2000);
+    await sleep(4000); // wait for React modal to fully render
     await screenshot(page, 'new_product_form');
     await dumpFormState(page, 'form_open');
 
