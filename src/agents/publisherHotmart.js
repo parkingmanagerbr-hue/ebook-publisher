@@ -216,11 +216,14 @@ async function createProduct(page, session, ebook) {
       if ((u.includes('/rest/v2/products') || u.includes('/product')) && [200,201].includes(evt.response.status)) {
         try {
           const rb = await client.send('Network.getResponseBody', {requestId: evt.requestId}).catch(()=>null);
-          if (rb && rb.body) {
+          if (rb && rb.body && rb.body.length < 100000) {
             try {
               const d = JSON.parse(rb.body);
-              if (d.id && !capturedNumericId) capturedNumericId = String(d.id);
-              if (d.ucode && !capturedUcode) capturedUcode = d.ucode;
+              // Try multiple response structures
+              const id = d.id || d.productId || (d.data && d.data.id) || (d.result && d.result.id) || (d.product && d.product.id);
+              const uc = d.ucode || d.productUcode || (d.data && d.data.ucode) || (d.product && d.product.ucode);
+              if (id && !capturedNumericId) { capturedNumericId = String(id); log.info('CDP id='+id+' from '+u.slice(0,70)); }
+              if (uc && !capturedUcode) capturedUcode = uc;
             } catch(_) {}
           }
         } catch(e) {}
@@ -328,25 +331,63 @@ async function createProduct(page, session, ebook) {
   },'paymentMode','PAY_IN_FULL').catch(()=>{});
   await sleep(300);
 
-  const priceFilled = await fillReactInput(page,
-    'input[name="price"], input[placeholder*="valor"], input[type="number"]',
-    DEFAULT_PRICE
-  );
+  // Fill price: try hot-input shadow DOM first, then native input, then click+type
+  const priceFilled = await page.evaluate((price) => {
+    // 1. Try hot-input web component with shadow DOM
+    const hotInputs = Array.from(document.querySelectorAll('hot-input'));
+    for (const hi of hotInputs) {
+      const n = (hi.getAttribute('name') || hi.name || '').toLowerCase();
+      if (n.includes('price') || n.includes('valor') || n.includes('amount') || hotInputs.length === 1) {
+        if (hi.shadowRoot) {
+          const inner = hi.shadowRoot.querySelector('input');
+          if (inner) {
+            const ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+            if (ns && ns.set) ns.set.call(inner, price); else inner.value = price;
+            inner.dispatchEvent(new Event('input', {bubbles:true}));
+            inner.dispatchEvent(new Event('change', {bubbles:true}));
+            return 'hot-input-shadow';
+          }
+        }
+        // Try setting attribute
+        hi.value = price;
+        hi.setAttribute('value', price);
+        return 'hot-input-attr';
+      }
+    }
+    // 2. Try standard input
+    const inp = document.querySelector('input[name="price"], input[placeholder*="valor"], input[placeholder*="preco"], input[type="number"]');
+    if (inp) {
+      const ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      if (ns && ns.set) ns.set.call(inp, price); else inp.value = price;
+      inp.dispatchEvent(new Event('input', {bubbles:true}));
+      inp.dispatchEvent(new Event('change', {bubbles:true}));
+      return 'native-input';
+    }
+    return false;
+  }, DEFAULT_PRICE);
+  log.info('Price filled: ' + priceFilled);
+
   if (!priceFilled) {
+    // Fallback: click somewhere on the form and type price
     await page.keyboard.press('Tab');
-    await sleep(200);
+    await sleep(300);
     await page.keyboard.type(DEFAULT_PRICE, {delay:50});
+    log.info('Price: keyboard-fallback');
   }
-  log.info('Price filled: ' + (priceFilled || 'keyboard-fallback'));
   await sleep(500);
 
+  // Click save/next button — try broad match
   const saveClicked = await page.evaluate(()=>{
-    const b = Array.from(document.querySelectorAll('button[type="submit"], button')).find(b => {
-      const t = (b.textContent||'').trim().toLowerCase();
-      return t === 'salvar' || t === 'criar produto' || t === 'criar' || t === 'finalizar' || t === 'salvar e publicar';
+    const allBtns = Array.from(document.querySelectorAll('button[type="submit"], button, hot-button'));
+    const b = allBtns.find(b => {
+      const t = (b.textContent||'').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+      return t.includes('salvar') || t.includes('criar') || t.includes('proximo') ||
+             t.includes('avanc') || t.includes('publicar') || t.includes('finaliz') ||
+             t === 'next' || t === 'save';
     });
     if (b) { b.click(); return b.textContent.trim(); }
-    return false;
+    // Log what buttons exist for debugging
+    return 'NOT_FOUND:' + allBtns.filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,20)).join('|');
   });
   log.info('Save pricing: ' + saveClicked);
   await sleep(6000);
@@ -355,9 +396,12 @@ async function createProduct(page, session, ebook) {
   const finalUrl = page.url();
   const urlM = finalUrl.match(/\/products\/manage\/(\d+)/);
   if (urlM) capturedNumericId = capturedNumericId || urlM[1];
-  log.info('numericId=' + capturedNumericId + ' url=' + finalUrl.slice(0,80));
+  // Also check URL for product ID in /products/add pattern
+  const addM = finalUrl.match(/\/products\/add\/4\/[^\/]+\/(\d+)/) || finalUrl.match(/\/(\d{6,})(?:\/|$)/);
+  if (addM) capturedNumericId = capturedNumericId || addM[1];
+  log.info('After pricing: numericId=' + capturedNumericId + ' url=' + finalUrl.slice(0,80));
 
-  // Fallback: look up by ucode if no numericId from URL/CDP
+  // Fallback 1: look up by ucode from CDP
   if (!capturedNumericId && capturedUcode) {
     const token = await page.evaluate(()=>localStorage.getItem('token')).catch(()=>null);
     if (token) {
@@ -368,8 +412,34 @@ async function createProduct(page, session, ebook) {
           return r.json();
         }, token);
         const item = (resp.items||[]).find(x => x.ucode === capturedUcode);
-        if (item) capturedNumericId = String(item.id);
+        if (item) { capturedNumericId = String(item.id); log.info('ID from ucode lookup: '+capturedNumericId); }
       } catch(e) {}
+    }
+  }
+
+  // Fallback 2: query product list for most recently created product matching our title
+  if (!capturedNumericId) {
+    log.warn('No ID from CDP/URL — querying product list for most recent product...');
+    const token = await page.evaluate(()=>localStorage.getItem('token')).catch(()=>null);
+    if (token) {
+      try {
+        const resp = await page.evaluate(async(tok, tit) => {
+          const r = await fetch('https://api-product.vulcano.hotmart.com/product/v1/user/product/list?max=10&page=0&orderBy=creationDate&order=DESC',
+            {headers:{'Authorization':'Bearer '+tok}});
+          const data = await r.json();
+          return data;
+        }, token, title);
+        const items = resp.items || resp.list || resp.content || [];
+        if (items.length > 0) {
+          // Most recent product — check if name matches
+          const match = items.find(x => (x.name||'').toLowerCase().includes(title.toLowerCase().slice(0,15)));
+          const candidate = match || items[0];
+          if (candidate && candidate.id) {
+            capturedNumericId = String(candidate.id);
+            log.info('ID from list (most recent): '+capturedNumericId+' name='+candidate.name);
+          }
+        }
+      } catch(e) { log.warn('List API error: '+e.message.slice(0,60)); }
     }
   }
 
