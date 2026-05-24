@@ -84,6 +84,10 @@ async function publishReadyEbooks() {
   if (readyEbooks.length === 0) return 0;
 
   logger.info('[publish-ready] ' + readyEbooks.length + ' ebooks prontos — publicando antes de gerar novos');
+  // Hot-reload publishers (clear cache so updated files on disk are always used)
+  ['../agents/publisherHotmart','../agents/publisherCakto','../agents/publisherAmazon'].forEach(m => {
+    try { delete require.cache[require.resolve(m)]; } catch {}
+  });
   const { ensureSession } = require('../agents/sessionAgent');
   const { publishToHotmart } = require('../agents/publisherHotmart');
   const { publishToCakto } = require('../agents/publisherCakto');
@@ -196,6 +200,10 @@ async function runOneCycle(topicOverride = null) {
   };
 
   const { ensureSession } = require('../agents/sessionAgent');
+  // Hot-reload publishers (always use latest file on disk)
+  ['../agents/publisherHotmart','../agents/publisherCakto','../agents/publisherAmazon'].forEach(m => {
+    try { delete require.cache[require.resolve(m)]; } catch {}
+  });
 
   if (shouldPublishTo('CAKTO')) {
     setState({ currentStep: 'publishing:cakto' });
