@@ -170,7 +170,7 @@ function updateEbookStatus(id, status, extra = {}) {
   if (extra.caktoProductId) { sets.push('cakto_product_id = ?'); vals.push(extra.caktoProductId); }
   if (extra.amazonAsin) { sets.push('amazon_asin = ?'); vals.push(extra.amazonAsin); }
   if (extra.amazonUrl) { sets.push('amazon_url = ?'); vals.push(extra.amazonUrl); }
-  if (status === 'published') { sets.push('published_at = datetime("now")'); }
+  if (status === 'published') { sets.push("published_at = datetime('now')"); }
   vals.push(id);
   db.prepare(`UPDATE ebooks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
 }
