@@ -80,7 +80,7 @@ async function publishReadyEbooks() {
   const db = require('./database');
   const { getDb } = db;
   const rawDb = getDb();
-  const readyEbooks = rawDb.prepare("SELECT * FROM ebooks WHERE status='ready' ORDER BY rowid ASC LIMIT 3").all();
+  const readyEbooks = rawDb.prepare("SELECT * FROM ebooks WHERE status='ready' ORDER BY rowid ASC LIMIT 5").all();
   if (readyEbooks.length === 0) return 0;
 
   logger.info('[publish-ready] ' + readyEbooks.length + ' ebooks prontos — publicando antes de gerar novos');
@@ -113,15 +113,24 @@ async function publishReadyEbooks() {
         if (results.cakto?.success) logger.info('[publish-ready] Cakto OK: ' + (results.cakto.url || ''));
         else logger.warn('[publish-ready] Cakto falhou: ' + (results.cakto?.error || 'desconhecido'));
       }
+      await new Promise(r => setTimeout(r, 3000));
+      if (shouldPublishTo('AMAZON') && await ensureSession('amazon')) {
+        setState({ currentStep: 'publishing:amazon' });
+        results.amazon = await publishToAmazon(ebookData);
+        if (results.amazon?.success) logger.info('[publish-ready] Amazon OK: ' + (results.amazon.url || ''));
+        else logger.warn('[publish-ready] Amazon falhou: ' + (results.amazon?.error || 'desconhecido'));
+      }
     } catch (e) {
       logger.error('[publish-ready] Erro: ' + e.message.slice(0, 100));
     }
     const anyOk = Object.values(results).some(r => r?.success);
     updateEbookStatus(ebook.id, anyOk ? 'published' : 'ready', {
       hotmartUrl: results.hotmart?.url || null,
-      hotmartProductId: results.hotmart?.productId || null,
+      hotmartProductId: results.hotmart?.hotmartProductId || results.hotmart?.productId || null,
       caktoUrl: results.cakto?.url || null,
-      caktoProductId: results.cakto?.productId || null,
+      caktoProductId: results.cakto?.caktoProductId || results.cakto?.productId || null,
+      amazonAsin: results.amazon?.asin || null,
+      amazonUrl: results.amazon?.url || null,
     });
     if (anyOk) published++;
     await new Promise(r => setTimeout(r, 5000));
@@ -227,13 +236,16 @@ async function runOneCycle(topicOverride = null) {
     } catch (e) { logger.warn(`⚠️  Amazon KDP: ${e.message}`); }
   }
 
-  // Atualizar status no DB
+  // Atualizar status no DB — usar os campos corretos de cada publisher
   const anyPublished = Object.values(publishResults).some(r => r?.success);
   try {
     db.updateEbookStatus(result.ebookId, anyPublished ? 'published' : 'ready', {
-      caktoUrl:   publishResults.cakto?.url,
-      hotmartUrl: publishResults.hotmart?.url,
-      amazonUrl:  publishResults.amazon?.url,
+      caktoUrl:        publishResults.cakto?.url,
+      caktoProductId:  publishResults.cakto?.caktoProductId || publishResults.cakto?.productId || null,
+      hotmartUrl:      publishResults.hotmart?.url,
+      hotmartProductId: publishResults.hotmart?.hotmartProductId || publishResults.hotmart?.productId || null,
+      amazonUrl:       publishResults.amazon?.url,
+      amazonAsin:      publishResults.amazon?.asin || null,
     });
   } catch (_) {}
 

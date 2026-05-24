@@ -213,16 +213,18 @@ async function createProduct(page, session, ebook) {
     await client.send('Network.enable');
     client.on('Network.responseReceived', async(evt) => {
       const u = evt.response.url;
-      if ((u.includes('/rest/v2/products') || u.includes('/product')) && [200,201].includes(evt.response.status)) {
+      const isProductApi = u.includes('/product') || u.includes('/rest/v2') || u.includes('vulcano') || u.includes('/api/v') || u.includes('/wizard');
+      if (isProductApi && [200,201].includes(evt.response.status)) {
         try {
           const rb = await client.send('Network.getResponseBody', {requestId: evt.requestId}).catch(()=>null);
-          if (rb && rb.body && rb.body.length < 100000) {
+          if (rb && rb.body && rb.body.length < 200000) {
             try {
               const d = JSON.parse(rb.body);
               // Try multiple response structures
-              const id = d.id || d.productId || (d.data && d.data.id) || (d.result && d.result.id) || (d.product && d.product.id);
+              const id = d.id || d.productId || d.numericId || (d.data && (d.data.id||d.data.productId)) || (d.result && (d.result.id||d.result.productId)) || (d.product && (d.product.id||d.product.numericId));
               const uc = d.ucode || d.productUcode || (d.data && d.data.ucode) || (d.product && d.product.ucode);
-              if (id && !capturedNumericId) { capturedNumericId = String(id); log.info('CDP id='+id+' from '+u.slice(0,70)); }
+              if (id) log.info('CDP api='+u.slice(0,70)+' id='+id);
+              if (id && !capturedNumericId) { capturedNumericId = String(id); }
               if (uc && !capturedUcode) capturedUcode = uc;
             } catch(_) {}
           }
@@ -317,74 +319,317 @@ async function createProduct(page, session, ebook) {
 
   // Step 3: Fill pricing form
   log.info('Pricing URL: ' + page.url().slice(0,80));
-  await sleep(2000);
-
-  await page.evaluate((n,v)=>{
-    const s = document.querySelector('hot-select[name="'+n+'"],select[name="'+n+'"]');
-    if(s){s.value=v;s.dispatchEvent(new Event('change',{bubbles:true}));}
-  },'currency','BRL').catch(()=>{});
-  await sleep(300);
-
-  await page.evaluate((n,v)=>{
-    const s = document.querySelector('hot-select[name="'+n+'"],select[name="'+n+'"]');
-    if(s){s.value=v;s.dispatchEvent(new Event('change',{bubbles:true}));}
-  },'paymentMode','PAY_IN_FULL').catch(()=>{});
-  await sleep(300);
-
-  // Wait for pricing page to fully render
   await sleep(3000);
-  log.info('Pricing page body len=' + await page.evaluate(()=>document.body?document.body.innerHTML.length:0).catch(()=>0));
 
-  // Fill price field: use mouse.click to find and focus the price input, then type
-  // The price field may be a hot-input web component; we click it by coordinates then type
-  const priceFieldInfo = await page.evaluate(() => {
-    // Try to find price-related elements for click targeting
-    const candidates = [
-      document.querySelector('input[name="price"], input[type="number"]'),
-      document.querySelector('hot-input[name="price"], hot-input[name="amount"], hot-input[name="valor"]'),
-      document.querySelector('hot-input'),
-      document.querySelector('[class*="price"] input, [class*="valor"] input, [class*="amount"] input'),
-    ].filter(Boolean);
-
-    for (const el of candidates) {
-      const r = el.getBoundingClientRect();
-      if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2, tag: el.tagName, name: el.getAttribute('name')||el.name||'' };
+  // STEP 3a: Dismiss cookie banner
+  // Cookie banner uses <hotmart-cookie-policy> custom element with buttons in its SHADOW DOM
+  // Regular document.querySelectorAll('button') cannot find them
+  const cookieDismissed = await page.evaluate(() => {
+    // Try shadow DOM of hotmart-cookie-policy
+    const cookieEl = document.querySelector('hotmart-cookie-policy');
+    if (cookieEl) {
+      const roots = [cookieEl.shadowRoot, cookieEl];
+      for (const root of roots) {
+        if (!root) continue;
+        const btns = Array.from(root.querySelectorAll('button'));
+        // "Permitir todos" is the last/rightmost button (accept all)
+        const allow = btns.find(b => {
+          const t = (b.textContent||'').trim().toLowerCase();
+          return t.includes('permitir todos') || t.includes('allow all') || t.includes('accept all') || t.includes('aceitar');
+        });
+        if (allow) { allow.click(); return 'shadow:'+allow.textContent.trim().slice(0,30); }
+        if (btns.length > 0) {
+          const last = btns[btns.length-1];
+          if (last.getBoundingClientRect().width > 0) { last.click(); return 'shadow-last:'+last.textContent.trim().slice(0,30); }
+        }
+      }
     }
-    // Fallback: list all visible inputs for debugging
-    const allInputs = Array.from(document.querySelectorAll('input, hot-input')).map(el => {
-      const r = el.getBoundingClientRect();
-      return r.width > 0 ? { x: r.left+r.width/2, y: r.top+r.height/2, tag: el.tagName, name: el.getAttribute('name')||el.name||el.id||'' } : null;
-    }).filter(Boolean);
-    return { inputs: allInputs.slice(0,5) };
-  });
-  log.info('Price field info: ' + JSON.stringify(priceFieldInfo).slice(0,100));
+    // Fallback: scroll all buttons in document including inside all shadow roots
+    const allEls = document.querySelectorAll('*');
+    for (const el of allEls) {
+      if (el.shadowRoot) {
+        const btns = Array.from(el.shadowRoot.querySelectorAll('button'));
+        const allow = btns.find(b => {
+          const t = (b.textContent||'').trim().toLowerCase();
+          return t.includes('permitir') || t.includes('allow') || t.includes('accept');
+        });
+        if (allow) { allow.click(); return 'any-shadow:'+allow.textContent.trim().slice(0,30); }
+      }
+    }
+    return 'no-cookie-banner';
+  }).catch(e=>'err:'+e.message.slice(0,30));
+  log.info('Cookie banner: ' + cookieDismissed);
+  await sleep(1500);
 
-  if (priceFieldInfo && priceFieldInfo.x) {
-    // Click price field and type
-    await page.mouse.click(priceFieldInfo.x, priceFieldInfo.y);
-    await sleep(300);
-    await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control');
-    await sleep(100);
-    await page.keyboard.type(DEFAULT_PRICE, {delay:50});
-    log.info('Price filled via mouse.click+type');
-  } else {
-    // Broad fallback: find first visible input on page and type into it
-    const firstInput = priceFieldInfo && priceFieldInfo.inputs && priceFieldInfo.inputs[0];
-    if (firstInput) {
-      log.info('Price fallback: clicking first input at ' + JSON.stringify(firstInput));
-      await page.mouse.click(firstInput.x, firstInput.y);
-      await sleep(300);
-      await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control');
-      await sleep(100);
-      await page.keyboard.type(DEFAULT_PRICE, {delay:50});
-    } else {
-      log.warn('No price input found at all on pricing page');
+  // STEP 3b: Click the currency dropdown ("Selecione uma moeda") and select BRL
+  // Take a screenshot and dump full HTML for debugging
+  try {
+    await page.screenshot({path: '/app/pricing_debug.png', fullPage: true});
+    log.info('Screenshot saved: /app/pricing_debug.png');
+    const fullHtml = await page.evaluate(()=>document.documentElement.outerHTML);
+    require('fs').writeFileSync('/app/pricing_debug.html', fullHtml);
+    log.info('HTML saved: /app/pricing_debug.html (' + fullHtml.length + ' bytes)');
+  } catch(e) { log.warn('Screenshot/HTML dump failed: '+e.message); }
+
+  // Dump visible interactive elements for debugging
+  const pageDebug = await page.evaluate(() => {
+    const all = Array.from(document.querySelectorAll('*'));
+    const vis = all.filter(e => { const r=e.getBoundingClientRect(); return r.width>0&&r.height>10&&['INPUT','SELECT','BUTTON','HOT-SELECT','HOT-INPUT','TEXTAREA'].includes(e.tagName); });
+    const texts = all.filter(e => { const t=(e.textContent||'').trim(); const r=e.getBoundingClientRect(); return r.width>0&&r.height>5&&t.length>0&&t.length<80&&e.children.length<3; }).map(e=>(e.textContent||'').trim().slice(0,50)).filter((v,i,a)=>a.indexOf(v)===i).slice(0,40);
+    return { interactive: vis.map(e=>({tag:e.tagName,name:e.name||e.getAttribute('name')||'',id:e.id||'',text:e.textContent.trim().slice(0,30)})), texts };
+  }).catch(()=>null);
+  log.info('Page debug: ' + JSON.stringify(pageDebug).slice(0,500));
+
+  // Currency info removed — now handled directly via hot-select-option[value="BRL"]
+
+  // STEP 3b: Open hot-select currency dropdown and select BRL
+  // The hot-select web component renders options in its shadow DOM when opened.
+  // hot-select-option elements in the light DOM are templates, not directly clickable.
+  // Strategy: click the hot-select → it opens → interact with shadow DOM options OR use keyboard.
+
+  // Click the hot-select to open it and focus it
+  const hotSelectPos = await page.evaluate(() => {
+    const el = document.querySelector('hot-select#currency, hot-select[placeholder*="moeda"]');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 ? {x: r.left+r.width/2, y: r.top+r.height/2} : null;
+  }).catch(()=>null);
+  log.info('hot-select pos: ' + JSON.stringify(hotSelectPos));
+
+  if (hotSelectPos) {
+    await page.mouse.click(hotSelectPos.x, hotSelectPos.y);
+    await sleep(1000); // Wait for dropdown to open
+
+    // Try 1: shadow DOM items now rendered after opening
+    const shadowBRL = await page.evaluate(() => {
+      const el = document.querySelector('hot-select#currency');
+      if (el && el.shadowRoot) {
+        const items = Array.from(el.shadowRoot.querySelectorAll('[role="option"], li, [class*="option-item"], [class*="list-item"]'));
+        const brl = items.find(i => (i.textContent||'').toLowerCase().includes('real'));
+        if (brl) { brl.click(); return 'shadow:'+brl.textContent.trim().slice(0,30); }
+        // Log shadow DOM structure for debugging
+        return 'shadow-html:'+el.shadowRoot.innerHTML.slice(0,200);
+      }
+      return null;
+    }).catch(()=>null);
+    log.info('Shadow BRL result: ' + (shadowBRL||'null').slice(0,100));
+    await sleep(500);
+
+    // Try 2: Keyboard — type "Real" to filter, then ArrowDown + Enter
+    if (!shadowBRL || shadowBRL.startsWith('shadow-html:')) {
+      // Type to filter — the hot-select has a search input in its shadow DOM
+      log.info('Typing "Real" to filter dropdown options');
+      await page.keyboard.type('Real', {delay: 80});
+      await sleep(1000); // Wait for dropdown to render matching option
+
+      // NOW: get the bounding rect of the visible "Real Brasileiro" option
+      // Then use page.mouse.click() (creates trusted events — web component responds)
+      const brlRect = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('*'));
+        for (const el of all) {
+          const t = (el.textContent||'').trim();
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && r.height < 60 && t.length < 50 &&
+              (t === 'Real Brasileiro' || t.toLowerCase().includes('real brasileiro'))) {
+            return {x: r.left+r.width/2, y: r.top+r.height/2, tag: el.tagName, text: t.slice(0,30)};
+          }
+        }
+        return null;
+      }).catch(()=>null);
+      log.info('BRL option rect: ' + JSON.stringify(brlRect));
+
+      if (brlRect && brlRect.x) {
+        // Use page.mouse.click() for trusted event (web components check isTrusted)
+        await page.mouse.click(brlRect.x, brlRect.y);
+        log.info('Trusted mouse click on BRL option at (' + Math.round(brlRect.x) + ',' + Math.round(brlRect.y) + ')');
+        await sleep(2500);
+      } else {
+        // Fallback: ArrowDown+Enter
+        log.info('BRL not found — trying ArrowDown+Enter');
+        await page.keyboard.press('ArrowDown');
+        await sleep(300);
+        await page.keyboard.press('Enter');
+        await sleep(2000);
+      }
     }
   }
-  await sleep(500);
 
-  // Click save/next button — try broad match
-  const saveClicked = await page.evaluate(()=>{
+  // Take screenshot after currency interaction
+  await page.screenshot({path: '/app/pricing_after_brl.png', fullPage: false}).catch(()=>{});
+  log.info('Screenshot after BRL: /app/pricing_after_brl.png');
+  const hotSelectValue = await page.evaluate(()=>{
+    const el = document.querySelector('hot-select#currency');
+    return el ? (el.value || el.getAttribute('value') || 'no-value') : 'not-found';
+  }).catch(()=>'err');
+  log.info('hot-select value after BRL: ' + hotSelectValue);
+
+  // STEP 3c: Wait for price field to appear (dynamic — only shows after currency selected)
+  // Price field takes ~15-25s to appear after BRL selection. Poll up to 35s.
+  // Wait for any visible input to appear (price field name is a JS property, not HTML attr)
+  let priceAppeared = false;
+  for (let pi = 0; pi < 10; pi++) {
+    await sleep(1000);
+    priceAppeared = await page.evaluate(() => {
+      // Check all inputs — field may have name as JS property not HTML attribute
+      const inputs = Array.from(document.querySelectorAll('input, hot-input'));
+      return inputs.some(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 5 && el.type !== 'hidden' && el.type !== 'checkbox' && el.type !== 'radio';
+      });
+    }).catch(()=>false);
+    if (priceAppeared) { log.info('Price field appeared at t='+(pi+1)+'s'); break; }
+    if (pi % 3 === 2) log.info('Waiting for price field t='+(pi+1)+'s');
+  }
+  log.info('Price field appeared: ' + priceAppeared);
+  log.info('Pricing page body len=' + await page.evaluate(()=>document.body?document.body.innerHTML.length:0).catch(()=>0));
+
+  const priceFieldInfo = await page.evaluate(() => {
+    // 1. Regular input selectors
+    const directCandidates = [
+      document.querySelector('input[name="price"],input[name="amount"],input[type="number"],input[name="valor"]'),
+      document.querySelector('[class*="price"] input,[class*="valor"] input,[class*="amount"] input'),
+    ].filter(Boolean);
+    for (const el of directCandidates) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) return { x: r.left+r.width/2, y: r.top+r.height/2, tag: el.tagName, name: el.getAttribute('name')||el.name||'', source: 'direct' };
+    }
+    // 2. HOT-INPUT web components (check shadow DOM)
+    const hotInputs = document.querySelectorAll('hot-input');
+    for (const el of hotInputs) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) {
+        // Check shadow DOM for an input
+        const shadowInput = el.shadowRoot && el.shadowRoot.querySelector('input');
+        if (shadowInput) {
+          const ri = shadowInput.getBoundingClientRect();
+          if (ri.width > 0) return {x: ri.left+ri.width/2, y: ri.top+ri.height/2, tag: 'HOT-INPUT(shadow)', name: shadowInput.name||el.getAttribute('name')||'', source: 'shadow'};
+        }
+        // No shadow - click the hot-input itself
+        return {x: r.left+r.width/2, y: r.top+r.height/2, tag: 'HOT-INPUT', name: el.getAttribute('name')||el.id||'', source: 'hot-input', el: el.outerHTML.slice(0,100)};
+      }
+    }
+    // 3. All visible inputs as last resort
+    const allInputs = Array.from(document.querySelectorAll('input')).map(el => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 5 ? { x: r.left+r.width/2, y: r.top+r.height/2, tag: el.tagName, name: el.getAttribute('name')||el.name||el.id||'', type: el.type, source: 'all' } : null;
+    }).filter(Boolean);
+    if (allInputs.length > 0) return allInputs[0];
+    // 4. Check ALL custom elements for shadow inputs
+    const allCustom = document.querySelectorAll('*');
+    for (const el of allCustom) {
+      if (el.shadowRoot) {
+        const sinp = el.shadowRoot.querySelector('input[type="number"],input[type="text"]');
+        if (sinp) {
+          const r = sinp.getBoundingClientRect();
+          if (r.width > 0) return {x: r.left+r.width/2, y: r.top+r.height/2, tag: el.tagName+'[shadow]', name: sinp.name||'', source: 'deep-shadow'};
+        }
+      }
+    }
+    return null;
+  }).catch(()=>null);
+  log.info('Price field: ' + JSON.stringify(priceFieldInfo).slice(0,200));
+
+  // STEP 3d: Select "Forma de pagamento" (payment method) — appears after BRL selected
+  // Usually a hot-select with options like "Boleto e cartão de crédito", "Cartão de crédito", etc.
+  await sleep(500);
+  const paymentPos = await page.evaluate(() => {
+    // Find hot-select with placeholder "Selecione uma forma de pagamento"
+    const all = document.querySelectorAll('hot-select');
+    for (const el of all) {
+      const ph = el.getAttribute('placeholder')||'';
+      if (ph.toLowerCase().includes('pagamento') || ph.toLowerCase().includes('payment')) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0) return {x: r.left+r.width/2, y: r.top+r.height/2, ph};
+      }
+    }
+    return null;
+  }).catch(()=>null);
+  log.info('Payment method pos: ' + JSON.stringify(paymentPos));
+
+  if (paymentPos) {
+    // Click to open payment method dropdown
+    await page.mouse.click(paymentPos.x, paymentPos.y);
+    await sleep(1000);
+    // Find and click first available payment option via mouse (trusted click)
+    // CRITICAL: must constrain x > 300 to avoid sidebar nav items (Carteira at x=36)
+    const paymentOptRect = await page.evaluate((minX) => {
+      const all = Array.from(document.querySelectorAll('*'));
+      // First pass: look for HOT-SELECT-OPTION elements (most reliable)
+      for (const el of all) {
+        if (el.tagName === 'HOT-SELECT-OPTION') {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && r.x > minX) {
+            const t = (el.textContent||'').trim();
+            return {x: r.left+r.width/2, y: r.top+r.height/2, text: t.slice(0,40), tag: el.tagName, rx: Math.round(r.x)};
+          }
+        }
+      }
+      // Second pass: visible payment-keyword elements strictly in form area (x > 300)
+      for (const el of all) {
+        const t = (el.textContent||'').trim();
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && r.height < 60 && r.x > minX && t.length > 0 && t.length < 80 &&
+            (t.toLowerCase().includes('cartão') || t.toLowerCase().includes('boleto') ||
+             t.toLowerCase().includes('cartao') || t.toLowerCase().includes('credit') ||
+             t.toLowerCase().includes('pix') || t.toLowerCase().includes('débito') ||
+             t.toLowerCase().includes('debito'))) {
+          return {x: r.left+r.width/2, y: r.top+r.height/2, text: t.slice(0,40), tag: el.tagName, rx: Math.round(r.x)};
+        }
+      }
+      return null;
+    }, 300).catch(()=>null);
+    log.info('Payment option: ' + JSON.stringify(paymentOptRect));
+    if (paymentOptRect) {
+      await page.mouse.click(paymentOptRect.x, paymentOptRect.y);
+      log.info('Payment method clicked: ' + paymentOptRect.text);
+      await sleep(1500);
+    } else {
+      // Try ArrowDown+Enter
+      await page.keyboard.press('ArrowDown');
+      await sleep(300);
+      await page.keyboard.press('Enter');
+      await sleep(1500);
+      log.info('Payment: ArrowDown+Enter');
+    }
+  } else {
+    log.info('Payment method not found (may not be required or already set)');
+  }
+
+  if (priceFieldInfo && priceFieldInfo.x) {
+    // Click to focus the price field (single click — no triple-click!)
+    // Currency mask is RIGHT-TO-LEFT: typing "4","9","9" shifts digits:
+    //   "0,04" → "0,49" → "4,99"   ✓
+    // Triple-click selects all and breaks the mask (resets to 0,00 on any replacement)
+    await page.mouse.click(priceFieldInfo.x, priceFieldInfo.y);
+    await sleep(400);
+    // Move cursor to end of field so digits append correctly
+    await page.keyboard.press('End');
+    await sleep(100);
+    // Type only digits — currency mask handles formatting
+    const priceDigits = DEFAULT_PRICE.replace(/[^0-9]/g, ''); // "4,99" → "499"
+    await page.keyboard.type(priceDigits, {delay:150});
+    await sleep(600);
+    // Read back what was entered
+    const priceEntered = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input')).filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 5 && el.type !== 'hidden';
+      });
+      return inputs.map(el => ({name: el.name||el.getAttribute('name')||el.id||'', val: el.value, type: el.type}));
+    }).catch(()=>null);
+    log.info('Price fields state: ' + JSON.stringify(priceEntered).slice(0,200));
+    // Take screenshot to verify
+    await page.screenshot({path: '/app/pricing_with_price.png', fullPage: false}).catch(()=>{});
+    log.info('Price screenshot saved: /app/pricing_with_price.png');
+  } else {
+    log.warn('Price field not found after currency selection');
+    await page.screenshot({path: '/app/pricing_with_price.png', fullPage: false}).catch(()=>{});
+  }
+  await sleep(1000);
+
+  // Click save/next button via TRUSTED mouse.click() — hot-button ignores untrusted evaluate().click()
+  // CRITICAL: scrollIntoView BEFORE getBoundingClientRect — button may be below 800px viewport
+  const saveBtnPos = await page.evaluate(()=>{
     const allBtns = Array.from(document.querySelectorAll('button[type="submit"], button, hot-button'));
     const b = allBtns.find(b => {
       const t = (b.textContent||'').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
@@ -392,19 +637,40 @@ async function createProduct(page, session, ebook) {
              t.includes('avanc') || t.includes('publicar') || t.includes('finaliz') ||
              t === 'next' || t === 'save';
     });
-    if (b) { b.click(); return b.textContent.trim(); }
+    if (b) {
+      // Scroll into viewport FIRST so mouse.click() coordinates are on-screen
+      b.scrollIntoView({behavior: 'instant', block: 'center'});
+      const r = b.getBoundingClientRect();
+      if (r.width > 0) return {x: r.left+r.width/2, y: r.top+r.height/2, text: b.textContent.trim().slice(0,30)};
+    }
     // Log what buttons exist for debugging
-    return 'NOT_FOUND:' + allBtns.filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,20)).join('|');
+    const visible = allBtns.filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,20));
+    return {x:0, y:0, text: 'NOT_FOUND:'+visible.join('|')};
   });
-  log.info('Save pricing: ' + saveClicked);
-  await sleep(6000);
+  await sleep(400); // let scroll settle before mouse.click
+  log.info('Save btn pos: ' + JSON.stringify(saveBtnPos));
+  if (saveBtnPos && saveBtnPos.x > 0) {
+    await page.mouse.click(saveBtnPos.x, saveBtnPos.y);
+    log.info('Save pricing clicked (trusted): ' + saveBtnPos.text);
+  } else {
+    log.warn('Save button not found: ' + (saveBtnPos && saveBtnPos.text));
+  }
+
+  // Wait for URL to change after save — product ID often appears in the URL
+  for (let i = 0; i < 15; i++) {
+    await sleep(1000);
+    const u = page.url();
+    const m = u.match(/\/products\/manage\/(\d+)/) || u.match(/\/products\/add\/4\/[^\/]+\/(\d+)/) || u.match(/[?&]productId=(\d+)/) || u.match(/\/(\d{7,})(?:\/|$|\?)/);
+    if (m) { capturedNumericId = capturedNumericId || m[1]; log.info('URL id='+m[1]+' at t='+(i+1)+'s: '+u.slice(0,80)); break; }
+    if (i % 3 === 2) log.info('Pricing save wait t='+(i+1)+'s url='+u.slice(0,60));
+  }
 
   // Capture product ID from final URL
   const finalUrl = page.url();
   const urlM = finalUrl.match(/\/products\/manage\/(\d+)/);
   if (urlM) capturedNumericId = capturedNumericId || urlM[1];
   // Also check URL for product ID in /products/add pattern
-  const addM = finalUrl.match(/\/products\/add\/4\/[^\/]+\/(\d+)/) || finalUrl.match(/\/(\d{6,})(?:\/|$)/);
+  const addM = finalUrl.match(/\/products\/add\/4\/[^\/]+\/(\d+)/) || finalUrl.match(/\/(\d{7,})(?:\/|$|\?)/);
   if (addM) capturedNumericId = capturedNumericId || addM[1];
   log.info('After pricing: numericId=' + capturedNumericId + ' url=' + finalUrl.slice(0,80));
 
@@ -414,39 +680,51 @@ async function createProduct(page, session, ebook) {
     if (token) {
       try {
         const resp = await page.evaluate(async(tok) => {
-          const r = await fetch('https://api-product.vulcano.hotmart.com/product/v1/user/product/list?max=200&page=0',
+          const r = await fetch('https://api-product.vulcano.hotmart.com/product/v2/user/product/list?max=200&page=0',
             {headers:{'Authorization':'Bearer '+tok}});
-          return r.json();
+          const txt = await r.text();
+          try { return JSON.parse(txt); } catch(e) { return {_raw: txt.slice(0,100)}; }
         }, token);
-        const item = (resp.items||[]).find(x => x.ucode === capturedUcode);
+        const item = (resp.items||resp.content||resp.list||[]).find(x => x.ucode === capturedUcode);
         if (item) { capturedNumericId = String(item.id); log.info('ID from ucode lookup: '+capturedNumericId); }
-      } catch(e) {}
+        else log.info('Ucode lookup response: '+JSON.stringify(resp).slice(0,100));
+      } catch(e) { log.warn('Ucode lookup failed: '+e.message.slice(0,50)); }
     }
   }
 
-  // Fallback 2: query product list for most recently created product matching our title
+  // Fallback 2: query product list APIs (try multiple endpoints)
   if (!capturedNumericId) {
     log.warn('No ID from CDP/URL — querying product list for most recent product...');
     const token = await page.evaluate(()=>localStorage.getItem('token')).catch(()=>null);
     if (token) {
-      try {
-        const resp = await page.evaluate(async(tok, tit) => {
-          const r = await fetch('https://api-product.vulcano.hotmart.com/product/v1/user/product/list?max=10&page=0',
-            {headers:{'Authorization':'Bearer '+tok}});
-          const data = await r.json();
-          return data;
-        }, token, title);
-        const items = resp.items || resp.list || resp.content || [];
-        if (items.length > 0) {
-          // Most recent product — check if name matches
-          const match = items.find(x => (x.name||'').toLowerCase().includes(title.toLowerCase().slice(0,15)));
-          const candidate = match || items[0];
-          if (candidate && candidate.id) {
-            capturedNumericId = String(candidate.id);
-            log.info('ID from list (most recent): '+capturedNumericId+' name='+candidate.name);
+      const listUrls = [
+        'https://api-product.vulcano.hotmart.com/product/v2/user/product/list?max=10&page=0',
+        'https://api-product.vulcano.hotmart.com/product/v1/user/product/list?max=10&page=0',
+        'https://app.hotmart.com/api/v1/products?max=10&page=0',
+      ];
+      for (const url of listUrls) {
+        try {
+          const resp = await page.evaluate(async(tok, u) => {
+            const r = await fetch(u, {headers:{'Authorization':'Bearer '+tok}});
+            const txt = await r.text();
+            try { return {ok:true, data:JSON.parse(txt)}; } catch(e) { return {ok:false, raw:txt.slice(0,120)}; }
+          }, token, url);
+          log.info('List URL '+url.slice(40)+' => '+JSON.stringify(resp).slice(0,120));
+          if (resp.ok) {
+            const data = resp.data;
+            const items = data.items || data.list || data.content || data.products || [];
+            if (items.length > 0) {
+              const match = items.find(x => (x.name||x.productName||'').toLowerCase().includes((title||'').toLowerCase().slice(0,15)));
+              const candidate = match || items[0];
+              if (candidate && (candidate.id||candidate.productId)) {
+                capturedNumericId = String(candidate.id || candidate.productId);
+                log.info('ID from list ('+url.slice(40)+'): '+capturedNumericId+' name='+(candidate.name||candidate.productName));
+                break;
+              }
+            }
           }
-        }
-      } catch(e) { log.warn('List API error: '+e.message.slice(0,60)); }
+        } catch(e) { log.warn('List API '+url.slice(40)+' error: '+e.message.slice(0,60)); }
+      }
     }
   }
 

@@ -166,6 +166,10 @@ function updateEbookStatus(id, status, extra = {}) {
   const vals = [status];
   if (extra.caktoUrl) { sets.push('cakto_url = ?'); vals.push(extra.caktoUrl); }
   if (extra.hotmartUrl) { sets.push('hotmart_url = ?'); vals.push(extra.hotmartUrl); }
+  if (extra.hotmartProductId) { sets.push('hotmart_product_id = ?'); vals.push(extra.hotmartProductId); }
+  if (extra.caktoProductId) { sets.push('cakto_product_id = ?'); vals.push(extra.caktoProductId); }
+  if (extra.amazonAsin) { sets.push('amazon_asin = ?'); vals.push(extra.amazonAsin); }
+  if (extra.amazonUrl) { sets.push('amazon_url = ?'); vals.push(extra.amazonUrl); }
   if (status === 'published') { sets.push('published_at = datetime("now")'); }
   vals.push(id);
   db.prepare(`UPDATE ebooks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
