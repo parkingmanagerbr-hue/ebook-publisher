@@ -268,12 +268,9 @@ async function publishToCakto(ebook) {
     if (!currentUrl.includes('?tab=products') && currentUrl.includes('/dashboard/products')) {
       log.info('Navegando para ?tab=products para garantir lista e botão de criar...');
       await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
-        waitUntil: 'networkidle2', timeout: 25000
+        waitUntil: 'domcontentloaded', timeout: 20000
       }).catch(e => log.warn('goto tab=products: ' + e.message));
-      await page.waitForFunction(() =>
-        document.querySelectorAll('button, [role="button"]').length > 5
-      , { timeout: 12000 }).catch(() => {});
-      await sleep(2000);
+      await sleep(3000); // wait for React to render the product list + Adicionar Produto button
       currentUrl = page.url();
     }
     log.info('Sessão válida. URL: ' + currentUrl.slice(0, 80));
@@ -593,6 +590,44 @@ async function publishToCakto(ebook) {
     log.info('Avançando para step 2...');
     const beforeStep1Url = page.url();
 
+    // ── Network interception: capture Cakto API response containing the new product ──
+    // When "Continuar" is clicked, Cakto's backend creates the product and returns its data
+    // (shortcode, pay URL, product ID) in an API response — capture it before we lose context.
+    let interceptedPayUrl = null;
+    let interceptedProductId = null;
+    const responseHandler = async (response) => {
+      try {
+        const rUrl = response.url();
+        // Only Cakto API responses with JSON content
+        if (!rUrl.includes('cakto.com.br')) return;
+        if (response.status() < 200 || response.status() >= 300) return;
+        const ct = (response.headers()['content-type'] || '').toLowerCase();
+        if (!ct.includes('json')) return;
+        const json = await response.json().catch(() => null);
+        if (!json) return;
+        const text = JSON.stringify(json);
+        // Look for pay URL pattern directly in response
+        const payMatch = text.match(/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
+        if (payMatch) {
+          interceptedPayUrl = 'https://pay.cakto.com.br/' + payMatch[1];
+          interceptedProductId = payMatch[1];
+          log.info('API intercepted pay URL: ' + interceptedPayUrl);
+          return;
+        }
+        // Look for shortcode/slug/id fields that form the pay URL
+        const shortMatch = text.match(/"(?:shortlink|shortcode|slug|checkout_url|checkoutUrl|pay_url|payUrl|payment_link|paymentLink|link|short_link)":\s*"([A-Za-z0-9_\-]{5,})"/) ||
+                           text.match(/"(?:id|productId|product_id)":\s*"([A-Za-z0-9]{8,})"/) ;
+        if (shortMatch && !shortMatch[1].match(/^\d{4}-\d{2}-\d{2}/)) {
+          // Exclude date strings; store potential product ID
+          if (!interceptedProductId) {
+            interceptedProductId = shortMatch[1];
+            log.info('API intercepted product field: ' + shortMatch[0].slice(0, 60));
+          }
+        }
+      } catch {}
+    };
+    page.on('response', responseHandler);
+
     // Try clicking Continuar up to 3 times — wait for form validation to settle
     let step2reached = false;
     let createdInStep1 = false; // true when modal closed after Continuar (product already created)
@@ -628,6 +663,53 @@ async function publishToCakto(ebook) {
           log.info(newState.modalClosed ? 'Modal fechou — produto criado em step 1!' : 'Avançou para step 2!');
         }
       }
+    }
+
+    // ── Remove network listener (no longer needed after step 1) ─────────────
+    page.off('response', responseHandler);
+
+    // ── Secondary: scan page HTML / React state for pay URL (if interception missed) ──
+    if (!interceptedPayUrl && createdInStep1) {
+      const fromPageState = await page.evaluate(() => {
+        // Check window.__NEXT_DATA__ (Next.js apps embed server state here)
+        try {
+          const nd = window.__NEXT_DATA__;
+          if (nd) {
+            const s = JSON.stringify(nd);
+            const m = s.match(/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
+            if (m) return 'https://pay.cakto.com.br/' + m[1];
+            // Also look for shortcode/slug in nested props
+            const sm = s.match(/"(?:shortlink|shortcode|slug|checkout_url|payment_link)":\s*"([A-Za-z0-9_\-]{5,})"/);
+            if (sm) return '__id:' + sm[1];
+          }
+        } catch {}
+        // Check raw page HTML for pay URL
+        const html = document.documentElement.innerHTML || '';
+        const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
+        if (m && m.length > 0) return m[0];
+        return null;
+      }).catch(() => null);
+
+      if (fromPageState) {
+        if (fromPageState.startsWith('__id:')) {
+          interceptedProductId = fromPageState.slice(5);
+          log.info('Page state: product ID=' + interceptedProductId);
+        } else {
+          interceptedPayUrl = fromPageState;
+          const m = fromPageState.match(/\/([A-Za-z0-9]{5,})$/);
+          if (m) interceptedProductId = m[1];
+          log.info('Page state: pay URL=' + interceptedPayUrl);
+        }
+      }
+    }
+
+    // Log interception result
+    if (interceptedPayUrl) {
+      log.info('Interception result: pay URL=' + interceptedPayUrl);
+    } else if (interceptedProductId) {
+      log.info('Interception result: product ID only=' + interceptedProductId);
+    } else {
+      log.info('Interception result: nothing captured');
     }
 
     // ── Step 2: Product type selection ("O que você vai vender?") ───────────
@@ -755,16 +837,26 @@ async function publishToCakto(ebook) {
       }
     } else {
       // ── createdInStep1: modal closed after Continuar — product IS created ────
-      // The products list filters by "Ativo" by default; newly created products are "Rascunho".
-      // Strategy: navigate to products list, reset filter to show all, find product, publish it.
-      log.info('createdInStep1=true — buscando produto na lista (incluindo rascunhos)...');
+      // Primary: use intercepted API response (most reliable)
+      if (interceptedPayUrl) {
+        productUrl = interceptedPayUrl;
+        caktoProductId = interceptedProductId;
+        log.info('createdInStep1: pay URL from API interception: ' + productUrl);
+      } else if (interceptedProductId && interceptedProductId.length >= 5 && !/^\d+$/.test(interceptedProductId)) {
+        // Have a product ID but no full pay URL — construct it
+        productUrl = 'https://pay.cakto.com.br/' + interceptedProductId;
+        caktoProductId = interceptedProductId;
+        log.info('createdInStep1: constructed pay URL from product ID: ' + productUrl);
+      } else {
+        // Fallback: navigate products list and search for draft product
+        log.info('createdInStep1=true — buscando produto na lista (incluindo rascunhos)...');
 
       const findAndPublishProduct = async () => {
-        // 1. Navigate to products list with networkidle2 to ensure React renders
+        // 1. Navigate to products list (domcontentloaded avoids frame detachment + timeout)
         await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
-          waitUntil: 'networkidle2', timeout: 30000
+          waitUntil: 'domcontentloaded', timeout: 20000
         }).catch(e => log.warn('goto products list: ' + e.message));
-        await sleep(3000);
+        await sleep(4000); // extra wait for React to render list
 
         // 2. Reset the Status filter to show ALL products (not just "Ativo")
         // Click the Status dropdown and select "Todos"
@@ -801,7 +893,7 @@ async function publishToCakto(ebook) {
 
         for (let attempt = 0; attempt < 3 && !productUrl; attempt++) {
           if (attempt > 0) {
-            await page.reload({ waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
             await sleep(3000);
           }
 
@@ -905,6 +997,7 @@ async function publishToCakto(ebook) {
         caktoProductId = 'created';
         log.warn('createdInStep1 mas checkout URL não encontrada — marcando como sucesso');
       }
+      } // end else (no intercepted pay URL)
     }
 
     await sleep(2000);
