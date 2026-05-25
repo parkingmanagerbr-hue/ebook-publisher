@@ -843,8 +843,25 @@ async function uploadCoverImage(page, numericId, coverPath) {
   if (!coverPath || !fs.existsSync(coverPath)) { log.warn('No cover image at: '+coverPath); return false; }
   log.info('Uploading cover to product '+numericId+'...');
   try {
-    await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
-    await sleep(5000);
+    // Navigate via /overview first — direct /info often shows empty page (React not hydrated)
+    await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
+    await sleep(3000);
+    // Click "Informações" tab from overview to trigger proper SPA navigation to /info
+    await page.evaluate(()=>{
+      const tabs = Array.from(document.querySelectorAll('button, a, [role="tab"]'));
+      const infoTab = tabs.find(t => {
+        const txt = (t.textContent||'').toLowerCase().trim();
+        return txt === 'informações' || txt === 'informacoes' || txt === 'info' || txt.includes('informa');
+      });
+      if (infoTab) { infoTab.scrollIntoView({behavior:'instant',block:'center'}); infoTab.click(); }
+    });
+    await sleep(3000);
+    // Wait for page to render (until buttons are visible or 10s max)
+    for (let w = 0; w < 10; w++) {
+      const btnCount = await page.evaluate(()=>document.querySelectorAll('button[id="input-file-cover"], button').length).catch(()=>0);
+      if (btnCount > 2) break;
+      await sleep(1000);
+    }
     // Debug: log what's on the page BEFORE clicking anything
     const preClickDebug = await page.evaluate(()=>{
       const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map(i=>({id:i.id,name:i.name,accept:i.accept,cls:i.className.slice(0,40)}));
