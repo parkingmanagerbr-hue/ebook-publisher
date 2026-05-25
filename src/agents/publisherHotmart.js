@@ -508,10 +508,15 @@ async function createProduct(page, session, ebook) {
         return {x: r.left+r.width/2, y: r.top+r.height/2, tag: 'HOT-INPUT', name: el.getAttribute('name')||el.id||'', source: 'hot-input', el: el.outerHTML.slice(0,100)};
       }
     }
-    // 3. All visible inputs as last resort
+    // 3. All visible inputs as last resort — skip name/title/text-type inputs that are clearly not price
+    const SKIP_NAMES = new Set(['name', 'title', 'nome', 'titulo', 'subject', 'description', 'desc', 'search']);
     const allInputs = Array.from(document.querySelectorAll('input')).map(el => {
       const r = el.getBoundingClientRect();
-      return r.width > 0 && r.height > 5 ? { x: r.left+r.width/2, y: r.top+r.height/2, tag: el.tagName, name: el.getAttribute('name')||el.name||el.id||'', type: el.type, source: 'all' } : null;
+      if (r.width === 0 || r.height <= 5) return null;
+      const n = (el.getAttribute('name') || el.name || '').toLowerCase();
+      if (SKIP_NAMES.has(n)) return null; // skip clearly non-price inputs
+      if (el.type === 'hidden' || el.type === 'checkbox' || el.type === 'radio') return null;
+      return { x: r.left+r.width/2, y: r.top+r.height/2, tag: el.tagName, name: el.getAttribute('name')||el.name||el.id||'', type: el.type, source: 'all' };
     }).filter(Boolean);
     if (allInputs.length > 0) return allInputs[0];
     // 4. Check ALL custom elements for shadow inputs
