@@ -438,8 +438,12 @@ async function publishToCakto(ebook) {
       });
       // Also reject if still on the products list (FAB opened no modal)
       const stillOnList = currentUrl.includes('/dashboard/products') && !currentUrl.includes('/new');
-      log.info('Form inputs after FAB click: ' + hasForm + ' (url=' + currentUrl + ', stillOnList=' + stillOnList + ')');
-      if (hasForm >= 1 && !stillOnList) { formOpened = true; log.info('Form aberto via click no botão'); }
+      // Modal form on products list page has 4+ non-search inputs (name, desc, type, price, salesPage...)
+      // Search-box-only state has ≤2 inputs (just the "active" status hidden input)
+      // Accept the form only if: (a) navigated away from list, OR (b) still on list but many inputs = modal opened
+      const modalLikelyOpen = !stillOnList || hasForm > 2;
+      log.info('Form inputs after FAB click: ' + hasForm + ' (url=' + currentUrl + ', stillOnList=' + stillOnList + ', modal=' + modalLikelyOpen + ')');
+      if (hasForm >= 1 && modalLikelyOpen) { formOpened = true; log.info('Form aberto via click no botão'); }
     }
 
     if (!formOpened) {
