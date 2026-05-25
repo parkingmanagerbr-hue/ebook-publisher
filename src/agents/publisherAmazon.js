@@ -80,6 +80,34 @@ async function doSignin(page) {
 
   await screenshot(page, 'signin_before');
 
+  // Detect if page shows a different account and click "Trocar contas" to switch
+  try {
+    const pageInfo = await page.evaluate((kdpEmail) => {
+      // Check what account/email is shown on the page
+      const shownEmail = (document.querySelector('.ap_customer_name + *, .displayEmail, [class*="email" i]') || {}).textContent || '';
+      // Look for "Trocar contas" or "Change account" link
+      const allLinks = Array.from(document.querySelectorAll('a, button, span[role="link"]'));
+      const switchEl = allLinks.find(el => {
+        const t = (el.textContent || '').toLowerCase().trim();
+        return t.includes('trocar conta') || t.includes('change account') || t.includes('mudar conta');
+      });
+      const switchPos = switchEl ? (() => {
+        const r = switchEl.getBoundingClientRect();
+        return r.width > 0 ? { x: r.left + r.width/2, y: r.top + r.height/2 } : null;
+      })() : null;
+      return { shownEmail: shownEmail.trim().slice(0, 80), switchPos };
+    }, KDP_EMAIL);
+
+    if (pageInfo.shownEmail) log.info('Conta na página: "' + pageInfo.shownEmail + '" (KDP_EMAIL: ' + KDP_EMAIL + ')');
+
+    if (pageInfo.switchPos && pageInfo.shownEmail && !pageInfo.shownEmail.includes(KDP_EMAIL)) {
+      log.info('Email diferente detectado — clicando "Trocar contas"...');
+      await page.mouse.click(pageInfo.switchPos.x, pageInfo.switchPos.y);
+      await sleep(3000);
+      await screenshot(page, 'signin_after_switch');
+    }
+  } catch(e) { log.warn('Switch account check: ' + e.message); }
+
   // Email step
   try {
     // Use coordinates-based click to avoid "not clickable" element handle issues
@@ -113,7 +141,7 @@ async function doSignin(page) {
       });
       if (contPos) { await page.mouse.click(contPos.x, contPos.y); await sleep(3000); }
       else { log.warn('Email continue button not found'); }
-    } else { log.warn('Email input not found on signin page'); }
+    } else { log.warn('Email input not found on signin page — skipping email step (password-only page)'); }
   } catch(e) { log.warn('Email step error: ' + e.message); }
 
   await screenshot(page, 'signin_after_email');
