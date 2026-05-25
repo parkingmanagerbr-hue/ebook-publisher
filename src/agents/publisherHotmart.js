@@ -273,6 +273,43 @@ async function createProduct(page, session, ebook) {
   log.info('Desc filled: ' + descFilled);
   await sleep(400);
 
+  // Dismiss cookie banner on /info page BEFORE interacting with category/Continuar
+  // (cookie banner covers the bottom of the page and can block clicks)
+  const cookieDismissedOnInfo = await page.evaluate(() => {
+    const cookieEl = document.querySelector('hotmart-cookie-policy');
+    if (cookieEl) {
+      const roots = [cookieEl.shadowRoot, cookieEl];
+      for (const root of roots) {
+        if (!root) continue;
+        const btns = Array.from(root.querySelectorAll('button'));
+        const necessary = btns.find(b => {
+          const t = (b.textContent||'').toLowerCase();
+          return t.includes('necessário') || t.includes('somente') || t.includes('aceitar') || t.includes('permitir');
+        });
+        if (necessary) { necessary.click(); return 'shadow:'+necessary.textContent.trim().slice(0,30); }
+        // Click any button to close (prefer last = "Permitir todos")
+        if (btns.length > 0) { btns[btns.length-1].click(); return 'shadow-last:'+btns[btns.length-1].textContent.trim().slice(0,30); }
+      }
+    }
+    // Fallback: scan all shadow roots
+    for (const el of document.querySelectorAll('*')) {
+      if (el.shadowRoot) {
+        const btns = Array.from(el.shadowRoot.querySelectorAll('button'));
+        const allow = btns.find(b => { const t=(b.textContent||'').toLowerCase(); return t.includes('permitir')||t.includes('aceitar')||t.includes('necessário'); });
+        if (allow) { allow.click(); return 'any-shadow:'+allow.textContent.trim().slice(0,30); }
+      }
+    }
+    // Check for regular (non-shadow) cookie buttons
+    const regularBtns = Array.from(document.querySelectorAll('button')).filter(b => {
+      const t = (b.textContent||'').toLowerCase();
+      return (t.includes('necessário') || t.includes('aceitar') || t.includes('permitir')) && b.getBoundingClientRect().width > 0;
+    });
+    if (regularBtns.length > 0) { regularBtns[0].click(); return 'regular:'+regularBtns[0].textContent.trim().slice(0,30); }
+    return 'no-cookie';
+  }).catch(()=>'err');
+  log.info('Cookie banner /info: ' + cookieDismissedOnInfo);
+  if (!cookieDismissedOnInfo.startsWith('no-cookie')) await sleep(800);
+
   // Screenshot before category to debug what's on the page
   await page.screenshot({path:'/app/category_before.png'}).catch(()=>{});
   log.info('Category debug screenshot saved: /app/category_before.png');
