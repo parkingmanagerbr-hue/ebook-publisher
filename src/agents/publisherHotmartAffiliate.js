@@ -1,16 +1,13 @@
 'use strict';
 /**
  * publisherHotmartAffiliate.js
- * Automates enabling the Hotmart affiliate program for all published products.
- * Sets commission to 50% (configurable) on each product.
+ * Configures the Hotmart affiliate program for all published products.
  *
- * Usage (from API):
- *   const { setupAllAffiliates } = require('./publisherHotmartAffiliate');
- *   await setupAllAffiliates({ commission: 50, autoApprove: true });
+ * Uses the same CAS TGT → JWT refresh + anti-detection approach as publisherHotmart.js.
  */
 
-const path    = require('path');
-const fs      = require('fs');
+const fs    = require('fs');
+const https = require('https');
 const puppeteer = require('puppeteer');
 const { createLogger } = require('../core/logger');
 const log = createLogger('hotmart-affiliate');
@@ -18,7 +15,130 @@ const log = createLogger('hotmart-affiliate');
 const SESSION_FILE = process.env.HOTMART_SESSION_FILE || '/app/data/sessions/hotmart.json';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ── Launch browser with Hotmart session ─────────────────────────────────────
+// ── CAS TGT → Service Ticket (copied from publisherHotmart.js) ───────────────
+function getCASTicket(tgt, serviceUrl) {
+  return new Promise((resolve, reject) => {
+    const body = 'service=' + encodeURIComponent(serviceUrl);
+    const opts = {
+      hostname: 'sso.hotmart.com',
+      path: '/v1/tickets/' + tgt,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/plain',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    };
+    const req = https.request(opts, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => resolve({ status: res.statusCode, body: d.trim() }));
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── Refresh JWT via CAS TGT (copied from publisherHotmart.js) ────────────────
+async function refreshJWT(browser, session) {
+  const hmSso = session.cookies.find(c => c.name === 'hmSsoExp');
+  if (!hmSso) {
+    log.warn('hmSsoExp cookie not found — using existing token');
+    return session.localStorage && session.localStorage.token;
+  }
+
+  const tgt = hmSso.value.split('|').slice(1).join('|');
+  const oauth2Service = 'https://sso.hotmart.com/oauth2.0/callbackAuthorize?client_id=8cef361b-94f8-4679-bd92-9d1cb496452d&scope=openid+profile+email&redirect_uri=https%3A%2F%2Fapp.hotmart.com%2Flogout&response_type=code';
+
+  const st = await getCASTicket(tgt, oauth2Service);
+  log.info('CAS ST status: ' + st.status);
+
+  const lp = await browser.newPage();
+  for (const c of session.cookies) {
+    try {
+      const x = { ...c };
+      delete x.sameSite; delete x.sameParty;
+      if (x.expires === -1) delete x.expires;
+      if (!x.url) x.url = x.domain && x.domain.startsWith('.') ? 'https://' + x.domain.slice(1) : 'https://' + (x.domain || 'hotmart.com');
+      await lp.setCookie(x);
+    } catch (_) {}
+  }
+
+  try {
+    await lp.goto(oauth2Service + '&ticket=' + st.body, { waitUntil: 'networkidle2', timeout: 30000 });
+  } catch (e) {
+    log.warn('OAuth callback error: ' + e.message.slice(0, 60));
+  }
+  await sleep(6000);
+
+  const tok = await lp.evaluate(() => localStorage.getItem('token')).catch(() => null);
+  await lp.close();
+
+  if (tok) {
+    log.info('JWT refreshed via CAS ✓');
+    return tok;
+  }
+
+  const existingTok = session.localStorage && session.localStorage.token;
+  if (existingTok) {
+    log.info('JWT: using existing session token (CAS expired)');
+    return existingTok;
+  }
+
+  log.warn('JWT: MISSING — session may be fully expired');
+  return null;
+}
+
+// ── Setup page with anti-detection (copied from publisherHotmart.js) ──────────
+async function setupPage(page, session, jwt) {
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+
+  // CRITICAL: Hotmart SPA calls replace() on non-string values — polyfill needed
+  await page.evaluateOnNewDocument(() => {
+    const orig = String.prototype.replace;
+    Object.defineProperty(Object.prototype, 'replace', {
+      value: function(...a) { return orig.apply(String(this == null ? '' : this), a); },
+      writable: true, configurable: true, enumerable: false,
+    });
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    window.chrome = { runtime: {} };
+  });
+
+  const ls = { ...(session.localStorage || {}) };
+  if (jwt) ls.token = jwt;
+  await page.evaluateOnNewDocument((ls) => {
+    Object.entries(ls).forEach(([k, v]) => { try { localStorage.setItem(k, v); } catch {} });
+  }, ls);
+
+  for (const c of session.cookies) {
+    try {
+      const x = { ...c };
+      delete x.sameSite; delete x.sameParty;
+      if (x.expires === -1) delete x.expires;
+      if (!x.url) x.url = x.domain && x.domain.startsWith('.') ? 'https://' + x.domain.slice(1) : 'https://' + (x.domain || 'hotmart.com');
+      await page.setCookie(x);
+    } catch (_) {}
+  }
+}
+
+// ── Safe page.evaluate with context-destroyed retry ──────────────────────────
+async function safeEval(page, fn, ...args) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      return await page.evaluate(fn, ...args);
+    } catch (e) {
+      if ((e.message || '').includes('context') && attempt < 4) {
+        log.warn(`Eval context destroyed (attempt ${attempt}), waiting ${attempt * 4}s...`);
+        await sleep(attempt * 4000);
+      } else {
+        throw e;
+      }
+    }
+  }
+}
+
+// ── Launch authenticated Hotmart browser ─────────────────────────────────────
 async function launchHotmartBrowser() {
   if (!fs.existsSync(SESSION_FILE)) throw new Error('Session not found: ' + SESSION_FILE);
   const session = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
@@ -26,163 +146,154 @@ async function launchHotmartBrowser() {
   const browser = await puppeteer.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    defaultViewport: { width: 1280, height: 800 },
+    defaultViewport: { width: 1280, height: 900 },
   });
 
+  // Refresh JWT via CAS TGT
+  let jwt = null;
+  try {
+    jwt = await refreshJWT(browser, session);
+  } catch (e) {
+    log.warn('JWT refresh failed: ' + e.message);
+    jwt = session.localStorage && session.localStorage.token;
+  }
+
+  // Setup main page
   const page = await browser.newPage();
+  await setupPage(page, session, jwt);
 
-  // Set cookies
-  await page.setCookie(...(session.cookies || []));
-
-  // Set localStorage (JWT token etc.)
-  const ls = { ...(session.localStorage || {}) };
-  await page.evaluateOnNewDocument((lsData) => {
-    Object.keys(lsData).forEach(k => localStorage.setItem(k, lsData[k]));
-  }, ls);
-
-  // Navigate to Hotmart to establish session
+  log.info('Loading Hotmart products page...');
   await page.goto('https://app.hotmart.com/products/producer', {
-    waitUntil: 'domcontentloaded', timeout: 30000
+    waitUntil: 'domcontentloaded', timeout: 35000
   }).catch(() => {});
-  await sleep(4000);
 
-  return { browser, page, session };
+  // Wait for any OAuth redirects to settle
+  try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
+  try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }); } catch (_) {}
+  await sleep(5000);
+
+  // Verify page is on hotmart.com (not SSO login)
+  const landedUrl = page.url();
+  log.info(`Landed at: ${landedUrl.slice(0, 80)}`);
+
+  if (landedUrl.includes('sso.hotmart.com') || landedUrl.includes('/login')) {
+    log.warn('Still on SSO login — session may be fully expired');
+  }
+
+  // Verify token is available
+  const token = await safeEval(page, () =>
+    localStorage.getItem('token') ||
+    localStorage.getItem('access_token') ||
+    localStorage.getItem('@hotmart:token') || ''
+  ).catch(() => '');
+  log.info(`Token present: ${!!token} (${token ? token.slice(0, 20) + '...' : 'NONE'})`);
+
+  return { browser, page, jwt, token };
 }
 
-// ── Navigate to product affiliate tab and configure ─────────────────────────
+// ── Configure affiliate via Hotmart APIs ─────────────────────────────────────
 async function configureProductAffiliate(page, numericId, opts = {}) {
   const commission  = opts.commission  ?? 50;
   const autoApprove = opts.autoApprove ?? true;
 
   log.info(`Configuring affiliate for product ${numericId} — ${commission}%`);
 
-  // Go to the affiliate management page for this product
-  const url = `https://app.hotmart.com/products/manage/${numericId}/affiliate`;
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await sleep(4000);
-  } catch (e) {
-    log.warn(`Nav error for ${numericId}: ${e.message.slice(0, 60)}`);
-    return { ok: false, error: 'nav_error' };
-  }
+  const result = await safeEval(page, async (productId, commission, autoApprove) => {
+    const token =
+      localStorage.getItem('token') ||
+      localStorage.getItem('access_token') ||
+      localStorage.getItem('@hotmart:token') ||
+      localStorage.getItem('hotmart_token') ||
+      sessionStorage.getItem('token') || '';
 
-  const currentUrl = page.url();
-  log.info(`Affiliate URL for ${numericId}: ${currentUrl}`);
+    const h = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
+    };
 
-  // Check page content
-  const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 800)).catch(() => '');
-  log.info(`Affiliate page body: ${bodyText.slice(0, 200)}`);
+    const body1 = JSON.stringify({ enabled: true, commissionPercentage: commission, commissionType: 'PERCENTAGE', autoApproval: autoApprove });
+    const body2 = JSON.stringify({ active: true, commissionRate: commission, approvalType: autoApprove ? 'AUTO' : 'MANUAL' });
+    const body3 = JSON.stringify({ affiliateEnabled: true, commissionPercentage: commission });
+    const body4 = JSON.stringify({ enabled: true, commission: { percentage: commission, type: 'PERCENTAGE' }, autoApproval: autoApprove });
 
-  // Attempt to configure affiliate settings via UI
-  const result = await page.evaluate(async (commission, autoApprove) => {
-    const actions = [];
-    const pageText = document.body.innerText.toLowerCase();
+    const endpoints = [
+      // Vulcano v2 - various path patterns
+      ['PUT',   `https://api-product.vulcano.hotmart.com/product/v2/products/${productId}/affiliateProgram`, body1],
+      ['POST',  `https://api-product.vulcano.hotmart.com/product/v2/products/${productId}/affiliateProgram`, body1],
+      ['PATCH', `https://api-product.vulcano.hotmart.com/product/v2/products/${productId}/affiliateProgram`, body1],
+      ['PUT',   `https://api-product.vulcano.hotmart.com/product/v2/products/${productId}/affiliate-program`, body1],
+      ['POST',  `https://api-product.vulcano.hotmart.com/product/v2/products/${productId}/affiliate-program`, body1],
+      ['PUT',   `https://api-product.vulcano.hotmart.com/product/v2/products/${productId}/affiliates/settings`, body1],
+      ['POST',  `https://api-product.vulcano.hotmart.com/product/v2/products/${productId}/affiliates/settings`, body1],
+      // Vulcano v1
+      ['PUT',   `https://api-product.vulcano.hotmart.com/product/v1/products/${productId}/affiliate`, body2],
+      ['POST',  `https://api-product.vulcano.hotmart.com/product/v1/products/${productId}/affiliate`, body2],
+      ['PUT',   `https://api-product.vulcano.hotmart.com/product/v1/products/${productId}/affiliateProgram`, body1],
+      // Affiliate-specific service
+      ['PUT',   `https://api-product.vulcano.hotmart.com/affiliate/v1/products/${productId}/program`, body4],
+      ['POST',  `https://api-product.vulcano.hotmart.com/affiliate/v1/products/${productId}/program`, body4],
+      ['PUT',   `https://api-product.vulcano.hotmart.com/affiliate/v2/products/${productId}/program`, body4],
+      // App API
+      ['PUT',   `https://app.hotmart.com/api/products/${productId}/affiliate`, body1],
+      ['POST',  `https://app.hotmart.com/api/products/${productId}/affiliate`, body1],
+      ['PUT',   `https://app.hotmart.com/api/v1/affiliate/products/${productId}`, body1],
+      ['PUT',   `https://app.hotmart.com/api/v2/affiliate/products/${productId}`, body1],
+      // Patch the product itself
+      ['PATCH', `https://api-product.vulcano.hotmart.com/product/v2/products/${productId}`, body3],
+    ];
 
-    // ── STEP 1: Detect if we're on an affiliate settings page ──
-    const hasAffContent = pageText.includes('afili') || pageText.includes('comissão') || pageText.includes('commission');
-    if (!hasAffContent) {
-      return { ok: false, reason: 'not_affiliate_page', url: window.location.href, pageText: pageText.slice(0, 100) };
-    }
-
-    // ── STEP 2: Look for "Ativar" toggle or button ──
-    const activateEl = Array.from(document.querySelectorAll('button, [role=switch], input[type=checkbox], hot-toggle, hot-switch'))
-      .find(el => {
-        const txt = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('data-label') || '').toLowerCase();
-        return txt.includes('ativar') || txt.includes('ativ') || (txt.includes('habilitar'));
-      });
-
-    if (activateEl) {
-      actions.push('activate: ' + (activateEl.textContent || '').trim().slice(0, 40));
-      activateEl.click();
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    // ── STEP 3: Set commission percentage ──
-    const commissionInput = Array.from(document.querySelectorAll('input[type=number], input[type=text], hot-input input'))
-      .find(el => {
-        const ctx = (el.name + el.id + el.placeholder + (el.closest('*')?.textContent || '')).toLowerCase();
-        return ctx.includes('comissão') || ctx.includes('comissao') || ctx.includes('commission') || ctx.includes('percentual') || ctx.includes('%');
-      });
-
-    if (commissionInput) {
-      actions.push('commission input found: ' + commissionInput.name);
-      commissionInput.focus();
-      commissionInput.select?.();
-      commissionInput.value = '';
-      commissionInput.dispatchEvent(new Event('input',  { bubbles: true }));
-      commissionInput.value = String(commission);
-      commissionInput.dispatchEvent(new Event('input',  { bubbles: true }));
-      commissionInput.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-
-    // ── STEP 4: Auto-approve toggle ──
-    if (autoApprove) {
-      const autoEl = Array.from(document.querySelectorAll('input[type=checkbox], hot-toggle, [role=switch]'))
-        .find(el => {
-          const ctx = (el.name + el.id + (el.textContent || '') + (el.closest('[class]')?.textContent || '')).toLowerCase();
-          return ctx.includes('automátic') || ctx.includes('auto aprov') || ctx.includes('auto-aprov');
-        });
-      if (autoEl) {
-        actions.push('auto-approve toggled');
-        if (!autoEl.checked) autoEl.click();
+    const results = [];
+    for (const [method, url, body] of endpoints) {
+      try {
+        const r = await fetch(url, { method, headers: h, credentials: 'include', body });
+        const text = await r.text().catch(() => '');
+        results.push({ method, url: url.slice(45), status: r.status, body: text.slice(0, 120) });
+        if (r.status >= 200 && r.status < 300) {
+          return { ok: true, method, url, status: r.status, body: text.slice(0, 200), results };
+        }
+        // Interesting non-404: stop and report
+        if (r.status !== 404 && r.status !== 405 && r.status !== 403) {
+          return { ok: false, interesting: true, method, url, status: r.status, body: text.slice(0, 200), results };
+        }
+      } catch (e) {
+        results.push({ method, url: url.slice(45), error: e.message.slice(0, 50) });
       }
     }
+    return { ok: false, reason: 'all_404', results };
+  }, numericId, commission, autoApprove).catch(e => ({ ok: false, error: e.message }));
 
-    // ── STEP 5: Save ──
-    const saveBtn = Array.from(document.querySelectorAll('button, hot-button'))
-      .find(el => {
-        const txt = (el.textContent || '').trim().toLowerCase();
-        return txt.includes('salvar') || txt.includes('save') || txt.includes('confirmar') || txt.includes('aplicar');
-      });
+  log.info(`Product ${numericId}: ok=${result.ok}${result.status ? ' status=' + result.status : ''}${result.interesting ? ' (INTERESTING)' : ''}`);
+  if (result.interesting || result.error) {
+    log.info(`  → ${JSON.stringify(result).slice(0, 300)}`);
+  } else if (!result.ok) {
+    // Show first few non-error results
+    const sample = (result.results || [])
+      .filter(r => r.status && r.status !== 404 && r.status !== 405)
+      .slice(0, 3)
+      .map(r => `${r.method} ${r.status} ${r.url} ${(r.body || '').slice(0, 50)}`);
+    if (sample.length > 0) log.info(`  Interesting: ${sample.join(' | ')}`);
+  }
 
-    if (saveBtn) {
-      actions.push('save: ' + saveBtn.textContent.trim().slice(0, 30));
-      saveBtn.click();
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    return {
-      ok: true,
-      activated: !!activateEl,
-      commissionSet: !!commissionInput,
-      saved: !!saveBtn,
-      actions,
-      url: window.location.href,
-    };
-  }, commission, autoApprove);
-
-  log.info(`Product ${numericId} affiliate result: ${JSON.stringify(result)}`);
-
-  // Screenshot for debugging
-  try {
-    const dir = '/app/data/affiliate_screenshots';
-    fs.mkdirSync(dir, { recursive: true });
-    await page.screenshot({ path: `${dir}/${numericId}_affiliate.png`, fullPage: false });
-  } catch (_) {}
-
-  await sleep(2000);
   return result;
 }
 
-// ── Get all published Hotmart product IDs from DB ───────────────────────────
+// ── DB ───────────────────────────────────────────────────────────────────────
 function getPublishedHotmartProducts() {
   const Database = require('better-sqlite3');
   const db = new Database('/app/data/metrics.db');
   db.pragma('journal_mode = WAL');
-  // hotmart_product_id is numeric only
   const rows = db.prepare(`
-    SELECT id, title, hotmart_product_id
-    FROM ebooks
+    SELECT id, title, hotmart_product_id FROM ebooks
     WHERE status = 'published'
-      AND hotmart_product_id IS NOT NULL
-      AND hotmart_product_id != ''
+      AND hotmart_product_id IS NOT NULL AND hotmart_product_id != ''
     ORDER BY created_at DESC
   `).all();
   db.close();
   return rows.filter(r => /^\d+$/.test(String(r.hotmart_product_id || '')));
 }
 
-// ── Main: setup affiliates for all published products ───────────────────────
+// ── Main ─────────────────────────────────────────────────────────────────────
 async function setupAllAffiliates(opts = {}) {
   const commission  = opts.commission  ?? 50;
   const autoApprove = opts.autoApprove ?? true;
@@ -194,7 +305,6 @@ async function setupAllAffiliates(opts = {}) {
   try {
     products = getPublishedHotmartProducts().slice(0, limit);
   } catch (e) {
-    log.error('Cannot load products from DB: ' + e.message);
     return { ok: false, error: e.message };
   }
   log.info(`Found ${products.length} products with Hotmart IDs`);
@@ -203,7 +313,6 @@ async function setupAllAffiliates(opts = {}) {
   try {
     ({ browser, page } = await launchHotmartBrowser());
   } catch (e) {
-    log.error('Cannot launch Hotmart browser: ' + e.message);
     return { ok: false, error: 'Browser launch failed: ' + e.message };
   }
 
@@ -217,9 +326,9 @@ async function setupAllAffiliates(opts = {}) {
         const r = await configureProductAffiliate(page, numericId, { commission, autoApprove });
         results.push({ id: numericId, title: product.title, ...r });
         if (r.ok) done++; else failed++;
-        await sleep(2000); // Rate limit protection
+        await sleep(1500);
       } catch (e) {
-        log.error(`Error on product ${numericId}: ${e.message}`);
+        log.error(`Error on ${numericId}: ${e.message}`);
         results.push({ id: numericId, title: product.title, ok: false, error: e.message });
         failed++;
       }
@@ -228,11 +337,10 @@ async function setupAllAffiliates(opts = {}) {
     await browser.close().catch(() => {});
   }
 
-  log.info(`Affiliate setup done: ${done}/${products.length} OK, ${failed} failed`);
+  log.info(`Done: ${done}/${products.length} OK, ${failed} failed`);
   return { ok: true, total: products.length, done, failed, results };
 }
 
-// ── Single product affiliate setup ─────────────────────────────────────────
 async function setupSingleAffiliate(hotmartProductId, opts = {}) {
   let browser, page;
   try {

@@ -52,43 +52,70 @@ module.exports = function(sessionManager, orchestrator) {
     res.json({ ok: true, message: `${store} auto-publish enabled (env: ${envKey}=true). Note: container restart needed to persist this setting.` });
   });
 
-  // POST /api/v2/stores/affiliate/setup — Configure Hotmart affiliates for all products
+  // POST /api/v2/stores/affiliate/setup — Configure affiliates for all products (store: hotmart|cakto|all)
   router.post('/affiliate/setup', (req, res) => {
     const commission  = parseInt(req.body?.commission  ?? 50);
     const autoApprove = req.body?.autoApprove !== false;
     const limit       = parseInt(req.body?.limit ?? 999);
+    const store       = (req.body?.store || 'all').toLowerCase();
 
     if (commission < 10 || commission > 80) {
       return res.status(400).json({ error: 'Commission must be between 10% and 80%' });
     }
+    if (!['hotmart','cakto','all'].includes(store)) {
+      return res.status(400).json({ error: 'store must be hotmart, cakto, or all' });
+    }
 
     // Respond immediately — the job runs in background
-    res.json({ ok: true, message: `Affiliate setup started: ${commission}% commission, ${autoApprove ? 'auto' : 'manual'} approval. Running in background...` });
+    res.json({ ok: true, message: `Affiliate setup started for ${store}: ${commission}% commission, ${autoApprove ? 'auto' : 'manual'} approval. Running in background...` });
 
     setImmediate(async () => {
-      try {
-        const { setupAllAffiliates } = require('../../../agents/publisherHotmartAffiliate');
-        const result = await setupAllAffiliates({ commission, autoApprove, limit });
-        console.info('[affiliate] Setup complete:', JSON.stringify({ done: result.done, failed: result.failed }));
-      } catch (e) {
-        console.error('[affiliate] Setup error:', e.message);
+      if (store === 'hotmart' || store === 'all') {
+        try {
+          const { setupAllAffiliates: hmSetup } = require('../../../agents/publisherHotmartAffiliate');
+          const r = await hmSetup({ commission, autoApprove, limit });
+          console.info('[affiliate/hotmart] Complete:', JSON.stringify({ done: r.done, failed: r.failed }));
+        } catch (e) {
+          console.error('[affiliate/hotmart] Error:', e.message);
+        }
+      }
+      if (store === 'cakto' || store === 'all') {
+        try {
+          const { setupAllAffiliates: caktoSetup } = require('../../../agents/publisherCaktoAffiliate');
+          const r = await caktoSetup({ commission, autoApprove, limit });
+          console.info('[affiliate/cakto] Complete:', JSON.stringify({ done: r.done, skipped: r.skipped, failed: r.failed }));
+        } catch (e) {
+          console.error('[affiliate/cakto] Error:', e.message);
+        }
       }
     });
   });
 
   // POST /api/v2/stores/affiliate/single — Configure affiliate for one product
   router.post('/affiliate/single', (req, res) => {
-    const { hotmartProductId, commission = 50, autoApprove = true } = req.body || {};
-    if (!hotmartProductId) return res.status(400).json({ error: 'hotmartProductId required' });
+    const { hotmartProductId, caktoProductId, commission = 50, autoApprove = true } = req.body || {};
+    if (!hotmartProductId && !caktoProductId) {
+      return res.status(400).json({ error: 'hotmartProductId or caktoProductId required' });
+    }
 
-    res.json({ ok: true, message: `Setting up affiliate for product ${hotmartProductId}...` });
+    res.json({ ok: true, message: `Setting up affiliate for product...` });
 
     setImmediate(async () => {
-      try {
-        const { setupSingleAffiliate } = require('../../../agents/publisherHotmartAffiliate');
-        await setupSingleAffiliate(hotmartProductId, { commission, autoApprove });
-      } catch (e) {
-        console.error('[affiliate/single] Error:', e.message);
+      if (hotmartProductId) {
+        try {
+          const { setupSingleAffiliate: hmSingle } = require('../../../agents/publisherHotmartAffiliate');
+          await hmSingle(hotmartProductId, { commission, autoApprove });
+        } catch (e) {
+          console.error('[affiliate/hotmart/single] Error:', e.message);
+        }
+      }
+      if (caktoProductId) {
+        try {
+          const { setupSingleAffiliate: caktoSingle } = require('../../../agents/publisherCaktoAffiliate');
+          await caktoSingle(caktoProductId, { commission, autoApprove });
+        } catch (e) {
+          console.error('[affiliate/cakto/single] Error:', e.message);
+        }
       }
     });
   });
