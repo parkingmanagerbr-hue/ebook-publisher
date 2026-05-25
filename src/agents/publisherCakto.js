@@ -512,10 +512,36 @@ async function publishToCakto(ebook) {
       log.info('Screenshot final: ' + ss);
     } catch {}
 
+    // ── Real success detection ─────────────────────────────────────────────────
+    // A tab URL means the modal never advanced or product wasn't created.
+    // Check: (1) got a product ID, (2) URL changed away from tab, OR (3) title in product list
+    const isTabUrl = finalUrl.includes('?tab=products');
+    let titleFoundInList = false;
+
+    if (isTabUrl && !caktoProductId && step2reached) {
+      // Step 2 was reached and published — check if title appears in the product list
+      titleFoundInList = await page.evaluate((title) => {
+        const short = title.slice(0, 35).toLowerCase();
+        return Array.from(document.querySelectorAll('td, [class*="name"], [class*="title"], [class*="product-name"]'))
+          .some(el => el.children.length <= 1 && el.textContent.toLowerCase().includes(short));
+      }, ebook.title).catch(() => false);
+      log.info('Título na lista após publicar: ' + titleFoundInList);
+    }
+
+    const realSuccess = caktoProductId !== null ||
+                        (!isTabUrl && finalUrl !== beforeUrl) ||
+                        (step2reached && titleFoundInList);
+
+    log.info('Success: ' + realSuccess + ' step2=' + step2reached + ' prodId=' + caktoProductId + ' titleInList=' + titleFoundInList);
+
     await browser.close();
 
+    if (!realSuccess) {
+      return { success: false, error: 'Produto não criado (URL ficou em ?tab=products sem ID)', platform: 'cakto' };
+    }
+
     return {
-      success: published || (finalUrl !== beforeUrl),
+      success: true,
       url: productUrl,
       caktoProductId,
       platform: 'cakto',
