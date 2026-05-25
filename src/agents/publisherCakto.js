@@ -374,6 +374,7 @@ async function publishToCakto(ebook) {
 
     // Try clicking Continuar up to 3 times — wait for form validation to settle
     let step2reached = false;
+    let createdInStep1 = false; // true when modal closed after Continuar (product already created)
     for (let attempt = 0; attempt < 3 && !step2reached; attempt++) {
       if (attempt > 0) {
         log.info('Tentativa ' + (attempt + 1) + ' de avançar para step 2...');
@@ -402,6 +403,7 @@ async function publishToCakto(ebook) {
         log.info('Step2 check: fileCount=' + newState.fileCount + ' modalClosed=' + newState.modalClosed + ' url=' + newState.url);
         if (newState.fileCount > 0 || page.url() !== beforeStep1Url || newState.modalClosed) {
           step2reached = true;
+          createdInStep1 = newState.modalClosed; // product already created — skip type selection
           log.info(newState.modalClosed ? 'Modal fechou — produto criado em step 1!' : 'Avançou para step 2!');
         }
       }
@@ -410,7 +412,8 @@ async function publishToCakto(ebook) {
     // ── Step 2: Product type selection ("O que você vai vender?") ───────────
     // If Cakto advanced to the type selection screen, pick "Acesso por e-mail"
     // CRITICAL: use page.mouse.click() (trusted event) — React ignores evaluate().click()
-    if (step2reached) {
+    // NOTE: skip if createdInStep1 — product already exists, type selection not needed
+    if (step2reached && !createdInStep1) {
       const typePos = await page.evaluate(() => {
         const all = Array.from(document.querySelectorAll('button, [role="button"], div, h3, p, span'));
         const typeCards = ['acesso por e-mail', 'link de pagamento', 'infoproduto', 'ebook', 'arquivo'];
@@ -508,22 +511,27 @@ async function publishToCakto(ebook) {
     }
 
     // ── Save / Publish ─────────────────────────────────────────────────────────
-    log.info('Publicando...');
+    // Skip publish click when createdInStep1 — product already exists & published
     const beforeUrl = page.url();
+    if (!createdInStep1) {
+      log.info('Publicando...');
+      const published = await clickByText(page, [
+        'Publicar', 'Salvar e publicar', 'Criar produto', 'Criar', 'Salvar', 'Save',
+        'Cadastrar', 'Continuar', 'Avançar', 'Finalizar',
+      ], 10000);
 
-    const published = await clickByText(page, [
-      'Publicar', 'Salvar e publicar', 'Criar produto', 'Criar', 'Salvar', 'Save',
-      'Cadastrar', 'Continuar', 'Avançar', 'Finalizar',
-    ], 10000);
-
-    if (published) {
-      // Wait for URL change (product created → navigate to product page or shortlink)
-      await sleep(3000);
-      let waited = 0;
-      while (page.url() === beforeUrl && waited < 12000) {
-        await sleep(1000);
-        waited += 1000;
+      if (published) {
+        // Wait for URL change (product created → navigate to product page or shortlink)
+        await sleep(3000);
+        let waited = 0;
+        while (page.url() === beforeUrl && waited < 12000) {
+          await sleep(1000);
+          waited += 1000;
+        }
       }
+    } else {
+      log.info('createdInStep1=true — produto já existe, pulando click de publicar');
+      await sleep(2000); // give page time to refresh list
     }
 
     await sleep(3000);

@@ -748,54 +748,83 @@ async function uploadCoverImage(page, numericId, coverPath) {
   try {
     await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
     await sleep(5000);
-    await page.evaluate(()=>{
-      const b = Array.from(document.querySelectorAll('button')).find(b =>
-        b.textContent.trim().includes('Informa')
-      );
-      if(b) b.click();
-    });
-    await sleep(3000);
-    const imgAreaClicked = await page.evaluate(()=>{
-      // Priority 1: Hotmart's known cover button ID — scroll into view first, click regardless of width
-      const known = document.querySelector('#input-file-cover, button[id*="cover" i], button[id*="imagem" i]');
-      if(known){known.scrollIntoView({behavior:'instant',block:'center'});known.click();return 'id:'+(known.id||'btn');}
-      // Priority 2: class-based selectors
-      const selectors = ['[class*="upload"][class*="image"]','[class*="image"][class*="upload"]','[class*="cover"]','[class*="thumbnail"]','[class*="imagem"]','[class*="foto"]'];
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if(el && el.getBoundingClientRect().width > 0){el.click();return sel;}
-      }
-      // Priority 3: button text
-      const btn = Array.from(document.querySelectorAll('button,[role="button"]')).find(b=>{
-        const t=(b.textContent||'').toLowerCase();
-        return t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('image')||t.includes('cover')||t.includes('selecione');
-      });
-      if(btn){btn.click();return 'button:'+btn.textContent.trim().slice(0,30);}
-      return null;
-    });
-    log.info('Image area clicked: '+imgAreaClicked);
-    await sleep(2500);
-    // Look for file input — Hotmart uses hidden inputs triggered by button click
-    // Try ALL file inputs including hidden ones (uploadFile works on hidden inputs)
+    // Debug: log what's on the page BEFORE clicking anything
+    const preClickDebug = await page.evaluate(()=>{
+      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map(i=>({id:i.id,name:i.name,accept:i.accept,cls:i.className.slice(0,40)}));
+      const btns = Array.from(document.querySelectorAll('button,[role="button"]')).filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,30));
+      const url = location.href.slice(-60);
+      return {url, fileInputs, visibleBtns: btns.slice(0,15)};
+    }).catch(e=>({err:e.message}));
+    log.info('Cover pre-click debug: '+JSON.stringify(preClickDebug));
+
+    // Step 0: Try direct file input BEFORE clicking anything (Hotmart may have hidden input in DOM already)
     let fileInput = await page.$('input[type="file"][accept*="image"]').catch(()=>null);
     if(!fileInput) fileInput = await page.$('input[type="file"]').catch(()=>null);
-    if(!fileInput) {
-      // Force-expose: some Hotmart versions hide the input with CSS, try page.$$ to find any
-      const all = await page.$$('input[type="file"]').catch(()=>[]);
-      if(all.length > 0) fileInput = all[0];
+    if(fileInput) {
+      log.info('Cover: found file input directly (no button click needed)');
+    } else {
+      // Step 1: Click "Informações" tab if visible
+      await page.evaluate(()=>{
+        const b = Array.from(document.querySelectorAll('button,a,[role="tab"]')).find(b =>
+          (b.textContent||'').trim().toLowerCase().includes('informa')
+        );
+        if(b) b.click();
+      });
+      await sleep(3000);
+
+      // Step 2: Try to find and click image upload area
+      const imgAreaClicked = await page.evaluate(()=>{
+        // Priority 1: any element with cover/image in ID
+        const known = document.querySelector('#input-file-cover, [id*="cover" i], [id*="imagem" i], [id*="thumbnail" i]');
+        if(known){known.scrollIntoView({behavior:'instant',block:'center'});known.click();return 'id:'+(known.id||known.tagName);}
+        // Priority 2: class-based selectors (no width check — scrollIntoView first)
+        const selectors = ['[class*="upload-image"]','[class*="image-upload"]','[class*="upload"][class*="cover"]','[class*="cover"][class*="upload"]','[class*="upload"]','[class*="cover"]','[class*="thumbnail"]','[class*="imagem"]'];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if(el){el.scrollIntoView({behavior:'instant',block:'center'});el.click();return sel;}
+        }
+        // Priority 3: button text
+        const btn = Array.from(document.querySelectorAll('button,[role="button"],label')).find(b=>{
+          const t=(b.textContent||'').toLowerCase();
+          return t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('image')||t.includes('cover')||t.includes('selecione')||t.includes('upload');
+        });
+        if(btn){btn.scrollIntoView({behavior:'instant',block:'center'});btn.click();return 'button:'+btn.textContent.trim().slice(0,30);}
+        // Priority 4: any clickable area in an image-related section
+        const imgSection = document.querySelector('[class*="product-image"],[class*="product-cover"],[class*="book-cover"]');
+        if(imgSection){imgSection.scrollIntoView({behavior:'instant',block:'center'});imgSection.click();return 'section:'+imgSection.className.slice(0,30);}
+        return null;
+      });
+      log.info('Image area clicked: '+imgAreaClicked);
+      await sleep(2500);
+
+      // Step 3: Re-check for file input after clicking
+      fileInput = await page.$('input[type="file"][accept*="image"]').catch(()=>null);
+      if(!fileInput) fileInput = await page.$('input[type="file"]').catch(()=>null);
+      if(!fileInput) {
+        const all = await page.$$('input[type="file"]').catch(()=>[]);
+        if(all.length > 0) fileInput = all[0];
+      }
     }
+
+    // Debug what we can see after click attempts
+    const postClickDebug = await page.evaluate(()=>{
+      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map(i=>({id:i.id,accept:i.accept,visible:i.getBoundingClientRect().width>0}));
+      return {fileInputs};
+    }).catch(()=>null);
+    log.info('Cover post-click file inputs: '+JSON.stringify(postClickDebug));
+
     if(fileInput){
       await fileInput.uploadFile(coverPath);
       await sleep(4000);
       await page.evaluate(()=>{
-        const b=Array.from(document.querySelectorAll('button')).find(b=>{const t=b.textContent.trim().toLowerCase();return t==='salvar'||t==='save'||t==='confirmar';});
+        const b=Array.from(document.querySelectorAll('button')).find(b=>{const t=b.textContent.trim().toLowerCase();return t==='salvar'||t==='save'||t==='confirmar'||t.includes('salvar');});
         if(b)b.click();
       });
       await sleep(3000);
       log.info('Cover uploaded!');
       return true;
     }
-    log.warn('Cover file input not found');
+    log.warn('Cover file input not found — skipping cover (non-fatal)');
     return false;
   } catch(e) {
     log.warn('Cover upload error: '+e.message);
