@@ -349,33 +349,57 @@ async function createProduct(page, session, ebook) {
   }
   await sleep(800);
 
-  // Click first subcategory if visible
-  await page.evaluate(()=>{
-    const s = document.querySelectorAll('[class*="subcategor"] button, [class*="subcategor"] li');
-    if(s.length>0) s[0].click();
-  }).catch(()=>{});
-  await sleep(500);
+  // After category click, Hotmart may show a 2-step panel:
+  // Step A — category panel has its OWN Continuar (confirms category selection)
+  // Step B — main /info form has a Continuar (navigates to /pricing)
+  // Strategy: click ALL visible Continuar buttons in reverse DOM order (panel last → main),
+  // then if still on /info, retry with main Continuar using trusted mouse click.
 
-  // Click Continuar button — use TRUSTED page.mouse.click() so React form validation fires correctly
-  const contPos = await page.evaluate(()=>{
-    const btns = Array.from(document.querySelectorAll('button'));
-    const b = btns.find(b => {
-      const t = (b.textContent||'').trim().toLowerCase();
-      return t === 'continuar' || t === 'next' || t === 'salvar e continuar' || t.includes('continu');
-    });
-    if (b) {
-      b.scrollIntoView({behavior:'instant', block:'center'});
-      const r = b.getBoundingClientRect();
-      return r.width > 0 ? {x: r.left+r.width/2, y: r.top+r.height/2, text: b.textContent.trim()} : null;
+  // Step A: click first subcategory if visible (Hotmart may require subcategory)
+  const subCatClicked = await page.evaluate(()=>{
+    function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
+    // Try known subcategory selectors
+    const sel = [
+      '[class*="subcategor"] button', '[class*="subcategor"] li',
+      '[class*="subCategory"] button', '[class*="sub-category"] button',
+      '[class*="subc"] button', '[class*="subcat"] button',
+    ];
+    for (const s of sel) {
+      const els = Array.from(document.querySelectorAll(s)).filter(e => e.getBoundingClientRect().width > 0);
+      if (els.length > 0) { els[0].click(); return 'sub:' + (els[0].textContent||'').trim().slice(0,30); }
     }
     return null;
   }).catch(()=>null);
-  if (contPos) {
-    await sleep(300); // let scroll settle
-    await page.mouse.click(contPos.x, contPos.y); // TRUSTED click — React requires isTrusted=true
-    log.info('Continuar: ' + contPos.text + ' (trusted mouse click)');
-  } else {
-    log.warn('Continuar button not found!');
+  if (subCatClicked) { log.info('Subcategory clicked: ' + subCatClicked); await sleep(500); }
+
+  // Step B: find ALL visible Continuar buttons and click them in order (panel first, then main)
+  const continList = await page.evaluate(()=>{
+    const btns = Array.from(document.querySelectorAll('button')).filter(b => {
+      const t = (b.textContent||'').trim().toLowerCase();
+      const r = b.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && (t === 'continuar' || t === 'salvar e continuar' || t.includes('continu'));
+    });
+    return btns.map(b => { const r = b.getBoundingClientRect(); return {x: r.left+r.width/2, y: r.top+r.height/2, text: b.textContent.trim()}; });
+  }).catch(()=>[]);
+  log.info('Continuar buttons found: ' + continList.length + ' — ' + continList.map(b=>b.text.slice(0,20)).join(' | '));
+
+  // Click each found Continuar in order (panel's then main's)
+  for (const btn of continList) {
+    if (btn.x > 0 && btn.y > 0) {
+      await page.mouse.click(btn.x, btn.y);
+      log.info('Continuar click: ' + btn.text + ' @(' + Math.round(btn.x) + ',' + Math.round(btn.y) + ')');
+      await sleep(800);
+    }
+  }
+  // Also try untrusted click on any remaining Continuar (redundant but safe)
+  if (continList.length === 0) {
+    const fallbackClicked = await page.evaluate(()=>{
+      const b = Array.from(document.querySelectorAll('button')).reverse()
+        .find(b => { const t=(b.textContent||'').trim().toLowerCase(); return t==='continuar'||t.includes('continu'); });
+      if (b) { b.click(); return b.textContent.trim().slice(0,30); }
+      return null;
+    }).catch(()=>null);
+    if (fallbackClicked) log.info('Continuar fallback click: ' + fallbackClicked);
   }
   await sleep(4000);
 
