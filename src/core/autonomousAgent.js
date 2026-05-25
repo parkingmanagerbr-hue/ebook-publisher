@@ -101,6 +101,13 @@ async function publishReadyEbooks() {
       id: ebook.id, title: ebook.title, subtitle: ebook.subtitle || '',
       description: ebook.description || '', price: ebook.price || 4.99,
       pdfPath: ebook.pdf_path, coverPath: ebook.cover_path,
+      // Include existing platform URLs so publishers can cross-reference
+      hotmartUrl: ebook.hotmart_url || null,
+      hotmartProductId: ebook.hotmart_product_id || null,
+      caktoUrl: ebook.cakto_url || null,
+      caktoProductId: ebook.cakto_product_id || null,
+      amazonUrl: ebook.amazon_url || null,
+      amazonAsin: ebook.amazon_asin || null,
     };
     const results = {};
     try {
