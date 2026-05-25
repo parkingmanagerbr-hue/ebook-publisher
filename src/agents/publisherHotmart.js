@@ -1260,44 +1260,66 @@ async function uploadCoverImage(page, numericId, coverPath) {
         await sleep(2000);
       }
       const apiResult = await page.evaluate(async (b64, id) => {
-        const token = localStorage.getItem('token');
-        if (!token) return {ok: false, error: 'no_jwt_token'};
+        // Try multiple token key names Hotmart SPA might use
+        const token = localStorage.getItem('token') ||
+                      localStorage.getItem('access_token') ||
+                      localStorage.getItem('hotmart_token') ||
+                      localStorage.getItem('@hotmart:token') ||
+                      localStorage.getItem('_hotmart_token') ||
+                      sessionStorage.getItem('token') ||
+                      sessionStorage.getItem('access_token');
+
         const binary = atob(b64);
-        const bytes = new Uint8Array(binary.length);
+        const bytes  = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const blob = new Blob([bytes], {type: 'image/png'});
+        const blob = new Blob([bytes], {type: 'image/jpeg'});
+
+        // Log what token we found
+        const tokenInfo = token ? 'JWT:' + token.slice(0,20) + '...' : 'NO_TOKEN';
+
         const endpoints = [
           ['POST', `https://api-product.vulcano.hotmart.com/product/v2/products/${id}/cover`],
           ['PUT',  `https://api-product.vulcano.hotmart.com/product/v2/products/${id}/cover`],
           ['POST', `https://api-product.vulcano.hotmart.com/product/v1/products/${id}/cover`],
           ['POST', `https://api-product.vulcano.hotmart.com/product/v2/user/product/${id}/cover`],
           ['PUT',  `https://api-product.vulcano.hotmart.com/product/v2/user/product/${id}/cover`],
-          ['POST', `https://api-sec.hotmart.com/product/rest/v2/product/${id}/cover`],
           ['PATCH',`https://api-product.vulcano.hotmart.com/product/v2/products/${id}`],
         ];
+
         const results = [];
         for (const [method, url] of endpoints) {
-          try {
-            const fd = new FormData();
-            fd.append('cover', blob, 'cover.png');
-            fd.append('file', blob, 'cover.png');
-            fd.append('image', blob, 'cover.png');
-            const r = await fetch(url, {
-              method,
-              headers: {'Authorization': 'Bearer ' + token},
-              body: fd
-            });
-            const text = await r.text().catch(() => '');
-            const entry = {method, url: url.slice(url.lastIndexOf('/')-15), status: r.status, body: text.slice(0,120)};
-            results.push(entry);
-            if (r.ok || r.status === 201 || r.status === 204) {
-              return {ok: true, ...entry, results};
+          // Try A: with cookie credentials (SPA-style)
+          // Try B: with Bearer token if available
+          const variants = [
+            { credentials: 'include', headers: token ? { 'Authorization': 'Bearer ' + token } : {} },
+            { credentials: 'include', headers: {} },
+            { credentials: 'omit',    headers: token ? { 'Authorization': 'Bearer ' + token } : {} },
+          ];
+          for (const variant of variants) {
+            try {
+              const fd = new FormData();
+              fd.append('cover', blob, 'cover.jpg');
+              fd.append('file',  blob, 'cover.jpg');
+              const r = await fetch(url, {
+                method,
+                headers: variant.headers,
+                credentials: variant.credentials,
+                body: fd
+              });
+              const text = await r.text().catch(() => '');
+              const entry = { method, url: url.slice(-50), status: r.status, body: text.slice(0, 150), creds: variant.credentials, token: tokenInfo };
+              results.push(entry);
+              if (r.ok || r.status === 201 || r.status === 204) {
+                return { ok: true, ...entry, results };
+              }
+              // Only try variants when getting auth errors; skip remaining variants on other errors
+              if (r.status !== 401 && r.status !== 403) break;
+            } catch(e) {
+              results.push({ method, url: url.slice(-40), error: e.message.slice(0, 60) });
             }
-          } catch(e) {
-            results.push({method, url: url.slice(-40), error: e.message.slice(0,60)});
           }
         }
-        return {ok: false, results};
+        return { ok: false, tokenInfo, results };
       }, coverBase64, numericId);
 
       log.info('API cover result: ' + JSON.stringify({

@@ -4,139 +4,164 @@
  * Automates enabling the Hotmart affiliate program for all published products.
  * Sets commission to 50% (configurable) on each product.
  *
- * Usage:
+ * Usage (from API):
  *   const { setupAllAffiliates } = require('./publisherHotmartAffiliate');
  *   await setupAllAffiliates({ commission: 50, autoApprove: true });
  */
 
-const path = require('path');
+const path    = require('path');
+const fs      = require('fs');
+const puppeteer = require('puppeteer');
 const { createLogger } = require('../core/logger');
 const log = createLogger('hotmart-affiliate');
 
-// ── Reuse Hotmart session from publisherHotmart ─────────────────────────────
-let _page = null;
-
-async function getHotmartPage() {
-  const { getBrowserSession } = require('./publisherHotmart');
-  if (!_page || _page.isClosed()) {
-    const result = await getBrowserSession();
-    _page = result.page;
-  }
-  return _page;
-}
-
+const SESSION_FILE = process.env.HOTMART_SESSION_FILE || '/app/data/sessions/hotmart.json';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ── Navigate to product affiliate settings ──────────────────────────────────
-async function setupProductAffiliate(page, numericId, opts = {}) {
+// ── Launch browser with Hotmart session ─────────────────────────────────────
+async function launchHotmartBrowser() {
+  if (!fs.existsSync(SESSION_FILE)) throw new Error('Session not found: ' + SESSION_FILE);
+  const session = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    defaultViewport: { width: 1280, height: 800 },
+  });
+
+  const page = await browser.newPage();
+
+  // Set cookies
+  await page.setCookie(...(session.cookies || []));
+
+  // Set localStorage (JWT token etc.)
+  const ls = { ...(session.localStorage || {}) };
+  await page.evaluateOnNewDocument((lsData) => {
+    Object.keys(lsData).forEach(k => localStorage.setItem(k, lsData[k]));
+  }, ls);
+
+  // Navigate to Hotmart to establish session
+  await page.goto('https://app.hotmart.com/products/producer', {
+    waitUntil: 'domcontentloaded', timeout: 30000
+  }).catch(() => {});
+  await sleep(4000);
+
+  return { browser, page, session };
+}
+
+// ── Navigate to product affiliate tab and configure ─────────────────────────
+async function configureProductAffiliate(page, numericId, opts = {}) {
   const commission  = opts.commission  ?? 50;
   const autoApprove = opts.autoApprove ?? true;
 
-  log.info(`Configuring affiliate for product ${numericId} — commission=${commission}%`);
+  log.info(`Configuring affiliate for product ${numericId} — ${commission}%`);
 
-  const affiliateUrl = `https://app.hotmart.com/products/manage/${numericId}/affiliate`;
-
+  // Go to the affiliate management page for this product
+  const url = `https://app.hotmart.com/products/manage/${numericId}/affiliate`;
   try {
-    await page.goto(affiliateUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await sleep(3000);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await sleep(4000);
   } catch (e) {
     log.warn(`Nav error for ${numericId}: ${e.message.slice(0, 60)}`);
-    return { ok: false, error: e.message };
+    return { ok: false, error: 'nav_error' };
   }
 
-  // Check if affiliate tab is accessible
-  const pageContent = await page.evaluate(() => document.body.innerText.slice(0, 500)).catch(() => '');
-  log.info(`Affiliate page content: ${pageContent.slice(0, 120)}`);
+  const currentUrl = page.url();
+  log.info(`Affiliate URL for ${numericId}: ${currentUrl}`);
 
-  // Try to find and enable affiliate program toggle/button
-  const result = await page.evaluate((commission, autoApprove) => {
+  // Check page content
+  const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 800)).catch(() => '');
+  log.info(`Affiliate page body: ${bodyText.slice(0, 200)}`);
+
+  // Attempt to configure affiliate settings via UI
+  const result = await page.evaluate(async (commission, autoApprove) => {
     const actions = [];
+    const pageText = document.body.innerText.toLowerCase();
 
-    // --- 1) Look for "Ativar programa de afiliados" or similar toggle ---
-    const toggleCandidates = Array.from(document.querySelectorAll(
-      'hot-toggle, hot-switch, input[type=checkbox], button, hot-button'
-    )).filter(el => {
-      const txt = (el.textContent || el.getAttribute('aria-label') || '').toLowerCase();
-      return txt.includes('afili') || txt.includes('programa') || txt.includes('ativar');
-    });
-
-    let toggled = false;
-    for (const el of toggleCandidates) {
-      const txt = (el.textContent || '').trim();
-      actions.push('found-toggle: ' + txt.slice(0, 40));
-      if (!el.checked && el.type === 'checkbox') {
-        el.click();
-        toggled = true;
-      } else if (el.tagName.toLowerCase() !== 'input') {
-        // Already might be a button style toggle
-        el.click();
-        toggled = true;
-      }
-      if (toggled) break;
+    // ── STEP 1: Detect if we're on an affiliate settings page ──
+    const hasAffContent = pageText.includes('afili') || pageText.includes('comissão') || pageText.includes('commission');
+    if (!hasAffContent) {
+      return { ok: false, reason: 'not_affiliate_page', url: window.location.href, pageText: pageText.slice(0, 100) };
     }
 
-    // --- 2) Find commission input ---
-    const commInputs = Array.from(document.querySelectorAll('input[type=number], input[type=text]')).filter(el => {
-      const name = (el.name || el.id || el.placeholder || '').toLowerCase();
-      return name.includes('commission') || name.includes('comissao') || name.includes('comissão') || name.includes('percent');
-    });
-
-    let commSet = false;
-    for (const inp of commInputs) {
-      actions.push('found-comm-input: ' + inp.name + ' value=' + inp.value);
-      inp.focus();
-      inp.value = '';
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      inp.value = String(commission);
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      inp.dispatchEvent(new Event('change', { bubbles: true }));
-      commSet = true;
-      break;
-    }
-
-    // --- 3) Auto-approve toggle ---
-    if (autoApprove) {
-      const autoToggle = Array.from(document.querySelectorAll('input[type=checkbox], hot-toggle')).find(el => {
-        const txt = (el.textContent || el.getAttribute('aria-label') || el.name || '').toLowerCase();
-        return txt.includes('auto') || txt.includes('automátic') || txt.includes('aprovar');
+    // ── STEP 2: Look for "Ativar" toggle or button ──
+    const activateEl = Array.from(document.querySelectorAll('button, [role=switch], input[type=checkbox], hot-toggle, hot-switch'))
+      .find(el => {
+        const txt = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('data-label') || '').toLowerCase();
+        return txt.includes('ativar') || txt.includes('ativ') || (txt.includes('habilitar'));
       });
-      if (autoToggle && !autoToggle.checked) {
-        autoToggle.click();
+
+    if (activateEl) {
+      actions.push('activate: ' + (activateEl.textContent || '').trim().slice(0, 40));
+      activateEl.click();
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // ── STEP 3: Set commission percentage ──
+    const commissionInput = Array.from(document.querySelectorAll('input[type=number], input[type=text], hot-input input'))
+      .find(el => {
+        const ctx = (el.name + el.id + el.placeholder + (el.closest('*')?.textContent || '')).toLowerCase();
+        return ctx.includes('comissão') || ctx.includes('comissao') || ctx.includes('commission') || ctx.includes('percentual') || ctx.includes('%');
+      });
+
+    if (commissionInput) {
+      actions.push('commission input found: ' + commissionInput.name);
+      commissionInput.focus();
+      commissionInput.select?.();
+      commissionInput.value = '';
+      commissionInput.dispatchEvent(new Event('input',  { bubbles: true }));
+      commissionInput.value = String(commission);
+      commissionInput.dispatchEvent(new Event('input',  { bubbles: true }));
+      commissionInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    // ── STEP 4: Auto-approve toggle ──
+    if (autoApprove) {
+      const autoEl = Array.from(document.querySelectorAll('input[type=checkbox], hot-toggle, [role=switch]'))
+        .find(el => {
+          const ctx = (el.name + el.id + (el.textContent || '') + (el.closest('[class]')?.textContent || '')).toLowerCase();
+          return ctx.includes('automátic') || ctx.includes('auto aprov') || ctx.includes('auto-aprov');
+        });
+      if (autoEl) {
         actions.push('auto-approve toggled');
+        if (!autoEl.checked) autoEl.click();
       }
     }
 
-    // --- 4) Find Save button ---
-    const saveBtn = Array.from(document.querySelectorAll('button, hot-button')).find(el => {
-      const txt = (el.textContent || '').toLowerCase().trim();
-      return txt.includes('salvar') || txt.includes('save') || txt.includes('confirmar');
-    });
+    // ── STEP 5: Save ──
+    const saveBtn = Array.from(document.querySelectorAll('button, hot-button'))
+      .find(el => {
+        const txt = (el.textContent || '').trim().toLowerCase();
+        return txt.includes('salvar') || txt.includes('save') || txt.includes('confirmar') || txt.includes('aplicar');
+      });
+
     if (saveBtn) {
-      actions.push('save-btn: ' + saveBtn.textContent.trim().slice(0, 30));
+      actions.push('save: ' + saveBtn.textContent.trim().slice(0, 30));
       saveBtn.click();
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     return {
-      toggled,
-      commSet,
+      ok: true,
+      activated: !!activateEl,
+      commissionSet: !!commissionInput,
+      saved: !!saveBtn,
       actions,
-      saveClicked: !!saveBtn,
       url: window.location.href,
     };
   }, commission, autoApprove);
 
-  log.info(`Product ${numericId} affiliate actions: ${JSON.stringify(result)}`);
-  await sleep(2000);
+  log.info(`Product ${numericId} affiliate result: ${JSON.stringify(result)}`);
 
-  // Take screenshot for debug
+  // Screenshot for debugging
   try {
-    const screenshotDir = '/app/data/affiliate_screenshots';
-    const { mkdirSync } = require('fs');
-    mkdirSync(screenshotDir, { recursive: true });
-    await page.screenshot({ path: `${screenshotDir}/${numericId}_affiliate.png`, fullPage: false });
+    const dir = '/app/data/affiliate_screenshots';
+    fs.mkdirSync(dir, { recursive: true });
+    await page.screenshot({ path: `${dir}/${numericId}_affiliate.png`, fullPage: false });
   } catch (_) {}
 
-  return { ok: true, ...result };
+  await sleep(2000);
+  return result;
 }
 
 // ── Get all published Hotmart product IDs from DB ───────────────────────────
@@ -144,17 +169,17 @@ function getPublishedHotmartProducts() {
   const Database = require('better-sqlite3');
   const db = new Database('/app/data/metrics.db');
   db.pragma('journal_mode = WAL');
+  // hotmart_product_id is numeric only
   const rows = db.prepare(`
     SELECT id, title, hotmart_product_id
     FROM ebooks
     WHERE status = 'published'
       AND hotmart_product_id IS NOT NULL
       AND hotmart_product_id != ''
-      AND hotmart_product_id REGEXP '^[0-9]+$'
     ORDER BY created_at DESC
   `).all();
   db.close();
-  return rows;
+  return rows.filter(r => /^\d+$/.test(String(r.hotmart_product_id || '')));
 }
 
 // ── Main: setup affiliates for all published products ───────────────────────
@@ -172,49 +197,53 @@ async function setupAllAffiliates(opts = {}) {
     log.error('Cannot load products from DB: ' + e.message);
     return { ok: false, error: e.message };
   }
-
   log.info(`Found ${products.length} products with Hotmart IDs`);
 
-  let page;
+  let browser, page;
   try {
-    page = await getHotmartPage();
+    ({ browser, page } = await launchHotmartBrowser());
   } catch (e) {
-    log.error('Cannot get Hotmart session: ' + e.message);
-    return { ok: false, error: 'Session error: ' + e.message };
+    log.error('Cannot launch Hotmart browser: ' + e.message);
+    return { ok: false, error: 'Browser launch failed: ' + e.message };
   }
 
   const results = [];
   let done = 0, failed = 0;
 
-  for (const product of products) {
-    const numericId = product.hotmart_product_id;
-    if (!numericId || !/^\d+$/.test(String(numericId))) {
-      log.warn(`Product ${product.id} has invalid hotmart_product_id: ${numericId}`);
-      continue;
+  try {
+    for (const product of products) {
+      const numericId = String(product.hotmart_product_id);
+      try {
+        const r = await configureProductAffiliate(page, numericId, { commission, autoApprove });
+        results.push({ id: numericId, title: product.title, ...r });
+        if (r.ok) done++; else failed++;
+        await sleep(2000); // Rate limit protection
+      } catch (e) {
+        log.error(`Error on product ${numericId}: ${e.message}`);
+        results.push({ id: numericId, title: product.title, ok: false, error: e.message });
+        failed++;
+      }
     }
-
-    try {
-      const r = await setupProductAffiliate(page, numericId, { commission, autoApprove });
-      results.push({ id: numericId, title: product.title, ...r });
-      if (r.ok) done++; else failed++;
-
-      // Small pause between products to avoid rate limiting
-      await sleep(3000);
-    } catch (e) {
-      log.error(`Error on product ${numericId}: ${e.message}`);
-      results.push({ id: numericId, title: product.title, ok: false, error: e.message });
-      failed++;
-    }
+  } finally {
+    await browser.close().catch(() => {});
   }
 
-  log.info(`Affiliate setup complete: ${done} OK, ${failed} failed`);
+  log.info(`Affiliate setup done: ${done}/${products.length} OK, ${failed} failed`);
   return { ok: true, total: products.length, done, failed, results };
 }
 
 // ── Single product affiliate setup ─────────────────────────────────────────
 async function setupSingleAffiliate(hotmartProductId, opts = {}) {
-  const page = await getHotmartPage();
-  return setupProductAffiliate(page, hotmartProductId, opts);
+  let browser, page;
+  try {
+    ({ browser, page } = await launchHotmartBrowser());
+    const result = await configureProductAffiliate(page, String(hotmartProductId), opts);
+    await browser.close().catch(() => {});
+    return result;
+  } catch (e) {
+    if (browser) await browser.close().catch(() => {});
+    return { ok: false, error: e.message };
+  }
 }
 
 module.exports = { setupAllAffiliates, setupSingleAffiliate };
