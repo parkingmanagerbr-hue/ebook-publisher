@@ -257,11 +257,24 @@ async function publishToCakto(ebook) {
     }, { timeout: 12000 }).catch(() => {});
     await sleep(2000); // additional buffer for React render
 
-    const currentUrl = page.url();
+    let currentUrl = page.url();
     if (currentUrl.includes('/login') || currentUrl.includes('/auth') || currentUrl.includes('/signin')) {
       log.warn('Sessão Cakto expirada');
       await browser.close();
       return { success: false, error: 'Sessão expirada', platform: 'cakto' };
+    }
+    // Ensure we're on the "Meus Produtos" tab which shows the products list
+    // and the "Adicionar Produto" button. The URL must include ?tab=products.
+    if (!currentUrl.includes('?tab=products') && currentUrl.includes('/dashboard/products')) {
+      log.info('Navegando para ?tab=products para garantir lista e botão de criar...');
+      await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
+        waitUntil: 'networkidle2', timeout: 25000
+      }).catch(e => log.warn('goto tab=products: ' + e.message));
+      await page.waitForFunction(() =>
+        document.querySelectorAll('button, [role="button"]').length > 5
+      , { timeout: 12000 }).catch(() => {});
+      await sleep(2000);
+      currentUrl = page.url();
     }
     log.info('Sessão válida. URL: ' + currentUrl.slice(0, 80));
     await screenshot(page, 'products_list');

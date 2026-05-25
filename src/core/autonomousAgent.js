@@ -84,19 +84,19 @@ async function publishReadyEbooks() {
   if (readyEbooks.length === 0) return 0;
 
   logger.info('[publish-ready] ' + readyEbooks.length + ' ebooks prontos — publicando antes de gerar novos');
-  // Hot-reload publishers (clear cache so updated files on disk are always used)
-  ['../agents/publisherHotmart','../agents/publisherCakto','../agents/publisherAmazon'].forEach(m => {
-    try { delete require.cache[require.resolve(m)]; } catch {}
-  });
   const { ensureSession } = require('../agents/sessionAgent');
-  const { publishToHotmart } = require('../agents/publisherHotmart');
-  const { publishToCakto } = require('../agents/publisherCakto');
-  const { publishToAmazon } = require('../agents/publisherAmazon');
   const { updateEbookStatus } = db;
 
   let published = 0;
   for (const ebook of readyEbooks) {
     logger.info('[publish-ready] => ' + ebook.title.slice(0, 50));
+    // Hot-reload publishers per ebook so injected files take effect immediately
+    ['../agents/publisherHotmart','../agents/publisherCakto','../agents/publisherAmazon'].forEach(m => {
+      try { delete require.cache[require.resolve(m)]; } catch {}
+    });
+    const { publishToHotmart } = require('../agents/publisherHotmart');
+    const { publishToCakto } = require('../agents/publisherCakto');
+    const { publishToAmazon } = require('../agents/publisherAmazon');
     const ebookData = {
       id: ebook.id, title: ebook.title, subtitle: ebook.subtitle || '',
       description: ebook.description || '', price: ebook.price || 4.99,
