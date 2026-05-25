@@ -8,14 +8,24 @@ const path = require('path');
 const os = require('os');
 const { createLogger } = require('../core/logger');
 const { generateImage } = require('./imageGenAgent');
-const { detectCategory, buildIllustrationPrompt } = require('./coverAgent');
+const { detectCategory, buildIllustrationPrompt, generateChapterIllustration: coverAgentIllustration } = require('./coverAgent');
 const { ensureQualityIllustration, validateEbook, validatePDF } = require('./qualityAgent');
 const logger = createLogger('pdfAgent');
 
-// Gerar ilustração para um capítulo via QA agent
+// Gerar ilustração para um capítulo — usa coverAgent (claudeDesign primeiro, depois imageGenAgent)
 async function generateChapterIllustration(chapterTitle, topic, category) {
+  const outputDir = os.tmpdir();
+  try {
+    // coverAgent.generateChapterIllustration usa claudeDesignAgent primeiro (rápido, alta qualidade)
+    // e cai em imageGenAgent (Pollinations) como fallback
+    const result = await coverAgentIllustration(chapterTitle, topic, outputDir);
+    if (result && fs.existsSync(result)) return result;
+  } catch (e) {
+    logger.warn(`coverAgent ilustração falhou: ${e.message} — usando imageGenAgent direto`);
+  }
+  // Fallback direto: imageGenAgent com QA
   return ensureQualityIllustration(async (title, tpc) => {
-    const tmpPath = path.join(os.tmpdir(), `illus_${Date.now()}_${Math.random().toString(36).slice(2)}.png`);
+    const tmpPath = path.join(outputDir, `illus_${Date.now()}_${Math.random().toString(36).slice(2)}.png`);
     const prompt  = buildIllustrationPrompt(title, tpc);
     await generateImage({ prompt, width: 768, height: 432, outputPath: tmpPath });
     return tmpPath;

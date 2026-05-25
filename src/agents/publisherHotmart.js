@@ -1067,6 +1067,29 @@ async function uploadCoverImage(page, numericId, coverPath) {
   if (!coverPath || !fs.existsSync(coverPath)) { log.warn('No cover image at: '+coverPath); return false; }
   log.info('Uploading cover to product '+numericId+'...');
   try {
+    // CDP interceptor to capture the actual cover upload API endpoint when SPA works
+    // This runs passively and logs the endpoint without blocking the upload flow
+    let _coverCdp = null;
+    try {
+      _coverCdp = await page.createCDPSession();
+      await _coverCdp.send('Network.enable');
+      _coverCdp.on('Network.requestWillBeSent', (evt) => {
+        const u = evt.request.url, m = evt.request.method;
+        if (m !== 'GET' && (u.includes('cover') || u.includes('thumbnail') || u.includes('upload') || u.includes('media') || u.includes('image'))) {
+          log.info('🔍 COVER_API_INTERCEPT: ' + m + ' ' + u.slice(0, 150));
+        }
+      });
+      _coverCdp.on('Network.responseReceived', async(evt) => {
+        const u = evt.response.url, m = evt.response.status;
+        if ([200,201,204].includes(m) && (u.includes('cover') || u.includes('thumbnail') || u.includes('upload') || u.includes('media') || u.includes('image'))) {
+          log.info('🔍 COVER_API_RESPONSE OK: ' + m + ' ' + u.slice(0, 150));
+          try {
+            const rb = await _coverCdp.send('Network.getResponseBody', {requestId: evt.requestId}).catch(()=>null);
+            if (rb && rb.body) log.info('🔍 COVER_API_BODY: ' + rb.body.slice(0, 200));
+          } catch(_) {}
+        }
+      });
+    } catch(e) { log.warn('Cover CDP setup failed: ' + e.message.slice(0,50)); }
     // Known file input selectors from confirmed Hotmart manage/info page runs
     const COVER_INPUT_SELS = [
       'input[id*="cover_image"]',
@@ -1293,6 +1316,7 @@ async function uploadCoverImage(page, numericId, coverPath) {
     }
 
     log.warn('Cover file input not found — skipping cover (non-fatal)');
+    if (_coverCdp) await _coverCdp.detach().catch(()=>{});
     return false;
   } catch(e) {
     log.warn('Cover upload error: '+e.message);

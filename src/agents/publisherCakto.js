@@ -26,6 +26,56 @@ const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR   || '/app/data/landing_scre
 const LOGS_DIR        = '/app/data/logs';
 const DEFAULT_PRICE   = parseFloat(process.env.EBOOK_PRICE || '4.99');
 
+// ── Cakto Offers API helper — returns pay URL for a product by title ──────────
+// The /api/offers/ endpoint returns offers with `id` = the pay shortcode.
+// e.g., offer { id: "35vb4nn", name: "Emagreça...", status: "active" }
+// → pay URL: https://pay.cakto.com.br/35vb4nn
+//
+// This runs inside the Puppeteer page context so it uses the browser's auth cookies.
+async function getCaktoPayUrlFromApi(page, titleSnippet) {
+  try {
+    const result = await page.evaluate(async (sTitle) => {
+      const endpoints = [
+        'https://api.cakto.com.br/api/offers/?limit=200&ordering=-created_at',
+        'https://api.cakto.com.br/api/offers/?limit=200',
+      ];
+      for (const ep of endpoints) {
+        try {
+          const r = await fetch(ep, { credentials: 'include', headers: { 'Accept': 'application/json' } });
+          const txt = await r.text();
+          if (!txt || txt.startsWith('<')) continue;
+          const j = JSON.parse(txt);
+          const items = j.results || j.items || (Array.isArray(j) ? j : []);
+          // Find offer matching our title (first 20 chars, case insensitive)
+          const match = items.find(o => {
+            const n = (o.name || '').toLowerCase();
+            return n.includes(sTitle) || sTitle.split(' ').filter(Boolean).slice(0,3).every(w => n.includes(w.toLowerCase()));
+          });
+          if (match) {
+            return { offerId: match.id, offerName: match.name, status: match.status, productId: match.product };
+          }
+          // No match — return raw snippet for debugging
+          return { debug: items.slice(0,3).map(o => o.name), count: j.count };
+        } catch {}
+      }
+      return null;
+    }, titleSnippet);
+
+    if (result && result.offerId) {
+      const payUrl = 'https://pay.cakto.com.br/' + result.offerId;
+      log.info('getCaktoPayUrlFromApi: found offer "' + result.offerName + '" id=' + result.offerId + ' status=' + result.status + ' → ' + payUrl);
+      return { payUrl, offerId: result.offerId, productId: result.productId };
+    } else if (result && result.debug) {
+      log.info('getCaktoPayUrlFromApi: no match. Sample offers: ' + JSON.stringify(result.debug) + ' (total: ' + result.count + ')');
+    } else {
+      log.info('getCaktoPayUrlFromApi: API returned null/HTML');
+    }
+  } catch (e) {
+    log.warn('getCaktoPayUrlFromApi error: ' + e.message);
+  }
+  return null;
+}
+
 // ── Session ───────────────────────────────────────────────────────────────────
 function loadSession() {
   try {
@@ -244,22 +294,23 @@ async function publishToCakto(ebook) {
     }
 
     // ── Verify login ──────────────────────────────────────────────────────────
-    await page.goto(BASE_URL + '/dashboard/products', { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-    // Wait for page CONTENT to render (React SPA hydration can lag beyond networkidle2)
+    await page.goto(BASE_URL + '/dashboard/products', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    await sleep(3000); // wait for React SPA redirect/hydration
+    // Wait for page CONTENT to render
     await page.waitForFunction(() => {
-      // Consider page ready when we see ANY button outside the sidebar (<= x280),
-      // or at least 3 buttons total (sidebar has ~10 nav items visible anyway)
       const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
       return btns.filter(b => {
         const r = b.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
-      }).length > 5;
+      }).length > 3;
     }, { timeout: 12000 }).catch(() => {});
-    await sleep(2000); // additional buffer for React render
+    await sleep(1000);
 
     let currentUrl = page.url();
+    log.info('URL após navegação para dashboard: ' + currentUrl.slice(0, 100));
     if (currentUrl.includes('/login') || currentUrl.includes('/auth') || currentUrl.includes('/signin')) {
-      log.warn('Sessão Cakto expirada');
+      log.warn('Sessão Cakto expirada (redirecionou para login)');
+      await screenshot(page, 'session_expired');
       await browser.close();
       return { success: false, error: 'Sessão expirada', platform: 'cakto' };
     }
@@ -353,6 +404,16 @@ async function publishToCakto(ebook) {
             }
           }
           log.info('Existing product pay URL: ' + (existingPayUrl || 'not found'));
+        }
+      }
+
+      // API fallback: query api.cakto.com.br/api/offers/ to find any product matching this title
+      // The offers endpoint returns { id: "shortcode", name: "...", status: "active"|"draft" }
+      // where `id` is the shortcode for pay.cakto.com.br/<id>
+      if (!existingPayUrl) {
+        const apiMatch = await getCaktoPayUrlFromApi(page, shortTitle).catch(() => null);
+        if (apiMatch && apiMatch.payUrl) {
+          existingPayUrl = apiMatch.payUrl;
         }
       }
     }
@@ -587,16 +648,21 @@ async function publishToCakto(ebook) {
     await sleep(400);
 
     // ── Description (Cakto requires MINIMUM 100 chars) ───────────────────────
+    // Use 110 as threshold to give buffer for Unicode/encoding discrepancies
     let desc = ebook.description || ebook.subtitle || '';
-    if (!desc || desc.length < 100) {
+    if (!desc || desc.length < 110) {
       // Build a longer default description
       const base = 'Guia completo e prático sobre ' + (ebook.topic || ebook.title);
-      const suffix = '. Aprenda as melhores estratégias e técnicas com conteúdo direto ao ponto, desenvolvido para quem quer resultados reais.';
+      const suffix = '. Aprenda as melhores estratégias e técnicas com conteúdo direto ao ponto, desenvolvido para quem quer resultados reais e duradouros.';
       desc = (desc ? desc + ' ' + suffix : base + suffix);
+    }
+    // Ensure >= 110 chars (safety check after any concatenation)
+    if (desc.length < 110) {
+      desc = desc + ' Conteúdo exclusivo, prático e transformador para sua vida.';
     }
     // Cap at 500 chars to avoid potential upper limits
     desc = desc.slice(0, 500);
-    log.info('Desc len=' + desc.length + ' (min100)');
+    log.info('Desc len=' + desc.length + ' (min100, padded to 110+)');
     await fillInput(page, [
       'textarea[name="description"]',
       'textarea[placeholder*="descri" i]',
@@ -628,159 +694,261 @@ async function publishToCakto(ebook) {
     log.info('Avançando para step 2...');
     const beforeStep1Url = page.url();
 
-    // ── Network interception: capture ALL API responses to find product data ──
+    // ── Network interception: capture ALL POST/PATCH/PUT requests and their responses ──
     let interceptedPayUrl = null;
     let interceptedProductId = null;
-    const capturedApiCalls = []; // DEBUG: log all JSON responses
-    const responseHandler = async (response) => {
+    const capturedApiCalls = []; // DEBUG: all write requests
+    const requestFinishedHandler = async (request) => {
       try {
-        const rUrl = response.url();
-        if (response.status() < 200 || response.status() >= 300) return;
+        const method = request.method();
+        if (!['POST','PATCH','PUT'].includes(method)) return;
+        const rUrl = request.url();
+        // Skip static assets
+        if (/\.(js|css|png|jpg|woff|svg|ico)(\?|$)/.test(rUrl)) return;
+        const response = request.response();
+        if (!response) return;
+        const status = response.status();
         const ct = (response.headers()['content-type'] || '').toLowerCase();
-        if (!ct.includes('json')) return;
-        const json = await response.json().catch(() => null);
-        if (!json) return;
-        const text = JSON.stringify(json);
-        // DEBUG: log every JSON response URL and snippet
-        capturedApiCalls.push(rUrl.slice(-80) + ' → ' + text.slice(0, 100));
-        // Look for pay URL pattern directly in response
+        const text = await response.text().catch(() => '');
+        // Log ALL write requests for debugging
+        capturedApiCalls.push(method + ' ' + status + ' ' + rUrl.slice(-80) + ' → ' + text.slice(0, 150));
+        if (status < 200 || status >= 300 || !text) return;
+        // Look for pay URL pattern
         const payMatch = text.match(/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
         if (payMatch) {
           interceptedPayUrl = 'https://pay.cakto.com.br/' + payMatch[1];
           interceptedProductId = payMatch[1];
-          log.info('API intercepted pay URL: ' + interceptedPayUrl);
+          log.info('Intercepted pay URL: ' + interceptedPayUrl);
           return;
         }
         // Look for shortcode/slug/id fields
-        const shortMatch = text.match(/"(?:shortlink|shortcode|slug|checkout_url|checkoutUrl|pay_url|payUrl|payment_link|paymentLink|short_link)":\s*"([A-Za-z0-9_\-]{4,})"/) ||
+        const shortMatch = text.match(/"(?:shortlink|shortcode|slug|checkout_url|checkoutUrl|pay_url|payUrl|payment_link|short_link)":\s*"([A-Za-z0-9_\-]{4,})"/) ||
                            text.match(/"(?:id|productId|product_id|uuid)":\s*"([A-Za-z0-9\-]{8,})"/) ;
         if (shortMatch && !shortMatch[1].match(/^\d{4}-\d{2}-\d{2}/) && !interceptedProductId) {
           interceptedProductId = shortMatch[1];
-          log.info('API intercepted product field: ' + shortMatch[0].slice(0, 80) + ' from ' + rUrl.slice(-60));
+          log.info('Intercepted product field: ' + shortMatch[0].slice(0, 80) + ' from ' + rUrl.slice(-60));
         }
       } catch {}
     };
-    page.on('response', responseHandler);
+    page.on('requestfinished', requestFinishedHandler);
 
-    // Try clicking Continuar up to 3 times — wait for form validation to settle
+    // ── Step 1 → Step 2: Click Continuar on form, then handle "O que você vai vender?" ──
+    // Cakto wizard flow (confirmed by screenshots):
+    //   1. Form (name/desc/price) → Click "Continuar" →
+    //   2. "O que você vai vender?" type selection (cards, NO inputs) → Click card + "Cadastrar" →
+    //   3. Product created → pay URL via /api/offers/
+    //
+    // CRITICAL TIMING: The card selection modal closes automatically within ~2s if not interacted.
+    // We must detect and click the card IMMEDIATELY — not after sleeping 4 seconds.
     let step2reached = false;
-    let createdInStep1 = false; // true when modal closed after Continuar (product already created)
+    let productCreatedViaWizard = false; // true when wizard fully completed (card selected + Cadastrar clicked)
+
     for (let attempt = 0; attempt < 3 && !step2reached; attempt++) {
       if (attempt > 0) {
-        log.info('Tentativa ' + (attempt + 1) + ' de avançar para step 2...');
-        // Re-fill price in case it was reset
-        await fillPrice(page, price);
+        log.info('Tentativa ' + (attempt + 1) + ' de avançar...');
+        await fillPrice(page, price); // re-fill in case it reset
         await sleep(300);
       }
+
       const step1ok = await clickByText(page, ['Continuar', 'Avançar', 'Próximo', 'Next'], 8000);
-      if (step1ok) {
-        await sleep(4000);
-        await screenshot(page, 'step2_attempt' + attempt);
-        await dumpFormState(page, 'step2_attempt' + attempt);
-        // Check if we actually advanced: file inputs appeared, URL changed, OR modal closed
-        const newState = await page.evaluate(() => {
-          const files = document.querySelectorAll('input[type="file"]');
-          // Modal closed = step1 form fields (name/description) are gone from DOM
-          const nameInput = document.querySelector('input[name="name"]');
-          const descInput = document.querySelector('textarea[name="description"]');
+      if (!step1ok) {
+        log.info('Attempt ' + attempt + ': Continuar not found');
+        continue;
+      }
+
+      log.info('Continuar clicked — polling for next step (card selection or file upload)...');
+      await screenshot(page, 'step2_after_continuar');
+
+      // Poll every 300ms for up to 10s looking for what appeared next
+      const deadline = Date.now() + 10000;
+      let pollResult = null;
+      while (Date.now() < deadline && !pollResult) {
+        pollResult = await page.evaluate(() => {
+          // Check 1: "O que você vai vender?" type selection (card grid)
+          const allEls = Array.from(document.querySelectorAll('*'));
+          // Look for the card title "Área de membros Externa" or similar
+          const cardTitles = [
+            'área de membros externa', 'acesso por e-mail', 'link de pagamento',
+            'cakto members', 'telegram', 'discord', 'área de membros cakto',
+          ];
+          for (const kw of cardTitles) {
+            const el = allEls.find(e => {
+              const t = (e.textContent || '').trim().toLowerCase();
+              const r = e.getBoundingClientRect();
+              return t === kw && r.width > 40 && r.height > 5;
+            });
+            if (el) {
+              const r = el.getBoundingClientRect();
+              return { type: 'card_selection', text: el.textContent.trim().slice(0, 40), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }
+          }
+          // Also check for the modal heading "O que você vai vender?"
+          const headingEl = allEls.find(e => {
+            const t = (e.textContent || '').trim().toLowerCase();
+            return (t === 'o que você vai vender?' || t.includes('o que você vai vender')) &&
+                   e.getBoundingClientRect().width > 0 &&
+                   e.children.length <= 3;
+          });
+          if (headingEl) {
+            // Find the "Área de membros Externa" card near the heading
+            const cards = allEls.filter(e => {
+              const t = (e.textContent || '').trim().toLowerCase();
+              const r = e.getBoundingClientRect();
+              return (t.includes('membros externa') || t.includes('acesso por e-mail')) &&
+                     r.width > 60 && r.height > 20;
+            });
+            if (cards.length > 0) {
+              const r = cards[0].getBoundingClientRect();
+              return { type: 'card_selection', text: cards[0].textContent.trim().slice(0, 40), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }
+            return { type: 'card_heading_only', x: 0, y: 0, text: 'heading found' };
+          }
+          // Check 2: File input appeared (upload step)
+          const fileInputs = document.querySelectorAll('input[type="file"]');
+          if (fileInputs.length > 0) return { type: 'file_input', x: 0, y: 0, text: '' };
+          // Check 3: Still on form (validation error) — name/desc still present
+          const hasForm = !!document.querySelector('input[name="name"]') || !!document.querySelector('textarea[name="description"]');
+          if (hasForm) return { type: 'still_on_form', x: 0, y: 0, text: '' };
+          // Check 4: URL changed to products list (modal closed without creation)
           const url = location.href;
-          return {
-            fileCount: files.length,
-            url: url.slice(-80),
-            modalClosed: !nameInput && !descInput,
-          };
-        });
-        log.info('Step2 check: fileCount=' + newState.fileCount + ' modalClosed=' + newState.modalClosed + ' url=' + newState.url);
-        if (newState.fileCount > 0 || page.url() !== beforeStep1Url || newState.modalClosed) {
-          step2reached = true;
-          createdInStep1 = newState.modalClosed; // product already created — skip type selection
-          log.info(newState.modalClosed ? 'Modal fechou — produto criado em step 1!' : 'Avançou para step 2!');
+          if (url.includes('/dashboard/products') && !url.includes('/new')) {
+            return { type: 'modal_closed', x: 0, y: 0, text: url.slice(-50) };
+          }
+          return null;
+        }).catch(() => null);
+
+        if (!pollResult) await sleep(300);
+      }
+
+      log.info('Poll result: ' + JSON.stringify(pollResult));
+      await screenshot(page, 'step2_poll_result' + attempt);
+
+      if (!pollResult) {
+        log.info('Poll timed out — no recognizable state');
+        continue;
+      }
+
+      if (pollResult.type === 'card_selection' || pollResult.type === 'card_heading_only') {
+        step2reached = true;
+        log.info('Card selection detected: "' + pollResult.text + '"');
+
+        // IMMEDIATELY click the preferred card using trusted mouse.click()
+        // Find the best card to click: prefer "Área de membros Externa", fallback to first card
+        const cardPos = await page.evaluate(() => {
+          const allEls = Array.from(document.querySelectorAll('*'));
+          // Priority order for ebook products
+          const priorities = [
+            'área de membros externa',
+            'acesso por e-mail',
+            'link de pagamento',
+          ];
+          for (const kw of priorities) {
+            const el = allEls.find(e => {
+              const t = (e.textContent || '').trim().toLowerCase();
+              const r = e.getBoundingClientRect();
+              return t === kw && r.width > 40 && r.height > 5;
+            });
+            if (el) {
+              const r = el.getBoundingClientRect();
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: el.textContent.trim().slice(0, 40) };
+            }
+          }
+          // Fallback: click the first card element (any card with an arrow icon suggests it's clickable)
+          const cards = allEls.filter(e => {
+            const r = e.getBoundingClientRect();
+            return r.width > 100 && r.height > 60 && r.height < 200 &&
+                   (e.tagName === 'DIV' || e.tagName === 'BUTTON') &&
+                   (e.textContent || '').trim().length > 3 &&
+                   e.children.length >= 1 && e.children.length <= 6;
+          });
+          if (cards.length > 0) {
+            const r = cards[0].getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: 'card:' + (cards[0].textContent || '').trim().slice(0, 30) };
+          }
+          return null;
+        }).catch(() => null);
+
+        if (cardPos) {
+          log.info('Clicking card (trusted): "' + cardPos.text + '" @(' + Math.round(cardPos.x) + ',' + Math.round(cardPos.y) + ')');
+          await page.mouse.click(cardPos.x, cardPos.y);
+          await sleep(800);
+        } else {
+          // Fallback: use the position from polling
+          if (pollResult.x > 0) {
+            log.info('Clicking card via poll pos @(' + Math.round(pollResult.x) + ',' + Math.round(pollResult.y) + ')');
+            await page.mouse.click(pollResult.x, pollResult.y);
+            await sleep(800);
+          }
         }
+
+        // Click "Cadastrar" button to confirm type selection and create product
+        await screenshot(page, 'before_cadastrar');
+        const cadastrarClicked = await clickByText(page, ['Cadastrar', 'Criar produto', 'Criar', 'Confirmar', 'Continuar'], 6000);
+        log.info('Cadastrar clicked: ' + cadastrarClicked);
+        if (cadastrarClicked) {
+          log.info('Aguardando criação do produto...');
+          await sleep(5000);
+          await screenshot(page, 'after_cadastrar');
+          productCreatedViaWizard = true;
+        }
+      } else if (pollResult.type === 'file_input') {
+        step2reached = true;
+        log.info('File upload step reached');
+      } else if (pollResult.type === 'still_on_form') {
+        log.info('Still on form (validation error?) — attempt ' + attempt);
+        await dumpFormState(page, 'form_validation_error' + attempt);
+        // Try re-filling description with more content
+        if (attempt === 0) {
+          const extraDesc = desc + ' Conteúdo exclusivo e completo para transformar sua vida.';
+          await fillInput(page, ['textarea[name="description"]', 'textarea'], extraDesc).catch(() => {});
+          await sleep(300);
+        }
+      } else if (pollResult.type === 'modal_closed') {
+        log.info('Modal fechou antes de detectar step 2 — URL: ' + pollResult.text);
+        step2reached = true; // treat as if we advanced (might have been created)
       }
     }
 
-    // ── Remove network listener — log what was captured ─────────────────────
-    page.off('response', responseHandler);
-    log.info('API calls captured during Continuar: ' + capturedApiCalls.length);
-    capturedApiCalls.forEach((c, i) => log.info('  API[' + i + ']: ' + c));
+    // ── Wait for any late API responses, then stop listening ─────────────────
+    if (productCreatedViaWizard || step2reached) await sleep(2000);
+    page.off('requestfinished', requestFinishedHandler);
+    log.info('POST/PATCH calls captured: ' + capturedApiCalls.length);
+    capturedApiCalls.forEach((c, i) => log.info('  REQ[' + i + ']: ' + c));
 
-    // ── Secondary: scan page HTML / React state for pay URL (if interception missed) ──
-    if (!interceptedPayUrl && createdInStep1) {
+    // ── Scan page for pay URL after wizard completed ──────────────────────────
+    if (productCreatedViaWizard || step2reached) {
       const fromPageState = await page.evaluate(() => {
-        // Check window.__NEXT_DATA__ (Next.js apps embed server state here)
         try {
           const nd = window.__NEXT_DATA__;
           if (nd) {
             const s = JSON.stringify(nd);
             const m = s.match(/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
             if (m) return 'https://pay.cakto.com.br/' + m[1];
-            // Also look for shortcode/slug in nested props
-            const sm = s.match(/"(?:shortlink|shortcode|slug|checkout_url|payment_link)":\s*"([A-Za-z0-9_\-]{5,})"/);
-            if (sm) return '__id:' + sm[1];
           }
         } catch {}
-        // Check raw page HTML for pay URL
         const html = document.documentElement.innerHTML || '';
         const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
         if (m && m.length > 0) return m[0];
-        // Check for any product ID/shortcode in the page state data
-        const idMatch = html.match(/"(?:shortlink|shortcode|slug)":\s*"([A-Za-z0-9]{4,})"/);
-        if (idMatch) return '__id:' + idMatch[1];
         return null;
       }).catch(() => null);
 
-      // Also try direct API fetch using session cookies
-      if (!fromPageState) {
-        const apiResult = await page.evaluate(async (sTitle) => {
-          const endpoints = [
-            '/api/v1/products?limit=10&sort=-createdAt',
-            '/api/products?limit=10&sort=-createdAt',
-            '/api/v1/products?status=draft&limit=10',
-            '/api/products?status=draft&limit=10',
-            '/graphql',
-          ];
-          for (const ep of endpoints) {
-            try {
-              const r = await fetch(ep, {
-                credentials: 'include',
-                headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-                ...(ep.includes('graphql') ? {
-                  method: 'POST',
-                  body: JSON.stringify({ query: '{ products { id shortcode title status } }' })
-                } : {})
-              });
-              if (r.ok) {
-                const txt = await r.text();
-                const snippet = txt.slice(0, 300);
-                return { endpoint: ep, snippet };
-              }
-            } catch (e) {}
-          }
-          return null;
-        }, shortTitle).catch(() => null);
-        if (apiResult) {
-          log.info('Direct API fetch ' + apiResult.endpoint + ': ' + apiResult.snippet);
-          // Try to extract pay URL from result
-          const pm = (apiResult.snippet || '').match(/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
-          if (pm) {
-            interceptedPayUrl = 'https://pay.cakto.com.br/' + pm[1];
-            interceptedProductId = pm[1];
-            log.info('API fetch pay URL: ' + interceptedPayUrl);
-          }
-        } else {
-          log.info('Direct API fetch: all endpoints failed or returned non-200');
-        }
+      if (fromPageState) {
+        interceptedPayUrl = fromPageState;
+        const m = fromPageState.match(/\/([A-Za-z0-9]{5,})$/);
+        if (m) interceptedProductId = m[1];
+        log.info('Page state: pay URL=' + interceptedPayUrl);
       }
 
-      if (fromPageState) {
-        if (fromPageState.startsWith('__id:')) {
-          interceptedProductId = fromPageState.slice(5);
-          log.info('Page state: product ID=' + interceptedProductId);
+      // Try /api/offers/ — most reliable way to get the new offer's pay URL
+      if (!interceptedPayUrl) {
+        await sleep(2000); // give backend a moment to persist
+        const apiMatch = await getCaktoPayUrlFromApi(page, shortTitle).catch(() => null);
+        if (apiMatch && apiMatch.payUrl) {
+          interceptedPayUrl = apiMatch.payUrl;
+          interceptedProductId = apiMatch.offerId;
+          log.info('Offers API pay URL: ' + interceptedPayUrl);
         } else {
-          interceptedPayUrl = fromPageState;
-          const m = fromPageState.match(/\/([A-Za-z0-9]{5,})$/);
-          if (m) interceptedProductId = m[1];
-          log.info('Page state: pay URL=' + interceptedPayUrl);
+          log.info('Offers API: no match found for "' + shortTitle + '"');
         }
       }
     }
@@ -792,43 +960,6 @@ async function publishToCakto(ebook) {
       log.info('Interception result: product ID only=' + interceptedProductId);
     } else {
       log.info('Interception result: nothing captured');
-    }
-
-    // ── Step 2: Product type selection ("O que você vai vender?") ───────────
-    // If Cakto advanced to the type selection screen, pick "Acesso por e-mail"
-    // CRITICAL: use page.mouse.click() (trusted event) — React ignores evaluate().click()
-    // NOTE: skip if createdInStep1 — product already exists, type selection not needed
-    if (step2reached && !createdInStep1) {
-      const typePos = await page.evaluate(() => {
-        const all = Array.from(document.querySelectorAll('button, [role="button"], div, h3, p, span'));
-        const typeCards = ['acesso por e-mail', 'link de pagamento', 'infoproduto', 'ebook', 'arquivo'];
-        for (const target of typeCards) {
-          const el = all.find(e => {
-            const t = (e.textContent || '').toLowerCase().trim();
-            return t === target || t.startsWith(target.slice(0, 12));
-          });
-          if (el && el.getBoundingClientRect().width > 0) {
-            const r = el.getBoundingClientRect();
-            return { x: r.left + r.width / 2, y: r.top + r.height / 2, target };
-          }
-        }
-        return null;
-      });
-      if (typePos) {
-        log.info('Tipo encontrado: ' + typePos.target + ' @(' + Math.round(typePos.x) + ',' + Math.round(typePos.y) + ')');
-        await page.mouse.click(typePos.x, typePos.y); // TRUSTED click — React requires isTrusted=true
-        await sleep(1500);
-        log.info('Tipo clicado (trusted): ' + typePos.target);
-        // Click "Cadastrar" to confirm type selection
-        const cadastrarClicked = await clickByText(page, ['Cadastrar', 'Confirmar', 'Criar'], 5000);
-        if (cadastrarClicked) {
-          log.info('Cadastrar clicado — aguardando produto ser criado...');
-          await sleep(4000);
-          await screenshot(page, 'after_cadastrar');
-        }
-      } else {
-        log.info('Tela de seleção de tipo não detectada — pode já ter sido selecionado');
-      }
     }
 
     // ── Step 2: Upload PDF and Cover ──────────────────────────────────────────
@@ -901,7 +1032,7 @@ async function publishToCakto(ebook) {
     let caktoProductId = null;
     const beforeUrl = page.url();
 
-    if (!createdInStep1) {
+    if (!productCreatedViaWizard) {
       log.info('Publicando...');
       const published = await clickByText(page, [
         'Publicar', 'Salvar e publicar', 'Criar produto', 'Criar', 'Salvar', 'Save',
@@ -918,156 +1049,183 @@ async function publishToCakto(ebook) {
         }
       }
     } else {
-      // ── createdInStep1: modal closed after Continuar — product IS created ────
-      // Primary: use intercepted API response (most reliable)
+      // ── productCreatedViaWizard: wizard fully completed (card selected + Cadastrar clicked) ──
+      // Primary: use intercepted API response (most reliable, already set in wizard section)
       if (interceptedPayUrl) {
         productUrl = interceptedPayUrl;
         caktoProductId = interceptedProductId;
-        log.info('createdInStep1: pay URL from API interception: ' + productUrl);
+        log.info('wizard done: pay URL from interception: ' + productUrl);
       } else if (interceptedProductId && interceptedProductId.length >= 5 && !/^\d+$/.test(interceptedProductId)) {
-        // Have a product ID but no full pay URL — construct it
         productUrl = 'https://pay.cakto.com.br/' + interceptedProductId;
         caktoProductId = interceptedProductId;
-        log.info('createdInStep1: constructed pay URL from product ID: ' + productUrl);
+        log.info('wizard done: constructed pay URL from product ID: ' + productUrl);
       } else {
-        // Fallback: navigate products list and search for draft product
-        log.info('createdInStep1=true — buscando produto na lista (incluindo rascunhos)...');
+        // ── Fallback: scan current products list page ─────────────────────────
+        log.info('productCreatedViaWizard=true — escaneando lista de produtos...');
 
       const findAndPublishProduct = async () => {
-        // 1. Navigate to products list (domcontentloaded avoids frame detachment + timeout)
-        await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
-          waitUntil: 'domcontentloaded', timeout: 20000
-        }).catch(e => log.warn('goto products list: ' + e.message));
-        await sleep(4000); // extra wait for React to render list
+        // 1. Wait 4s for React to re-render the list after modal close
+        await sleep(4000);
+        await screenshot(page, 'cakto_list_after_modal');
 
-        // 2. Reset the Status filter to show ALL products (not just "Ativo")
-        // Click the Status dropdown and select "Todos"
-        const filterReset = await page.evaluate(() => {
-          // Find the Status dropdown button/select — look for elements containing "Ativo" text
-          const all = Array.from(document.querySelectorAll('button, select, [role="combobox"], [class*="select"], [class*="dropdown"], [class*="filter"]'));
-          const statusBtn = all.find(el => {
-            const t = (el.textContent || el.value || '').trim();
-            return (t === 'Ativo' || t.includes('Ativo') || t.includes('Status')) && el.getBoundingClientRect().width > 0;
+        // 2. Use the SEARCH BOX to find the product (works regardless of status filter)
+        // The search box (placeholder "Pesquisar") searches all products including drafts
+        const shortTitle = ebook.title.slice(0, 20).toLowerCase();
+        const searchTitle = ebook.title.slice(0, 30); // use first 30 chars for search
+        const searchResult = await page.evaluate((searchTitle) => {
+          // Find the search input
+          const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="search"]'));
+          const searchInput = inputs.find(i => {
+            const ph = (i.placeholder || '').toLowerCase();
+            return ph.includes('pesquis') || ph.includes('search') || ph.includes('busca');
           });
-          if (statusBtn) { statusBtn.click(); return 'clicked:' + (statusBtn.textContent || statusBtn.tagName).slice(0, 30); }
-          return null;
-        }).catch(() => null);
-        log.info('Status filter click: ' + filterReset);
-        if (filterReset) {
-          await sleep(1000);
-          // Select "Todos" option from the dropdown
-          const todosClicked = await page.evaluate(() => {
-            const opts = Array.from(document.querySelectorAll('li, [role="option"], [role="menuitem"], option, button'));
-            const el = opts.find(o => {
-              const t = (o.textContent || '').trim().toLowerCase();
-              return (t === 'todos' || t === 'all' || t === 'rascunho' || t.includes('todos')) && o.getBoundingClientRect().width > 0;
-            });
-            if (el) { el.click(); return (el.textContent || '').trim(); }
-            return null;
-          });
-          log.info('Status option selected: ' + todosClicked);
-          await sleep(2000); // wait for list to reload with all statuses
+          if (!searchInput) return 'no_search_input';
+          // Set the search value
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+          if (nativeSetter && nativeSetter.set) {
+            nativeSetter.set.call(searchInput, searchTitle);
+          } else {
+            searchInput.value = searchTitle;
+          }
+          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+          searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+          searchInput.focus();
+          return 'searched:' + searchTitle;
+        }, searchTitle).catch(() => null);
+        log.info('Search: ' + searchResult);
+        if (searchResult && searchResult.startsWith('searched:')) {
+          await sleep(2500); // wait for search results to load
+          await screenshot(page, 'cakto_search_results');
         }
 
-        // 3. Also try via URL — some apps support status param
-        // Scan the current page HTML for our product's pay link or title
-        const shortTitle = ebook.title.slice(0, 20).toLowerCase();
+        // Also try: look for ALL elements containing "Ativo" text — might be a custom div filter
+        // This is a breadth-first scan of all visible elements with "Ativo" or "Status" text
+        const statusDebug = await page.evaluate(() => {
+          const all = Array.from(document.querySelectorAll('*'));
+          const elems = all.filter(e => {
+            const t = (e.textContent || '').trim();
+            const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && r.width < 300 && r.height < 60 &&
+                   e.children.length <= 2 && (t === 'Ativo' || t === 'Status' || t === 'Filtros');
+          }).map(e => {
+            const r = e.getBoundingClientRect();
+            return { tag: e.tagName, text: (e.textContent||'').trim().slice(0,20), x: Math.round(r.left), y: Math.round(r.top) };
+          });
+          return elems.slice(0, 8);
+        }).catch(() => []);
+        log.info('Status/filter elements: ' + JSON.stringify(statusDebug));
 
-        for (let attempt = 0; attempt < 3 && !productUrl; attempt++) {
-          if (attempt > 0) {
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-            await sleep(3000);
-          }
+        // 3. Search the current page for our product by title
+        for (let attempt = 0; attempt < 2 && !productUrl; attempt++) {
+          if (attempt > 0) await sleep(2000);
 
-          // 4. Search page HTML for pay URL (product might be visible as data attr or link)
           const found = await page.evaluate((sTitle) => {
-            // 4a. Any pay.cakto.com.br link on page
+            // a. Any pay.cakto.com.br link matching our product
             const links = Array.from(document.querySelectorAll('a[href*="pay.cakto"], a[href*="cakto.com.br/"]'));
             if (links.length > 0) {
-              // Prefer link that's in a row matching our title
               const match = links.find(l => {
                 const row = l.closest('tr, [class*="row"], [class*="product"], li') || l.parentElement;
                 return row && row.textContent.toLowerCase().includes(sTitle);
               });
-              return match ? match.href : links[0].href;
+              if (match) return match.href;
             }
-            // 4b. Pay URL pattern anywhere in page HTML (data attrs, JSON state, etc.)
+            // b. Pay URL pattern in page HTML
             const html = document.documentElement.innerHTML || '';
-            const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
-            if (m && m.length > 0) return m[0];
-            // 4c. Is our product title visible in any row?
-            const rows = Array.from(document.querySelectorAll('tr, [class*="row"], li, [class*="product-item"]'));
-            const row = rows.find(r => r.textContent.toLowerCase().includes(sTitle) && r.textContent.length < 500);
-            return row ? '__row_found__' : null;
+            const pm = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
+            if (pm && pm.length > 0) {
+              // Log all found (to pick right one)
+              return pm[0]; // return first — might not be right product
+            }
+            // c. Product row by title — count ALL rows and check title
+            const rows = Array.from(document.querySelectorAll('tr, [class*="row"], li'));
+            const allTitles = rows.filter(r => r.textContent.length < 800).map(r => r.textContent.toLowerCase().slice(0,50));
+            const row = rows.find(r => r.textContent.toLowerCase().includes(sTitle) && r.textContent.length < 800);
+            return row ? '__row:' + allTitles.join('|') : '__notfound:' + allTitles.slice(0,5).join('|');
           }, shortTitle).catch(() => null);
 
-          log.info('Produto search attempt ' + (attempt + 1) + ': ' + (found || 'null'));
+          log.info('Product search ' + (attempt+1) + ': ' + (found || 'null').slice(0, 200));
 
-          if (found && found !== '__row_found__' && found.includes('pay.cakto')) {
+          if (found && found.includes('pay.cakto')) {
             productUrl = found;
             const m = found.match(/\/([A-Za-z0-9]{5,})$/);
             if (m) caktoProductId = m[1];
-            log.info('Pay URL encontrada na lista: ' + productUrl);
+            log.info('Pay URL from list: ' + productUrl);
             break;
-          } else if (found === '__row_found__' || (found && found.includes('pay.cakto'))) {
-            // Product found in list — click on it to get detail page
-            log.info('Produto encontrado na lista — navegando para detalhes...');
-            const clickResult = await page.evaluate((sTitle) => {
-              const rows = Array.from(document.querySelectorAll('tr, [class*="row"], li, [class*="product-item"], td'));
-              const row = rows.find(r => r.textContent.toLowerCase().includes(sTitle) && r.textContent.length < 500);
-              if (!row) return null;
-              // Click on the row or a link within it
-              const link = row.querySelector('a') || row;
-              const r = link.getBoundingClientRect();
+          } else if (found && found.startsWith('__row:')) {
+            // Product row found — click it to navigate to product detail page
+            log.info('Produto encontrado — clicando na linha...');
+            const beforeClickUrl = page.url();
+            await page.evaluate((sTitle) => {
+              const rows = Array.from(document.querySelectorAll('tr, [class*="row"], li'));
+              const row = rows.find(r => r.textContent.toLowerCase().includes(sTitle) && r.textContent.length < 800);
+              if (!row) return;
+              // Click the row's link or the row itself
+              const link = row.querySelector('a[href*="/products/"]') || row.querySelector('a') || row;
               link.click();
-              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-            }, shortTitle).catch(() => null);
-
-            if (clickResult) {
-              await sleep(3000);
-              await screenshot(page, 'cakto_product_detail');
-              const detailUrl = page.url();
-              log.info('Detail page URL: ' + detailUrl);
-
-              // Look for pay URL in detail page
-              const payUrl = await page.evaluate(() => {
-                const html = document.documentElement.innerHTML || '';
-                const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
-                if (m) return m[0];
-                const links = Array.from(document.querySelectorAll('a[href*="pay.cakto"]'));
-                return links.length > 0 ? links[0].href : null;
-              }).catch(() => null);
-
-              if (payUrl) {
-                productUrl = payUrl;
-                const m = payUrl.match(/\/([A-Za-z0-9]{5,})$/);
-                if (m) caktoProductId = m[1];
-                log.info('Pay URL from detail: ' + payUrl);
-              } else {
-                // Try clicking "Publicar" if product is in draft state
-                log.info('Tentando publicar produto do detalhe...');
-                const published = await clickByText(page, ['Publicar', 'Ativar', 'Publish', 'Activate'], 8000);
-                if (published) {
-                  await sleep(5000);
-                  const payAfterPublish = await page.evaluate(() => {
-                    const html = document.documentElement.innerHTML || '';
-                    const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
-                    return m ? m[0] : null;
-                  }).catch(() => null);
-                  if (payAfterPublish) {
-                    productUrl = payAfterPublish;
-                    const m = payAfterPublish.match(/\/([A-Za-z0-9]{5,})$/);
-                    if (m) caktoProductId = m[1];
-                    log.info('Pay URL após publicar: ' + payAfterPublish);
-                  }
-                }
-                if (!productUrl) {
-                  caktoProductId = caktoProductId || 'created';
-                  log.warn('Pay URL não encontrada no detalhe — produto criado mas sem URL de checkout');
+            }, shortTitle).catch(() => {});
+            // Wait for navigation to product detail page
+            await page.waitForFunction(
+              (prev) => window.location.href !== prev,
+              { timeout: 8000 }, beforeClickUrl
+            ).catch(() => {});
+            await sleep(2000);
+            await screenshot(page, 'cakto_product_detail');
+            const detailUrl = page.url();
+            log.info('Detail URL after click: ' + detailUrl);
+            // Extract product ID from detail URL (e.g. /dashboard/products/manage/ID/info)
+            const idFromUrl = detailUrl.match(/\/products\/(?:manage\/)?([a-zA-Z0-9_-]{4,})(?:\/|$)/);
+            if (idFromUrl) {
+              log.info('Product ID from URL: ' + idFromUrl[1]);
+            }
+            // Search detail page for pay URL
+            const payUrl = await page.evaluate(() => {
+              const html = document.documentElement.innerHTML || '';
+              const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
+              if (m) return m[0];
+              const links = Array.from(document.querySelectorAll('a[href*="pay.cakto"], a[href*="cakto.com.br/"]'));
+              return links.length > 0 ? links[0].href : null;
+            }).catch(() => null);
+            if (payUrl) {
+              productUrl = payUrl;
+              const m = payUrl.match(/\/([A-Za-z0-9]{5,})$/);
+              if (m) caktoProductId = m[1];
+              log.info('Pay URL from detail: ' + payUrl);
+            } else {
+              // Try clicking "Publicar" / "Ativar" to activate the draft product
+              log.info('Tentando ativar produto rascunho...');
+              const activated = await clickByText(page, ['Publicar', 'Ativar', 'Publish', 'Activate', 'Salvar e publicar'], 6000);
+              if (activated) {
+                await sleep(4000);
+                const payAfter = await page.evaluate(() => {
+                  const html = document.documentElement.innerHTML || '';
+                  const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
+                  return m ? m[0] : null;
+                }).catch(() => null);
+                if (payAfter) {
+                  productUrl = payAfter;
+                  const m = payAfter.match(/\/([A-Za-z0-9]{5,})$/);
+                  if (m) caktoProductId = m[1];
+                  log.info('Pay URL after publish: ' + payAfter);
                 }
               }
+              if (!productUrl) {
+                caktoProductId = idFromUrl ? idFromUrl[1] : 'created';
+                log.warn('Pay URL not found — product exists but URL unavailable');
+              }
             }
-            break; // exit retry loop
+            break;
+          }
+        }
+
+        // 4. Fallback: query api.cakto.com.br/api/offers/ — offer.id IS the pay shortcode
+        if (!productUrl) {
+          const apiMatch = await getCaktoPayUrlFromApi(page, shortTitle).catch(() => null);
+          if (apiMatch && apiMatch.payUrl) {
+            productUrl = apiMatch.payUrl;
+            caktoProductId = apiMatch.offerId;
+            log.info('Pay URL from offers API: ' + productUrl);
+          } else {
+            log.info('findAndPublish: offers API returned no match');
           }
         }
       };
@@ -1075,9 +1233,9 @@ async function publishToCakto(ebook) {
       await findAndPublishProduct();
 
       if (!caktoProductId) {
-        // Product was created (modal closed) but we couldn't locate via list — still success
+        // Product was created but we couldn't locate via list — still success
         caktoProductId = 'created';
-        log.warn('createdInStep1 mas checkout URL não encontrada — marcando como sucesso');
+        log.warn('productCreatedViaWizard mas checkout URL não encontrada — marcando como sucesso');
       }
       } // end else (no intercepted pay URL)
     }
@@ -1092,11 +1250,11 @@ async function publishToCakto(ebook) {
     if (!productUrl) {
       if (finalUrl.includes('pay.cakto') || finalUrl.match(/cakto\.com\.br\/[A-Za-z0-9]{5,}$/)) {
         productUrl = finalUrl;
-      } else if (!createdInStep1) {
-        // For non-createdInStep1 path, use finalUrl as fallback
+      } else if (!productCreatedViaWizard) {
+        // For non-wizard path, use finalUrl as fallback
         productUrl = finalUrl;
       }
-      // For createdInStep1 with no pay URL found, leave productUrl null
+      // For productCreatedViaWizard with no pay URL found, leave productUrl null
       // (caller will save as null rather than a wrong dashboard URL)
     }
     if (!caktoProductId) {
@@ -1117,8 +1275,8 @@ async function publishToCakto(ebook) {
     } catch {}
 
     // ── Real success detection ─────────────────────────────────────────────────
-    // createdInStep1 is an EXPLICIT success (modal closed = product created on Cakto)
-    let realSuccess = createdInStep1;
+    // productCreatedViaWizard = explicit success (card selected + Cadastrar clicked)
+    let realSuccess = productCreatedViaWizard;
     let titleFoundInList = false;
 
     if (!realSuccess) {
@@ -1140,7 +1298,7 @@ async function publishToCakto(ebook) {
       );
     }
 
-    log.info('Success: ' + realSuccess + ' createdInStep1=' + createdInStep1 + ' step2=' + step2reached + ' prodId=' + caktoProductId + ' url=' + productUrl);
+    log.info('Success: ' + realSuccess + ' wizardDone=' + productCreatedViaWizard + ' step2=' + step2reached + ' prodId=' + caktoProductId + ' url=' + productUrl);
 
     await browser.close();
 
