@@ -1363,11 +1363,17 @@ async function finalizarCadastro(page, numericId) {
     {waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
   await sleep(3000);
   let fInfo=null;
-  for(let i=0;i<60;i++){
+  for(let i=0;i<90;i++){
     await sleep(1000);
     // At t=20s, reload to help lazy-mounting SPA components
     if(i===19){
       log.info('Finalizar t=20s — reloading page to help SPA mount');
+      await page.reload({waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+      await sleep(3000);
+    }
+    // At t=50s, reload again if button still not enabled
+    if(i===49){
+      log.info('Finalizar t=50s — second reload (PDF still processing?)');
       await page.reload({waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
       await sleep(3000);
     }
@@ -1387,10 +1393,13 @@ async function finalizarCadastro(page, numericId) {
       }
       return findFinalizarBtn(document);
     }).catch(()=>null);
-    if(fInfo){log.info('Finalizar t='+(i+1)+'s disabled='+fInfo.disabled+' text="'+fInfo.text+'"');break;}
+    if(fInfo && !fInfo.disabled){
+      log.info('Finalizar t='+(i+1)+'s ENABLED: "'+fInfo.text+'"');
+      break;
+    }
+    if(fInfo){ log.info('Finalizar t='+(i+1)+'s disabled — waiting for PDF processing...'); fInfo=null; }
   }
-  if(!fInfo){log.warn('Finalizar not found');return false;}
-  if(fInfo.disabled){log.warn('Finalizar disabled');return false;}
+  if(!fInfo){log.warn('Finalizar not found or still disabled after 60s');return false;}
   await page.mouse.click(fInfo.x,fInfo.y);
   await sleep(5000);
   await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>['confirmar','sim','ok','publicar','finalizar','ativar'].includes((b.textContent||'').trim().toLowerCase()));if(b)b.click();});
@@ -1448,9 +1457,21 @@ async function publishToHotmart(ebook) {
       if(sessionReady){log.info('Session established t='+(i+1)+'s'); break;}
     }
     if (!sessionReady) log.warn('Session not confirmed -- proceeding anyway');
-    // Step 1: Create product (wizard + pricing)
-    const {numericId,category,wizardCoverUploaded}=await createProduct(page,session,{title,topic,description,coverPath,pdfPath});
-    if(!numericId || !/^\d+$/.test(String(numericId))) throw new Error('No product ID after creation (got: '+numericId+')');
+    // Step 1: Create product (wizard + pricing) — OR resume from existing if we have a product ID
+    // An ebook can have a hotmartProductId but no hotmartUrl when: product was created but Finalizar
+    // failed (e.g. PDF processing took too long). In that case, skip creation and resume.
+    let numericId, category, wizardCoverUploaded;
+    const existingId = ebook.hotmartProductId || null;
+    if (existingId && /^\d+$/.test(String(existingId))) {
+      log.info('Resuming existing product ' + existingId + ' (was created but not finalized)');
+      numericId = String(existingId);
+      category = ebook.category || 'Outros';
+      wizardCoverUploaded = false;
+    } else {
+      const created = await createProduct(page,session,{title,topic,description,coverPath,pdfPath});
+      numericId = created.numericId; category = created.category; wizardCoverUploaded = created.wizardCoverUploaded;
+      if(!numericId || !/^\d+$/.test(String(numericId))) throw new Error('No product ID after creation (got: '+numericId+')');
+    }
     // Step 2: Upload cover image (skip if already done during wizard)
     let coverUploaded = wizardCoverUploaded || false;
     if (!coverUploaded) {
