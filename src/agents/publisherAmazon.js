@@ -100,8 +100,8 @@ async function doSignin(page) {
 
     if (pageInfo.shownEmail) log.info('Conta na página: "' + pageInfo.shownEmail + '" (KDP_EMAIL: ' + KDP_EMAIL + ')');
 
-    if (pageInfo.switchPos && pageInfo.shownEmail && !pageInfo.shownEmail.includes(KDP_EMAIL)) {
-      log.info('Email diferente detectado — clicando "Trocar contas"...');
+    if (pageInfo.switchPos && (!pageInfo.shownEmail || !pageInfo.shownEmail.includes(KDP_EMAIL))) {
+      log.info('Trocar contas link encontrado (email=' + (pageInfo.shownEmail||'?') + ') — clicando...');
       await page.mouse.click(pageInfo.switchPos.x, pageInfo.switchPos.y);
       await sleep(3000);
       await screenshot(page, 'signin_after_switch');

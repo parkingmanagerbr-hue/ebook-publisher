@@ -273,12 +273,16 @@ async function createProduct(page, session, ebook) {
   log.info('Desc filled: ' + descFilled);
   await sleep(400);
 
-  // Click category button
+  // Click category button — normalize accents for comparison
   const catClicked = await page.evaluate((cat) => {
+    function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
+    const catNorm = norm(cat);
+    const catFirst = catNorm.split(' ')[0]; // e.g. "negocios" from "Negocios e Carreira"
     const all = Array.from(document.querySelectorAll('button, [class*="categor"], [class*="option"], li, [role="option"]'));
     const b = all.find(b => {
-      const t = (b.textContent||'').trim();
-      return t === cat || t.includes(cat.split(' ')[0]);
+      const t = norm(b.textContent||'');
+      const r = b.getBoundingClientRect();
+      return r.width > 0 && (t === catNorm || t.includes(catFirst));
     });
     if (b) { b.click(); return b.textContent.trim().slice(0,40); }
     return false;
@@ -752,9 +756,9 @@ async function uploadCoverImage(page, numericId, coverPath) {
     });
     await sleep(3000);
     const imgAreaClicked = await page.evaluate(()=>{
-      // Priority 1: Hotmart's known cover button ID
+      // Priority 1: Hotmart's known cover button ID — scroll into view first, click regardless of width
       const known = document.querySelector('#input-file-cover, button[id*="cover" i], button[id*="imagem" i]');
-      if(known && known.getBoundingClientRect().width > 0){known.click();return '#'+known.id||'known';}
+      if(known){known.scrollIntoView({behavior:'instant',block:'center'});known.click();return 'id:'+(known.id||'btn');}
       // Priority 2: class-based selectors
       const selectors = ['[class*="upload"][class*="image"]','[class*="image"][class*="upload"]','[class*="cover"]','[class*="thumbnail"]','[class*="imagem"]','[class*="foto"]'];
       for (const sel of selectors) {
@@ -770,10 +774,16 @@ async function uploadCoverImage(page, numericId, coverPath) {
       return null;
     });
     log.info('Image area clicked: '+imgAreaClicked);
-    await sleep(1500);
-    // Look for file input — Hotmart may use a hidden input triggered by button click
-    let fileInput = await page.$('#input-file-cover ~ input[type="file"], input[type="file"][accept*="image"]').catch(()=>null);
+    await sleep(2500);
+    // Look for file input — Hotmart uses hidden inputs triggered by button click
+    // Try ALL file inputs including hidden ones (uploadFile works on hidden inputs)
+    let fileInput = await page.$('input[type="file"][accept*="image"]').catch(()=>null);
     if(!fileInput) fileInput = await page.$('input[type="file"]').catch(()=>null);
+    if(!fileInput) {
+      // Force-expose: some Hotmart versions hide the input with CSS, try page.$$ to find any
+      const all = await page.$$('input[type="file"]').catch(()=>[]);
+      if(all.length > 0) fileInput = all[0];
+    }
     if(fileInput){
       await fileInput.uploadFile(coverPath);
       await sleep(4000);
