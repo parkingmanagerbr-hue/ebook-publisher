@@ -257,22 +257,56 @@ async function publishToCakto(ebook) {
     await screenshot(page, 'products_list');
 
     // ── Open new product form (SPA navigation) ────────────────────────────────
-    // Strategy 1: Click "Criar produto" button (SPA route)
-    let formOpened = await clickByText(page, [
-      'Criar produto', 'Novo produto', 'Adicionar produto', '+ Produto', 'Criar',
-    ], 5000);
+    // Strategy 1: Click "Criar produto" button — try scrolling to find it
+    let formOpened = false;
+    const tryCreateBtn = await page.evaluate(() => {
+      // Scroll through page to find button
+      const all = Array.from(document.querySelectorAll(
+        'button, [role="button"], a[class*="btn"], a[class*="button"]'
+      ));
+      const targets = ['criar produto','novo produto','adicionar produto','+ produto','criar','new product','add product','novo'];
+      for (const el of all) {
+        const t = (el.textContent || '').toLowerCase().trim();
+        if (targets.some(tgt => t === tgt || t.includes(tgt))) {
+          el.scrollIntoView({ behavior: 'instant', block: 'center' });
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 30) };
+        }
+      }
+      // Also try elements with "+" text or icon-only FABs
+      const fab = all.find(el => {
+        const t = (el.textContent || '').trim();
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.width < 80 && (t === '+' || t === '');
+      });
+      if (fab) {
+        const r = fab.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: 'FAB:' + (fab.textContent || '+') };
+      }
+      return null;
+    });
+    if (tryCreateBtn) {
+      log.info('Criar produto btn: "' + tryCreateBtn.text + '" @(' + Math.round(tryCreateBtn.x) + ',' + Math.round(tryCreateBtn.y) + ')');
+      await page.mouse.click(tryCreateBtn.x, tryCreateBtn.y);
+      await sleep(3000);
+      // Check if form appeared
+      const hasForm = await page.evaluate(() => {
+        const inputs = document.querySelectorAll('input[type="text"], input[name], textarea');
+        return inputs.length > 1; // more than just the checkbox
+      });
+      if (hasForm) { formOpened = true; log.info('Form aberto via click no botão'); }
+    }
 
     if (!formOpened) {
-      // Strategy 2: Navigate to /new route (might work for SPA)
-      log.info('Tentando navegação direta para /new...');
-      await page.evaluate(() => { window.history.pushState({}, '', '/dashboard/products/new'); });
-      await sleep(1500);
-      // Dispatch popstate to trigger SPA routing
-      await page.evaluate(() => { window.dispatchEvent(new PopStateEvent('popstate')); });
+      // Strategy 2: Full page.goto() navigation — triggers React Router properly
+      log.info('Tentando page.goto para /dashboard/products/new...');
+      await page.goto(BASE_URL + '/dashboard/products/new', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(e => log.warn('goto /new: ' + e.message));
+      await sleep(2000);
+      // Wait for any form input to appear (React hydration)
+      await page.waitForSelector('input[type="text"], input[name], textarea, input[placeholder]', { timeout: 10000 }).catch(e => log.warn('waitForSelector: ' + e.message));
       await sleep(2000);
     }
 
-    await sleep(4000); // wait for React modal to fully render
     await screenshot(page, 'new_product_form');
     await dumpFormState(page, 'form_open');
 
@@ -585,9 +619,13 @@ async function publishToCakto(ebook) {
       log.info('Título na lista após publicar: ' + titleFoundInList);
     }
 
-    const realSuccess = caktoProductId !== null ||
-                        (!isTabUrl && finalUrl !== beforeUrl) ||
-                        (step2reached && titleFoundInList);
+    // finalUrl === beforeStep1Url AND prodId='new' means nothing was created
+    const nothingCreated = (caktoProductId === 'new' || finalUrl.endsWith('/products/new')) && !titleFoundInList;
+    const realSuccess = !nothingCreated && (
+      (caktoProductId !== null && caktoProductId !== 'new') ||
+      (!isTabUrl && finalUrl !== beforeUrl && !finalUrl.endsWith('/products/new')) ||
+      (step2reached && titleFoundInList)
+    );
 
     log.info('Success: ' + realSuccess + ' step2=' + step2reached + ' prodId=' + caktoProductId + ' titleInList=' + titleFoundInList);
 
