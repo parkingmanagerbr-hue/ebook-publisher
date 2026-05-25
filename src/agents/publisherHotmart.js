@@ -444,45 +444,76 @@ async function createProduct(page, session, ebook) {
   // Hotmart shows this when navigating away from a page with "unsaved" changes.
   // We must click "Sair mesmo assim" (Leave anyway) to proceed to /pricing.
   const dismissConfirmModal = async (label) => {
-    const result = await page.evaluate(() => {
-      // Selectors: hot-modal.confirmation-modal or data-testid="modal-component"
-      const modal = document.querySelector(
-        'hot-modal.confirmation-modal, [data-testid="modal-component"], hot-modal[class*="confirm"]'
-      );
-      if (!modal) return null;
-      const allBtns = Array.from(modal.querySelectorAll('button'));
-      if (allBtns.length === 0) {
-        // Maybe modal uses shadow DOM
-        const host = modal.shadowRoot;
-        if (host) {
-          const shadowBtns = Array.from(host.querySelectorAll('button'));
-          allBtns.push(...shadowBtns);
+    // Returns {x,y,text} coords of the leave button (in shadow DOM), or null if no modal
+    const btnPos = await page.evaluate(() => {
+      // Deep shadow DOM search — hot-modal uses hot-modal-footer whose shadow root holds buttons
+      function findLeaveBtn(root) {
+        if (!root) return null;
+        const btns = Array.from(root.querySelectorAll('button, [role=button]'));
+        const found = btns.find(b => {
+          const t = (b.textContent||'').toLowerCase().trim();
+          const r = b.getBoundingClientRect();
+          return r.width > 0 && (t.includes('sair') || t.includes('leave') || t.includes('descartar') || t.includes('discard') || t.includes('continuar mesmo'));
+        });
+        if (found) {
+          const r = found.getBoundingClientRect();
+          return {x: r.left+r.width/2, y: r.top+r.height/2, text: found.textContent.trim().slice(0,30)};
         }
+        // Fallback: primary/danger button (the proceed one)
+        const primary = btns.find(b => {
+          const cls = (b.className||'').toLowerCase();
+          const r = b.getBoundingClientRect();
+          return r.width > 0 && (cls.includes('primary') || cls.includes('danger'));
+        });
+        if (primary) {
+          const r = primary.getBoundingClientRect();
+          return {x: r.left+r.width/2, y: r.top+r.height/2, text: 'primary:'+primary.textContent.trim().slice(0,30)};
+        }
+        // Recurse into shadow roots of child elements
+        const all = Array.from(root.querySelectorAll('*'));
+        for (const el of all) {
+          if (el.shadowRoot) {
+            const r = findLeaveBtn(el.shadowRoot);
+            if (r) return r;
+          }
+        }
+        return null;
       }
-      // "Sair mesmo assim" / "Leave anyway" / "Descartar" / "Discard" — the confirm-leave button
-      const leaveBtn = allBtns.find(b => {
-        const t = (b.textContent||'').toLowerCase().trim();
-        return t.includes('sair') || t.includes('leave') || t.includes('descartar') ||
-               t.includes('discard') || t.includes('continuar mesmo') || t.includes('confirmar');
-      });
-      if (leaveBtn) { leaveBtn.click(); return 'leave:' + leaveBtn.textContent.trim().slice(0,30); }
-      // Fallback: primary/danger styled button (usually the "proceed" action)
-      const primary = allBtns.find(b => {
-        const cls = (b.className||'').toLowerCase();
-        return (cls.includes('primary') || cls.includes('danger')) && b.getBoundingClientRect().width > 0;
-      });
-      if (primary) { primary.click(); return 'primary:' + primary.textContent.trim().slice(0,30); }
-      // Last resort: last visible button in modal (typically confirm action)
-      const visible = allBtns.filter(b => b.getBoundingClientRect().width > 0);
-      if (visible.length > 0) {
-        const last = visible[visible.length - 1];
-        last.click();
-        return 'last:' + last.textContent.trim().slice(0,30);
+
+      const modal = document.querySelector('hot-modal.confirmation-modal, hot-modal[class*=confirm]');
+      if (!modal) return null;
+      const txt = (modal.textContent || '').toLowerCase();
+      if (!txt.includes('não foram salvos') && !txt.includes('sair') && !txt.includes('leave') && !txt.includes('descartar')) {
+        return null; // false positive
       }
-      return 'modal-found-no-btn';
+      // 1. Search hot-modal-footer shadow root (most likely location)
+      const footer = modal.querySelector('hot-modal-footer');
+      if (footer && footer.shadowRoot) {
+        const r = findLeaveBtn(footer.shadowRoot);
+        if (r) return r;
+      }
+      // 2. Search hot-modal shadow root
+      if (modal.shadowRoot) {
+        const r = findLeaveBtn(modal.shadowRoot);
+        if (r) return r;
+      }
+      // 3. Search modal light DOM
+      const r = findLeaveBtn(modal);
+      if (r) return r;
+      // 4. Last resort: return all visible button positions for logging
+      const allVisible = Array.from(document.querySelectorAll('button')).filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,20));
+      return {x: 0, y: 0, text: 'no-btn:'+allVisible.join('|')};
     }).catch(() => null);
-    if (result) { log.info('[' + label + '] Confirmation modal dismissed: ' + result); }
-    return result;
+
+    if (!btnPos) { return null; } // no modal visible
+    if (btnPos.x > 0 && btnPos.y > 0) {
+      await page.mouse.click(btnPos.x, btnPos.y);
+      log.info('[' + label + '] Modal leave btn clicked: ' + btnPos.text + ' @(' + Math.round(btnPos.x) + ',' + Math.round(btnPos.y) + ')');
+      return 'clicked:' + btnPos.text;
+    }
+    // No button found in shadow DOM — log and return; caller retry logic handles it
+    log.warn('[' + label + '] modal-no-shadow-btn. Visible: ' + btnPos.text);
+    return 'modal-found-no-btn';
   };
 
   // Immediate check after Continuar clicks
@@ -501,7 +532,7 @@ async function createProduct(page, session, ebook) {
   }).catch(()=>[]);
   if (validationErrors.length > 0) log.warn('Validation errors on /info: ' + JSON.stringify(validationErrors));
 
-  // Wait for /4/pricing URL and capture product ID
+  // Wait for pricing step to appear (URL may stay /4/info — detect by pricing UI appearing)
   for (let i = 0; i < 25; i++) {
     await sleep(1000);
     const u = page.url();
@@ -511,10 +542,34 @@ async function createProduct(page, session, ebook) {
       log.info('Pricing/manage URL t='+(i+1)+'s: '+u.slice(0,80));
       break;
     }
-    // Check for confirmation modal on every tick (it may appear with a delay)
-    await dismissConfirmModal('wait-loop-t' + (i+1));
+    // ALSO break if pricing UI is visible (currency dropdown or "Precificação" heading)
+    // Hotmart SPA sometimes stays at /4/info URL while rendering the pricing step
+    const pricingVisible = await page.evaluate(() => {
+      const hasCurrencyDropdown = !!(
+        document.querySelector('hot-select#currency') ||
+        document.querySelector('[placeholder*="moeda" i]') ||
+        document.querySelector('[placeholder*="Moeda"]')
+      );
+      const hasPricingHeading = Array.from(document.querySelectorAll('h1, h2, h3, [class*="title"]'))
+        .some(el => (el.textContent || '').trim().toLowerCase().includes('precifica'));
+      return hasCurrencyDropdown || hasPricingHeading;
+    }).catch(() => false);
+    if (pricingVisible) {
+      log.info('Pricing UI detected at t='+(i+1)+'s — breaking wait loop');
+      break;
+    }
+    // Check for REAL confirmation modal (only if it contains "dados não foram salvos" text)
+    const hasRealModal = await page.evaluate(() => {
+      const modal = document.querySelector('hot-modal.confirmation-modal, hot-modal[class*="confirm"]');
+      if (!modal) return false;
+      const txt = (modal.textContent || '').toLowerCase();
+      return txt.includes('não foram salvos') || txt.includes('dados não') || txt.includes('sair') || txt.includes('leave');
+    }).catch(() => false);
+    if (hasRealModal) {
+      await dismissConfirmModal('wait-loop-t' + (i+1));
+    }
 
-    // If still on /info after 10s, try clicking Continuar again (form may need re-fill)
+    // If still on /info after 10s, try clicking Continuar again
     if (i === 9 && u.includes('/4/info')) {
       log.warn('Still on /info after 10s — retrying Continuar...');
       const retryPos = await page.evaluate(()=>{
@@ -954,103 +1009,146 @@ async function uploadCoverImage(page, numericId, coverPath) {
   if (!coverPath || !fs.existsSync(coverPath)) { log.warn('No cover image at: '+coverPath); return false; }
   log.info('Uploading cover to product '+numericId+'...');
   try {
-    // Navigate directly to /info page (manage info tab has the cover upload widget)
-    await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',{waitUntil:'networkidle2',timeout:35000}).catch(()=>{});
-    // Wait for React to hydrate — wait for buttons to appear (up to 20s)
-    await page.waitForFunction(()=>document.querySelectorAll('button').length > 3, {timeout:20000}).catch(()=>{});
-    await sleep(2000);
-    // If still no buttons, try overview → Informações tab navigation
-    let btnCount = await page.evaluate(()=>document.querySelectorAll('button').length).catch(()=>0);
-    if (btnCount <= 3) {
-      await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',{waitUntil:'networkidle2',timeout:30000}).catch(()=>{});
-      await page.waitForFunction(()=>document.querySelectorAll('button').length > 3, {timeout:15000}).catch(()=>{});
-      await sleep(2000);
-      // Click "Informações" tab from overview to trigger proper SPA navigation to /info
-      await page.evaluate(()=>{
-        const tabs = Array.from(document.querySelectorAll('button, a, [role="tab"]'));
+    // Known file input selectors from confirmed Hotmart manage/info page runs
+    const COVER_INPUT_SELS = [
+      'input[id*="cover_image"]',
+      'input[accept*="image"][type="file"]',
+      'input[type="file"]',
+    ];
+
+    // Poll for the cover file input — replaces fixed sleeps
+    async function waitForCoverInput(maxMs) {
+      const deadline = Date.now() + maxMs;
+      while (Date.now() < deadline) {
+        // 1. Standard selectors (finds hidden inputs too)
+        for (const sel of COVER_INPUT_SELS) {
+          const fi = await page.$(sel).catch(() => null);
+          if (fi) { log.info('Cover input found via: ' + sel); return fi; }
+        }
+        // 2. Deep shadow DOM search — Hotmart hides file inputs inside web component shadow roots
+        const shadowHandle = await page.evaluateHandle(() => {
+          function findFileInput(root) {
+            if (!root) return null;
+            const inputs = Array.from(root.querySelectorAll ? root.querySelectorAll('input[type="file"]') : []);
+            if (inputs.length > 0) {
+              // Expose the hidden input so Puppeteer can interact with it
+              inputs[0].style.cssText = 'display:block!important;visibility:visible!important;opacity:1!important;position:fixed!important;top:0;left:0;width:1px;height:1px;';
+              return inputs[0];
+            }
+            const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+            for (const el of all) {
+              if (el.shadowRoot) { const r = findFileInput(el.shadowRoot); if (r) return r; }
+            }
+            return null;
+          }
+          return findFileInput(document);
+        }).catch(() => null);
+        if (shadowHandle) {
+          const el = shadowHandle.asElement ? shadowHandle.asElement() : null;
+          if (el) { log.info('Cover input found via shadow DOM'); return el; }
+          await shadowHandle.dispose().catch(()=>{});
+        }
+        await sleep(500);
+      }
+      return null;
+    }
+
+    // Step 1: Navigate to /info and wait generously for SPA cover component to mount
+    await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',
+      {waitUntil:'load', timeout:35000}).catch(()=>{});
+    await sleep(4000); // extra wait for lazy-mounted web components (they mount async after page load)
+    // Debug screenshot to see actual page state during cover upload
+    await page.screenshot({path:'/app/cover_debug_'+numericId+'.png', fullPage:false}).catch(()=>{});
+    // Scroll page to trigger lazy rendering of sections
+    await page.evaluate(() => { window.scrollTo(0,500); window.scrollTo(0,0); }).catch(()=>{});
+    await sleep(1000);
+    // Try clicking any visible "Capa" / cover section to expand it
+    await page.evaluate(() => {
+      const allElements = Array.from(document.querySelectorAll('h2,h3,h4,button,[role="button"],[role="tab"],label,span,div'));
+      const capaEl = allElements.find(el => {
+        const t = (el.textContent||'').trim().toLowerCase();
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && (t === 'capa do produto' || t === 'imagem do produto' || t === 'image' || (t.includes('capa') && t.length < 30));
+      });
+      if (capaEl) { capaEl.scrollIntoView({behavior:'instant',block:'center'}); capaEl.click(); }
+    }).catch(()=>{});
+    await sleep(1000);
+    let fileInput = await waitForCoverInput(25000); // 25s — component mounts async
+    log.info('Cover input after /info nav: ' + (fileInput ? 'FOUND' : 'not found'));
+
+    if (!fileInput) {
+      // Step 2: /overview to warm up the SPA shell, then soft-navigate to /info via tab click, poll 30s
+      await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
+        {waitUntil:'domcontentloaded', timeout:25000}).catch(()=>{});
+      await page.waitForFunction(() => document.querySelectorAll('button').length > 3,
+        {timeout: 15000}).catch(() => {});
+      await sleep(1500);
+
+      // Try clicking "Informações" tab to trigger soft SPA nav to /info
+      const tabClicked = await page.evaluate(() => {
+        const tabs = Array.from(document.querySelectorAll('button, a, [role="tab"], [href*="/info"]'));
         const infoTab = tabs.find(t => {
           const txt = (t.textContent||'').toLowerCase().trim();
           return txt === 'informações' || txt === 'informacoes' || txt === 'info' || txt.includes('informa');
         });
-        if (infoTab) { infoTab.scrollIntoView({behavior:'instant',block:'center'}); infoTab.click(); }
+        if (infoTab) { infoTab.scrollIntoView({behavior:'instant',block:'center'}); infoTab.click(); return true; }
+        return false;
       });
-      await sleep(3000);
-      await page.waitForFunction(()=>document.querySelectorAll('button').length > 3, {timeout:10000}).catch(()=>{});
+      log.info('Informações tab clicked: ' + tabClicked);
+
+      // Whether or not tab click worked, wait for the file input (up to 30s) — the React component mounts asynchronously
+      fileInput = await waitForCoverInput(30000);
+      log.info('Cover input after tab click: ' + (fileInput ? 'FOUND' : 'not found'));
+
+      // If still not found and tab click failed, force-navigate to /info as last resort
+      if (!fileInput) {
+        await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',
+          {waitUntil:'domcontentloaded', timeout:25000}).catch(()=>{});
+        fileInput = await waitForCoverInput(20000);
+        log.info('Cover input after forced /info nav: ' + (fileInput ? 'FOUND' : 'not found'));
+      }
     }
-    // Debug: log what's on the page BEFORE clicking anything
-    const preClickDebug = await page.evaluate(()=>{
-      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map(i=>({id:i.id,name:i.name,accept:i.accept,cls:i.className.slice(0,40)}));
-      const btns = Array.from(document.querySelectorAll('button,[role="button"]')).filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,30));
-      const url = location.href.slice(-60);
-      return {url, fileInputs, visibleBtns: btns.slice(0,15)};
-    }).catch(e=>({err:e.message}));
-    log.info('Cover pre-click debug: '+JSON.stringify(preClickDebug));
 
-    // Step 0: Try direct file input BEFORE clicking anything (Hotmart may have hidden input in DOM already)
-    let fileInput = await page.$('input[type="file"][accept*="image"]').catch(()=>null);
-    if(!fileInput) fileInput = await page.$('input[type="file"]').catch(()=>null);
-    if(fileInput) {
-      log.info('Cover: found file input directly (no button click needed)');
-    } else {
-      // Step 1: Click "Informações" tab if visible
-      await page.evaluate(()=>{
-        const b = Array.from(document.querySelectorAll('button,a,[role="tab"]')).find(b =>
-          (b.textContent||'').trim().toLowerCase().includes('informa')
-        );
-        if(b) b.click();
-      });
-      await sleep(3000);
-
-      // Step 2: Try to find and click image upload area — use TRUSTED mouse.click()
-      const imgAreaPos = await page.evaluate(()=>{
-        // Priority 1: #input-file-cover button (confirmed present on Hotmart manage/info page)
+    if (!fileInput) {
+      // Step 3: Click the image upload area (TRUSTED mouse) then wait (up to 10s)
+      const imgAreaPos = await page.evaluate(() => {
         const known = document.querySelector('#input-file-cover');
-        if(known){known.scrollIntoView({behavior:'instant',block:'center'});const r=known.getBoundingClientRect();if(r.width>0)return{x:r.left+r.width/2,y:r.top+r.height/2,src:'#input-file-cover'};}
-        // Priority 2: any element with cover/image in ID
+        if (known) { known.scrollIntoView({behavior:'instant',block:'center'}); const r=known.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:'#input-file-cover'}; }
         const byId = document.querySelector('[id*="cover" i], [id*="imagem" i], [id*="thumbnail" i]');
-        if(byId){byId.scrollIntoView({behavior:'instant',block:'center'});const r=byId.getBoundingClientRect();if(r.width>0)return{x:r.left+r.width/2,y:r.top+r.height/2,src:'id:'+byId.id};}
-        // Priority 3: class-based selectors
+        if (byId) { byId.scrollIntoView({behavior:'instant',block:'center'}); const r=byId.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:'id:'+byId.id}; }
         const classSels = ['[class*="upload-image"]','[class*="image-upload"]','[class*="upload"][class*="cover"]','[class*="cover"][class*="upload"]'];
-        for(const sel of classSels){const el=document.querySelector(sel);if(el){el.scrollIntoView({behavior:'instant',block:'center'});const r=el.getBoundingClientRect();if(r.width>0)return{x:r.left+r.width/2,y:r.top+r.height/2,src:sel};}}
-        // Priority 4: button/label with upload/image text
-        const btn = Array.from(document.querySelectorAll('button,[role="button"],label')).find(b=>{
-          const t=(b.textContent||'').toLowerCase();
-          const r=b.getBoundingClientRect();
+        for (const sel of classSels) { const el=document.querySelector(sel); if(el) { el.scrollIntoView({behavior:'instant',block:'center'}); const r=el.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:sel}; } }
+        const btn = Array.from(document.querySelectorAll('button,[role="button"],label')).find(b => {
+          const t=(b.textContent||'').toLowerCase(); const r=b.getBoundingClientRect();
           return r.width>0 && (t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('selecione um arquivo')||t.includes('cover'));
         });
-        if(btn){btn.scrollIntoView({behavior:'instant',block:'center'});const r=btn.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2,src:'btn:'+btn.textContent.trim().slice(0,30)};}
+        if (btn) { btn.scrollIntoView({behavior:'instant',block:'center'}); const r=btn.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2, src:'btn:'+btn.textContent.trim().slice(0,30)}; }
         return null;
       });
-      log.info('Image area pos: '+JSON.stringify(imgAreaPos));
-      if(imgAreaPos) {
-        await sleep(300);
-        await page.mouse.click(imgAreaPos.x, imgAreaPos.y); // TRUSTED click
-        log.info('Image area clicked (trusted): ' + imgAreaPos.src);
-      }
-      await sleep(2500);
-
-      // Step 3: Re-check for file input after clicking
-      fileInput = await page.$('input[type="file"][accept*="image"]').catch(()=>null);
-      if(!fileInput) fileInput = await page.$('input[type="file"]').catch(()=>null);
-      if(!fileInput) {
-        const all = await page.$$('input[type="file"]').catch(()=>[]);
-        if(all.length > 0) fileInput = all[0];
+      log.info('Image area pos: ' + JSON.stringify(imgAreaPos));
+      if (imgAreaPos) {
+        await page.mouse.click(imgAreaPos.x, imgAreaPos.y);
+        fileInput = await waitForCoverInput(10000);
+        log.info('Cover input after area click: ' + (fileInput ? 'FOUND' : 'not found'));
       }
     }
 
-    // Debug what we can see after click attempts
-    const postClickDebug = await page.evaluate(()=>{
-      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map(i=>({id:i.id,accept:i.accept,visible:i.getBoundingClientRect().width>0}));
-      return {fileInputs};
-    }).catch(()=>null);
-    log.info('Cover post-click file inputs: '+JSON.stringify(postClickDebug));
+    // Debug final state
+    const dbg = await page.evaluate(() => {
+      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map(i=>({id:i.id,accept:i.accept}));
+      return {url: location.href.slice(-60), fileInputs};
+    }).catch(() => null);
+    log.info('Cover upload final debug: ' + JSON.stringify(dbg));
 
-    if(fileInput){
+    if (fileInput) {
       await fileInput.uploadFile(coverPath);
       await sleep(4000);
-      await page.evaluate(()=>{
-        const b=Array.from(document.querySelectorAll('button')).find(b=>{const t=b.textContent.trim().toLowerCase();return t==='salvar'||t==='save'||t==='confirmar'||t.includes('salvar');});
-        if(b)b.click();
+      await page.evaluate(() => {
+        const b = Array.from(document.querySelectorAll('button')).find(b => {
+          const t = b.textContent.trim().toLowerCase();
+          return t === 'salvar' || t === 'save' || t === 'confirmar' || t.includes('salvar');
+        });
+        if (b) b.click();
       });
       await sleep(3000);
       log.info('Cover uploaded!');
@@ -1097,18 +1195,37 @@ async function uploadPDF(page, numericId, pdfPath) {
 
 async function finalizarCadastro(page, numericId) {
   log.info('Finalizing '+numericId);
-  await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
-  for(let i=0;i<40;i++){
-    await sleep(1000);
-    const len = await page.evaluate(()=>document.body&&document.body.innerText?document.body.innerText.length:0).catch(()=>0);
-    if(len>=1200) break;
-  }
-  await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Painel');if(b)b.click();});
+  // Go directly to /overview — that's where "Finalizar cadastro" button lives
+  // (the old /info → Painel approach was unreliable for newly-created products)
+  await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
+    {waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
+  await sleep(3000);
   let fInfo=null;
-  for(let i=0;i<30;i++){
+  for(let i=0;i<60;i++){
     await sleep(1000);
-    fInfo=await page.evaluate(()=>{const btn=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Finalizar cadastro');if(!btn)return null;const r=btn.getBoundingClientRect();return{disabled:btn.disabled,x:r.left+r.width/2,y:r.top+r.height/2};}).catch(()=>null);
-    if(fInfo){log.info('Finalizar t='+(i+1)+'s disabled='+fInfo.disabled);break;}
+    // At t=20s, reload to help lazy-mounting SPA components
+    if(i===19){
+      log.info('Finalizar t=20s — reloading page to help SPA mount');
+      await page.reload({waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+      await sleep(3000);
+    }
+    fInfo=await page.evaluate(()=>{
+      // Search both light DOM and through shadow roots
+      function findFinalizarBtn(root) {
+        if (!root) return null;
+        const btns = Array.from(root.querySelectorAll ? root.querySelectorAll('button') : []);
+        const found = btns.find(b => {
+          const t = (b.textContent||'').trim();
+          return t === 'Finalizar cadastro' || t === 'Finalizar' || t === 'Ativar produto' || t === 'Publicar';
+        });
+        if (found) { const r = found.getBoundingClientRect(); if(r.width>0) return {disabled:found.disabled,x:r.left+r.width/2,y:r.top+r.height/2,text:found.textContent.trim()}; }
+        const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+        for (const el of all) { if (el.shadowRoot) { const r = findFinalizarBtn(el.shadowRoot); if(r) return r; } }
+        return null;
+      }
+      return findFinalizarBtn(document);
+    }).catch(()=>null);
+    if(fInfo){log.info('Finalizar t='+(i+1)+'s disabled='+fInfo.disabled+' text="'+fInfo.text+'"');break;}
   }
   if(!fInfo){log.warn('Finalizar not found');return false;}
   if(fInfo.disabled){log.warn('Finalizar disabled');return false;}
@@ -1171,7 +1288,7 @@ async function publishToHotmart(ebook) {
     if (!sessionReady) log.warn('Session not confirmed -- proceeding anyway');
     // Step 1: Create product (wizard + pricing)
     const {numericId,category}=await createProduct(page,session,{title,topic,description,coverPath,pdfPath});
-    if(!numericId) throw new Error('No product ID after creation');
+    if(!numericId || !/^\d+$/.test(String(numericId))) throw new Error('No product ID after creation (got: '+numericId+')');
     // Step 2: Upload cover image
     const coverUploaded = await uploadCoverImage(page, numericId, coverPath);
     log.info('Cover uploaded: '+coverUploaded);
@@ -1184,7 +1301,9 @@ async function publishToHotmart(ebook) {
     const screenshot=await screenshotLandingPage(page,numericId,title);
     await browser.close();
     log.info('Done: "'+title+'" id='+numericId+' finalized='+finalized+' cover='+coverUploaded);
-    return{success:finalized,hotmartProductId:numericId,url:'https://hotmart.com/product/'+numericId,screenshot,category,platform:'hotmart',uploaded,coverUploaded};
+    // Only return url if finalized — if not finalized, product is in draft and cannot be purchased.
+    // Returning url=null when not finalized ensures autonomousAgent retries finalization next cycle.
+    return{success:finalized,hotmartProductId:numericId,url:finalized?'https://hotmart.com/product/'+numericId:null,screenshot,category,platform:'hotmart',uploaded,coverUploaded};
   }catch(err){
     await browser.close().catch(()=>{});
     log.error('publishToHotmart error: '+err.message);
