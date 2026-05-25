@@ -378,82 +378,120 @@ async function publishToCakto(ebook) {
       await sleep(2000);
     }
 
-    // ── Open new product form (SPA navigation) ────────────────────────────────
-    // Strategy 1: Click "Criar produto" button (avoid sidebar at x<=280 and top-bar at y<=80)
-    let formOpened = false;
-    const tryCreateBtn = await page.evaluate(() => {
-      const all = Array.from(document.querySelectorAll(
-        'button, [role="button"], a[class*="btn"], a[class*="button"]'
-      ));
-      const targets = ['criar produto','novo produto','adicionar produto','+ produto','criar','new product','add product','novo'];
-      // Priority 1: exact text match outside sidebar/topbar
-      for (const el of all) {
-        const t = (el.textContent || '').toLowerCase().trim();
-        const r = el.getBoundingClientRect();
-        // Must be OUTSIDE the left sidebar (x > 280) and below topbar (y > 60)
-        if (r.width > 0 && r.height > 0 && r.left > 280 && r.top > 60) {
-          if (targets.some(tgt => t === tgt || t.includes(tgt))) {
-            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 30) };
+    // ── Phase 1: Ensure we're on ?tab=products so "Adicionar Produto" btn is visible ──
+    // The "Adicionar Produto" btn at (1164,190) is ONLY present on ?tab=products.
+    // On /dashboard/products without tab, only the search FAB at (339,82) is visible.
+    // Strategy: click the "Produtos" nav item in the sidebar to activate the tab via SPA routing.
+    {
+      const prodNavClicked = await page.evaluate(() => {
+        // Find the "Produtos" item in the sidebar nav (left side, x < 280)
+        const all = Array.from(document.querySelectorAll('nav a, nav button, [class*="sidebar"] a, [class*="sidebar"] button, a, button'));
+        const el = all.find(e => {
+          const t = (e.textContent || '').trim().toLowerCase();
+          const r = e.getBoundingClientRect();
+          return (t === 'produtos' || t === 'products') && r.width > 0 && r.height > 0;
+        });
+        if (el) { el.click(); return 'clicked:' + (el.textContent||'').trim(); }
+        return null;
+      }).catch(() => null);
+      log.info('Produtos nav click: ' + prodNavClicked);
+      if (prodNavClicked) await sleep(2000); // wait for SPA to navigate
+    }
+
+    // ── Phase 2: Look for "Adicionar Produto" button with explicit search ─────
+    // After ?tab=products loads, the btn appears in the top-right of the products list.
+    // Try to find it. If not visible after 5s, trigger a hard navigation.
+    let adicionarBtnPos = null;
+    for (let tabWait = 0; tabWait < 3 && !adicionarBtnPos; tabWait++) {
+      if (tabWait > 0) {
+        // Hard navigation fallback: goto ?tab=products directly
+        await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
+          waitUntil: 'domcontentloaded', timeout: 20000
+        }).catch(e => log.warn('goto tab=products fallback: ' + e.message));
+        await sleep(3000);
+      }
+      adicionarBtnPos = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('button, [role="button"], a'));
+        const targets = ['adicionar produto','criar produto','novo produto','+ produto','+ produto','adicionar','add product','create product'];
+        for (const el of all) {
+          const t = (el.textContent || '').toLowerCase().trim();
+          const r = el.getBoundingClientRect();
+          // Must be in the MAIN CONTENT area: x > 600 (right side), y > 60 (below topbar)
+          if (r.width > 0 && r.height > 0 && r.left > 600 && r.top > 60) {
+            if (targets.some(tgt => t.includes(tgt))) {
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 40) };
+            }
           }
         }
-      }
-      // Priority 2: FAB "+" button in content area (x > 280, y > 60), small button
-      const fab = all.find(el => {
-        const t = (el.textContent || '').trim();
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && r.width < 80 && r.left > 280 && r.top > 60 &&
-               (t === '+' || t === '' || t === 'add');
-      });
-      if (fab) {
-        const r = fab.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: 'FAB:' + (fab.textContent || '+') };
-      }
-      // Priority 3: any "criar" text anywhere (may be in content)
-      const anyCreate = all.find(el => {
-        const t = (el.textContent || '').toLowerCase();
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && (t.includes('criar') || t.includes('novo produto'));
-      });
-      if (anyCreate) {
-        const r = anyCreate.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: 'any:' + (anyCreate.textContent||'').trim().slice(0,30) };
-      }
-      return null;
-    });
-    if (tryCreateBtn) {
-      log.info('Criar produto btn: "' + tryCreateBtn.text + '" @(' + Math.round(tryCreateBtn.x) + ',' + Math.round(tryCreateBtn.y) + ')');
-      await page.mouse.click(tryCreateBtn.x, tryCreateBtn.y);
-      // Wait up to 10s for a PRODUCT form (not the search box) to appear
+        // Also check for a "+" button in the content area (right side)
+        const plusBtn = all.find(el => {
+          const t = (el.textContent || '').trim();
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && r.left > 600 && r.top > 60 && r.width < 200 &&
+                 (t === '+' || t.includes('+') || t === 'Adicionar');
+        });
+        if (plusBtn) {
+          const r = plusBtn.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: 'plus:' + (plusBtn.textContent||'').trim().slice(0,30) };
+        }
+        return null;
+      }).catch(() => null);
+      log.info('Adicionar Produto btn (tabWait=' + tabWait + '): ' + (adicionarBtnPos ? '"' + adicionarBtnPos.text + '" @(' + Math.round(adicionarBtnPos.x) + ',' + Math.round(adicionarBtnPos.y) + ')' : 'not found'));
+    }
+
+    // ── Phase 3: Click "Adicionar Produto" and wait for the modal form ────────
+    let formOpened = false;
+    if (adicionarBtnPos) {
+      log.info('Clicando "Adicionar Produto" @(' + Math.round(adicionarBtnPos.x) + ',' + Math.round(adicionarBtnPos.y) + ')');
+      await page.mouse.click(adicionarBtnPos.x, adicionarBtnPos.y);
+      // Wait for modal to open: 5+ non-search inputs must appear
       await page.waitForFunction(() => {
-        const inputs = Array.from(document.querySelectorAll('input[type="text"], textarea'));
-        return inputs.some(i => {
-          const r = i.getBoundingClientRect();
-          const ph = (i.placeholder || '').toLowerCase();
-          // Exclude search/filter inputs — we need a real product name field
-          return r.width > 0 && r.height > 0 &&
-                 !ph.includes('pesquis') && !ph.includes('search') &&
-                 !ph.includes('busca') && !ph.includes('filter') && !ph.includes('filtro');
-        });
-      }, { timeout: 10000 }).catch(() => {});
-      const { hasForm, currentUrl } = await page.evaluate(() => {
         const inputs = Array.from(document.querySelectorAll('input[type="text"], input[name], textarea'));
-        const nonSearchInputs = inputs.filter(i => {
+        const nonSearch = inputs.filter(i => {
           const r = i.getBoundingClientRect();
           const ph = (i.placeholder || '').toLowerCase();
           return r.width > 0 && r.height > 0 &&
                  !ph.includes('pesquis') && !ph.includes('search') &&
-                 !ph.includes('busca') && !ph.includes('filter') && !ph.includes('filtro');
+                 !ph.includes('busca') && !ph.includes('filter');
         });
-        return { hasForm: nonSearchInputs.length, currentUrl: window.location.href };
-      });
-      // Also reject if still on the products list (FAB opened no modal)
-      const stillOnList = currentUrl.includes('/dashboard/products') && !currentUrl.includes('/new');
-      // Modal form on products list page has 4+ non-search inputs (name, desc, type, price, salesPage...)
-      // Search-box-only state has ≤2 inputs (just the "active" status hidden input)
-      // Accept the form only if: (a) navigated away from list, OR (b) still on list but many inputs = modal opened
-      const modalLikelyOpen = !stillOnList || hasForm > 2;
-      log.info('Form inputs after FAB click: ' + hasForm + ' (url=' + currentUrl + ', stillOnList=' + stillOnList + ', modal=' + modalLikelyOpen + ')');
-      if (hasForm >= 1 && modalLikelyOpen) { formOpened = true; log.info('Form aberto via click no botão'); }
+        return nonSearch.length >= 2; // modal has 5 inputs; require at least 2
+      }, { timeout: 8000 }).catch(() => {});
+      const formCount = await page.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll('input[type="text"], input[name], textarea'));
+        return inputs.filter(i => {
+          const r = i.getBoundingClientRect();
+          const ph = (i.placeholder || '').toLowerCase();
+          return r.width > 0 && r.height > 0 &&
+                 !ph.includes('pesquis') && !ph.includes('search') &&
+                 !ph.includes('busca') && !ph.includes('filter');
+        }).length;
+      }).catch(() => 0);
+      log.info('Modal form inputs after Adicionar click: ' + formCount);
+      if (formCount >= 2) { formOpened = true; log.info('Modal aberto OK — ' + formCount + ' inputs'); }
+    }
+
+    // Fallback: if "Adicionar Produto" not found on ?tab=products, try direct coordinate click
+    // at known position (1164,190) which is where the button appears on 1920x1080 viewport
+    if (!formOpened) {
+      log.info('Adicionar btn not found via text — trying coordinate click at (1164,190)...');
+      await page.mouse.click(1164, 190);
+      await page.waitForFunction(() => {
+        const inputs = Array.from(document.querySelectorAll('input[type="text"], input[name], textarea'));
+        return inputs.filter(i => {
+          const r = i.getBoundingClientRect();
+          const ph = (i.placeholder || '').toLowerCase();
+          return r.width > 0 && r.height > 0 && !ph.includes('pesquis') && !ph.includes('search');
+        }).length >= 2;
+      }, { timeout: 6000 }).catch(() => {});
+      const formCount2 = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('input[type="text"], input[name], textarea')).filter(i => {
+          const r = i.getBoundingClientRect();
+          const ph = (i.placeholder || '').toLowerCase();
+          return r.width > 0 && r.height > 0 && !ph.includes('pesquis') && !ph.includes('search');
+        }).length;
+      }).catch(() => 0);
+      log.info('Coordinate click form inputs: ' + formCount2);
+      if (formCount2 >= 2) { formOpened = true; log.info('Modal via coordenada'); }
     }
 
     if (!formOpened) {
