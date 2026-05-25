@@ -1075,13 +1075,14 @@ async function uploadCoverImage(page, numericId, coverPath) {
       await _coverCdp.send('Network.enable');
       _coverCdp.on('Network.requestWillBeSent', (evt) => {
         const u = evt.request.url, m = evt.request.method;
-        if (m !== 'GET' && (u.includes('cover') || u.includes('thumbnail') || u.includes('upload') || u.includes('media') || u.includes('image'))) {
+        // Ignore GET requests and data: URLs (inline SVG/PNG icons — false positives)
+        if (m !== 'GET' && !u.startsWith('data:') && (u.includes('cover') || u.includes('thumbnail') || u.includes('upload') || u.includes('media'))) {
           log.info('🔍 COVER_API_INTERCEPT: ' + m + ' ' + u.slice(0, 150));
         }
       });
       _coverCdp.on('Network.responseReceived', async(evt) => {
         const u = evt.response.url, m = evt.response.status;
-        if ([200,201,204].includes(m) && (u.includes('cover') || u.includes('thumbnail') || u.includes('upload') || u.includes('media') || u.includes('image'))) {
+        if ([200,201,204].includes(m) && !u.startsWith('data:') && (u.includes('cover') || u.includes('thumbnail') || u.includes('upload') || u.includes('media'))) {
           log.info('🔍 COVER_API_RESPONSE OK: ' + m + ' ' + u.slice(0, 150));
           try {
             const rb = await _coverCdp.send('Network.getResponseBody', {requestId: evt.requestId}).catch(()=>null);
