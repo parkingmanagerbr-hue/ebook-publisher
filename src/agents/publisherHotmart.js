@@ -273,21 +273,63 @@ async function createProduct(page, session, ebook) {
   log.info('Desc filled: ' + descFilled);
   await sleep(400);
 
-  // Click category button — normalize accents for comparison
+  // Screenshot before category to debug what's on the page
+  await page.screenshot({path:'/app/category_before.png'}).catch(()=>{});
+  log.info('Category debug screenshot saved: /app/category_before.png');
+
+  // Click category — Step 1: open the dropdown by clicking the category trigger
+  const catOpened = await page.evaluate(() => {
+    // Look for the dropdown trigger (not yet showing options)
+    const trigger = document.querySelector(
+      '[class*="categor"] button, [class*="category"] button, button[id*="categor"], ' +
+      '[class*="select"][class*="categor"], [class*="categor"][class*="select"], ' +
+      'select[name*="categor"], [aria-label*="ategori"], [placeholder*="ategori"]'
+    );
+    if (trigger && trigger.getBoundingClientRect().width > 0) {
+      trigger.scrollIntoView({behavior:'instant',block:'center'});
+      trigger.click();
+      return 'trigger:' + trigger.tagName;
+    }
+    // Fallback: find any element with "categoria" text and click it to open
+    const label = Array.from(document.querySelectorAll('label, span, div, p')).find(el => {
+      const t = (el.textContent||'').toLowerCase().trim();
+      return (t === 'categoria' || t === 'category') && el.getBoundingClientRect().width > 0;
+    });
+    if (label) { label.click(); return 'label:' + (label.textContent||'').trim().slice(0,20); }
+    return null;
+  }).catch(()=>null);
+  log.info('Category dropdown open attempt: ' + catOpened);
+  if (catOpened) await sleep(1000); // wait for dropdown to render
+
+  // Step 2: click the correct category option (try twice: once now, once after re-open if needed)
   const catClicked = await page.evaluate((cat) => {
     function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
     const catNorm = norm(cat);
     const catFirst = catNorm.split(' ')[0]; // e.g. "negocios" from "Negocios e Carreira"
-    const all = Array.from(document.querySelectorAll('button, [class*="categor"], [class*="option"], li, [role="option"]'));
+    // Debug: log all visible text-bearing elements
+    const debug = Array.from(document.querySelectorAll('button, li, [role="option"], [class*="option"], [class*="categor"]'))
+      .filter(el => el.getBoundingClientRect().width > 0)
+      .map(el => norm(el.textContent||'').slice(0,25))
+      .filter(t => t.length > 2)
+      .slice(0,20);
+    const all = Array.from(document.querySelectorAll(
+      'button, [class*="categor"], [class*="option"], li, [role="option"], [role="listitem"], span, div'
+    ));
     const b = all.find(b => {
       const t = norm(b.textContent||'');
       const r = b.getBoundingClientRect();
-      return r.width > 0 && (t === catNorm || t.includes(catFirst));
+      // Only match leaf-like elements (not giant containers)
+      return r.width > 0 && b.children.length < 3 && (t === catNorm || (catFirst.length > 4 && t.includes(catFirst)));
     });
     if (b) { b.click(); return b.textContent.trim().slice(0,40); }
-    return false;
+    return {notFound: true, catNorm, catFirst, visibleOptions: debug};
   }, category);
-  log.info('Category clicked: ' + catClicked);
+  if (catClicked && typeof catClicked === 'object') {
+    log.warn('Category NOT found — debug: ' + JSON.stringify(catClicked));
+    // Try: click Continuar anyway and see if there's a default category
+  } else {
+    log.info('Category clicked: ' + catClicked);
+  }
   await sleep(800);
 
   // Click first subcategory if visible
