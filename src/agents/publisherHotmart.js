@@ -356,20 +356,43 @@ async function createProduct(page, session, ebook) {
   }).catch(()=>{});
   await sleep(500);
 
-  // Click Continuar button
-  const contClicked = await page.evaluate(()=>{
-    const b = Array.from(document.querySelectorAll('button')).find(b => {
+  // Click Continuar button — use TRUSTED page.mouse.click() so React form validation fires correctly
+  const contPos = await page.evaluate(()=>{
+    const btns = Array.from(document.querySelectorAll('button'));
+    const b = btns.find(b => {
       const t = (b.textContent||'').trim().toLowerCase();
       return t === 'continuar' || t === 'next' || t === 'salvar e continuar' || t.includes('continu');
     });
-    if (b) { b.click(); return b.textContent.trim(); }
-    return false;
-  });
-  log.info('Continuar: ' + contClicked);
+    if (b) {
+      b.scrollIntoView({behavior:'instant', block:'center'});
+      const r = b.getBoundingClientRect();
+      return r.width > 0 ? {x: r.left+r.width/2, y: r.top+r.height/2, text: b.textContent.trim()} : null;
+    }
+    return null;
+  }).catch(()=>null);
+  if (contPos) {
+    await sleep(300); // let scroll settle
+    await page.mouse.click(contPos.x, contPos.y); // TRUSTED click — React requires isTrusted=true
+    log.info('Continuar: ' + contPos.text + ' (trusted mouse click)');
+  } else {
+    log.warn('Continuar button not found!');
+  }
   await sleep(4000);
 
+  // Check for inline validation errors (e.g., duplicate title) — log them
+  const validationErrors = await page.evaluate(()=>{
+    const errors = Array.from(document.querySelectorAll(
+      '[class*="error" i], [class*="invalid" i], [aria-invalid="true"], [class*="alert" i]'
+    )).filter(e => {
+      const r = e.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }).map(e => (e.textContent||'').trim().slice(0,80)).filter(Boolean);
+    return errors.slice(0, 5);
+  }).catch(()=>[]);
+  if (validationErrors.length > 0) log.warn('Validation errors on /info: ' + JSON.stringify(validationErrors));
+
   // Wait for /4/pricing URL and capture product ID
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 25; i++) {
     await sleep(1000);
     const u = page.url();
     const pm = u.match(/\/products\/manage\/(\d+)/);
@@ -377,6 +400,19 @@ async function createProduct(page, session, ebook) {
     if (u.includes('/4/pricing') || u.includes('/pricing') || pm) {
       log.info('Pricing/manage URL t='+(i+1)+'s: '+u.slice(0,80));
       break;
+    }
+    // If still on /info after 10s, try clicking Continuar again (form may need re-fill)
+    if (i === 9 && u.includes('/4/info')) {
+      log.warn('Still on /info after 10s — retrying Continuar...');
+      const retryPos = await page.evaluate(()=>{
+        const b = Array.from(document.querySelectorAll('button')).find(b => {
+          const t = (b.textContent||'').trim().toLowerCase();
+          return t === 'continuar' || t.includes('continu');
+        });
+        if (b) { b.scrollIntoView({behavior:'instant',block:'center'}); const r=b.getBoundingClientRect(); return r.width>0?{x:r.left+r.width/2,y:r.top+r.height/2}:null; }
+        return null;
+      }).catch(()=>null);
+      if (retryPos) { await page.mouse.click(retryPos.x, retryPos.y); log.info('Continuar retry (trusted)'); }
     }
   }
 
@@ -831,29 +867,32 @@ async function uploadCoverImage(page, numericId, coverPath) {
       });
       await sleep(3000);
 
-      // Step 2: Try to find and click image upload area
-      const imgAreaClicked = await page.evaluate(()=>{
-        // Priority 1: any element with cover/image in ID
-        const known = document.querySelector('#input-file-cover, [id*="cover" i], [id*="imagem" i], [id*="thumbnail" i]');
-        if(known){known.scrollIntoView({behavior:'instant',block:'center'});known.click();return 'id:'+(known.id||known.tagName);}
-        // Priority 2: class-based selectors (no width check — scrollIntoView first)
-        const selectors = ['[class*="upload-image"]','[class*="image-upload"]','[class*="upload"][class*="cover"]','[class*="cover"][class*="upload"]','[class*="upload"]','[class*="cover"]','[class*="thumbnail"]','[class*="imagem"]'];
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          if(el){el.scrollIntoView({behavior:'instant',block:'center'});el.click();return sel;}
-        }
-        // Priority 3: button text
+      // Step 2: Try to find and click image upload area — use TRUSTED mouse.click()
+      const imgAreaPos = await page.evaluate(()=>{
+        // Priority 1: #input-file-cover button (confirmed present on Hotmart manage/info page)
+        const known = document.querySelector('#input-file-cover');
+        if(known){known.scrollIntoView({behavior:'instant',block:'center'});const r=known.getBoundingClientRect();if(r.width>0)return{x:r.left+r.width/2,y:r.top+r.height/2,src:'#input-file-cover'};}
+        // Priority 2: any element with cover/image in ID
+        const byId = document.querySelector('[id*="cover" i], [id*="imagem" i], [id*="thumbnail" i]');
+        if(byId){byId.scrollIntoView({behavior:'instant',block:'center'});const r=byId.getBoundingClientRect();if(r.width>0)return{x:r.left+r.width/2,y:r.top+r.height/2,src:'id:'+byId.id};}
+        // Priority 3: class-based selectors
+        const classSels = ['[class*="upload-image"]','[class*="image-upload"]','[class*="upload"][class*="cover"]','[class*="cover"][class*="upload"]'];
+        for(const sel of classSels){const el=document.querySelector(sel);if(el){el.scrollIntoView({behavior:'instant',block:'center'});const r=el.getBoundingClientRect();if(r.width>0)return{x:r.left+r.width/2,y:r.top+r.height/2,src:sel};}}
+        // Priority 4: button/label with upload/image text
         const btn = Array.from(document.querySelectorAll('button,[role="button"],label')).find(b=>{
           const t=(b.textContent||'').toLowerCase();
-          return t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('image')||t.includes('cover')||t.includes('selecione')||t.includes('upload');
+          const r=b.getBoundingClientRect();
+          return r.width>0 && (t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('selecione um arquivo')||t.includes('cover'));
         });
-        if(btn){btn.scrollIntoView({behavior:'instant',block:'center'});btn.click();return 'button:'+btn.textContent.trim().slice(0,30);}
-        // Priority 4: any clickable area in an image-related section
-        const imgSection = document.querySelector('[class*="product-image"],[class*="product-cover"],[class*="book-cover"]');
-        if(imgSection){imgSection.scrollIntoView({behavior:'instant',block:'center'});imgSection.click();return 'section:'+imgSection.className.slice(0,30);}
+        if(btn){btn.scrollIntoView({behavior:'instant',block:'center'});const r=btn.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2,src:'btn:'+btn.textContent.trim().slice(0,30)};}
         return null;
       });
-      log.info('Image area clicked: '+imgAreaClicked);
+      log.info('Image area pos: '+JSON.stringify(imgAreaPos));
+      if(imgAreaPos) {
+        await sleep(300);
+        await page.mouse.click(imgAreaPos.x, imgAreaPos.y); // TRUSTED click
+        log.info('Image area clicked (trusted): ' + imgAreaPos.src);
+      }
       await sleep(2500);
 
       // Step 3: Re-check for file input after clicking

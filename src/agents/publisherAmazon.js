@@ -111,23 +111,36 @@ async function doSignin(page) {
       // After "Trocar contas" we may land on an ACCOUNT SELECTION page showing current accounts.
       // Need to click "Adicionar contas" (+ button) to get to the email signin form.
       const adicionarPos = await page.evaluate(() => {
-        const all = Array.from(document.querySelectorAll('a, button, span, div, p'));
+        // Only look at near-leaf elements (likely buttons/links) — avoid script-containing containers
+        const all = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], span, div, p'))
+          .filter(e => {
+            const t = (e.textContent || '').trim();
+            const r = e.getBoundingClientRect();
+            // Must be visible, short text (not script), no JS-looking content
+            return r.width > 0 && r.height > 0 && r.height < 80 &&
+                   t.length > 3 && t.length < 120 &&
+                   !t.includes('{') && !t.includes('function ') && !t.includes('var ') &&
+                   e.children.length <= 3; // near-leaf node only
+          });
+        const targets = ['adicionar conta', 'add account', 'use another', 'sign in with a different', 'mudar de conta', 'switch account', 'trocar conta'];
         const el = all.find(e => {
           const t = (e.textContent || '').toLowerCase().trim();
-          const r = e.getBoundingClientRect();
-          return r.width > 0 && r.height > 0 && (
-            t.includes('adicionar conta') || t.includes('add account') || t.includes('use another') ||
-            t.includes('sign in with a different') || t.includes('mudar de conta')
-          );
+          return targets.some(tgt => t.includes(tgt));
         });
         if (el) {
           const r = el.getBoundingClientRect();
-          return { x: r.left + r.width/2, y: r.top + r.height/2, text: (el.textContent||'').trim().slice(0,50) };
+          return { x: r.left + r.width/2, y: r.top + r.height/2, text: (el.textContent||'').trim().slice(0,60) };
         }
-        return null;
+        // Debug: log visible elements
+        const visible = all.slice(0, 15).map(e => (e.textContent||'').trim().slice(0, 30));
+        return { notFound: true, visible };
       }).catch(() => null);
-      if (adicionarPos) {
+      if (adicionarPos && !adicionarPos.notFound) {
         log.info('Página de seleção de conta — clicando "' + adicionarPos.text + '"...');
+      } else if (adicionarPos && adicionarPos.notFound) {
+        log.info('Adicionar conta btn not found. Visible: ' + JSON.stringify(adicionarPos.visible));
+      }
+      if (adicionarPos && !adicionarPos.notFound) {
         await page.mouse.click(adicionarPos.x, adicionarPos.y);
         await sleep(2000);
         try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }); } catch(e) {}
