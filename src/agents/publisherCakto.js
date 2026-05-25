@@ -407,8 +407,43 @@ async function publishToCakto(ebook) {
       }
     }
 
+    // ── Step 2: Product type selection ("O que você vai vender?") ───────────
+    // If Cakto advanced to the type selection screen, pick "Acesso por e-mail"
+    // which allows sending a Google Drive / Hotmart link to buyers via email.
+    if (step2reached) {
+      const typeSelected = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('button, [role="button"], div, h3, p, span'));
+        // Look for type cards: "Acesso por e-mail", "Link de pagamento", etc.
+        const typeCards = ['acesso por e-mail', 'link de pagamento', 'infoproduto', 'ebook', 'arquivo'];
+        for (const target of typeCards) {
+          const el = all.find(e => {
+            const t = (e.textContent || '').toLowerCase().trim();
+            return t === target || t.startsWith(target.slice(0, 12));
+          });
+          if (el && el.getBoundingClientRect().width > 0) {
+            el.click();
+            return target;
+          }
+        }
+        return null;
+      });
+      if (typeSelected) {
+        log.info('Tipo selecionado: ' + typeSelected);
+        await sleep(1500);
+        // Click "Cadastrar" to confirm type selection
+        const cadastrarClicked = await clickByText(page, ['Cadastrar', 'Confirmar', 'Criar'], 5000);
+        if (cadastrarClicked) {
+          log.info('Cadastrar clicado — aguardando produto ser criado...');
+          await sleep(4000);
+          await screenshot(page, 'after_cadastrar');
+        }
+      } else {
+        log.info('Tela de seleção de tipo não detectada — pode já ter sido selecionado');
+      }
+    }
+
     // ── Step 2: Upload PDF and Cover ──────────────────────────────────────────
-    // After "Continuar", Cakto might show file upload step
+    // After "Continuar", Cakto might show file upload step (only in some product types)
     if (ebook.pdfPath && fs.existsSync(ebook.pdfPath)) {
       log.info('Upload PDF: ' + ebook.pdfPath);
 
@@ -477,7 +512,7 @@ async function publishToCakto(ebook) {
 
     const published = await clickByText(page, [
       'Publicar', 'Salvar e publicar', 'Criar produto', 'Criar', 'Salvar', 'Save',
-      'Continuar', 'Avançar', 'Finalizar',
+      'Cadastrar', 'Continuar', 'Avançar', 'Finalizar',
     ], 10000);
 
     if (published) {
