@@ -9,10 +9,10 @@ const path = require('path');
 
 const SESSIONS_DIR = process.env.SESSIONS_DIR || '/app/data/sessions';
 
-// Session TTL in ms (Hotmart ~48h, Cakto ~7 days)
+// Session TTL in ms (Hotmart ~48h, Cakto uses cookie expiry, Amazon ~30 days)
 const SESSION_TTL = {
   hotmart: 48 * 60 * 60 * 1000,
-  cakto:   7 * 24 * 60 * 60 * 1000,
+  cakto:   365 * 24 * 60 * 60 * 1000, // Django sessionid valid ~1 year
   amazon:  30 * 24 * 60 * 60 * 1000,
 };
 
@@ -54,13 +54,43 @@ class SessionManager {
       const saved = data.savedAt || fs.statSync(filePath).mtimeMs;
       const ageMs = Date.now() - saved;
       const ttl   = SESSION_TTL[platform] || SESSION_TTL.hotmart;
-      const valid = ageMs < ttl;
+
+      // For platforms with explicit cookie expiry, use that instead of TTL
+      let valid = ageMs < ttl;
+      let expiresIn = Math.max(0, ttl - ageMs);
+      if (data.cookies && data.cookies.length > 0) {
+        // Find the most important auth cookie to check expiry
+        const authCookieNames = { cakto: 'sessionid', hotmart: 'hmSsoExp', amazon: 'session-id' };
+        const keyName = authCookieNames[platform];
+        const authCookie = keyName && data.cookies.find(c => c.name === keyName);
+        if (authCookie && authCookie.expires && authCookie.expires > 0) {
+          const cookieExpiresMs = authCookie.expires * 1000;
+          const remainingMs = cookieExpiresMs - Date.now();
+          if (remainingMs > 0) {
+            valid = true;
+            expiresIn = remainingMs;
+          }
+        }
+        // Hotmart: also check JWT token expiry as fallback
+        if (platform === 'hotmart' && data.localStorage?.token) {
+          try {
+            const parts = data.localStorage.token.split('.');
+            if (parts.length === 3) {
+              const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+              if (payload.exp && Date.now() / 1000 < payload.exp) {
+                valid = true;
+                expiresIn = Math.max(expiresIn, (payload.exp * 1000) - Date.now());
+              }
+            }
+          } catch (_) {}
+        }
+      }
 
       return {
         exists:    true,
         valid,
         ageMs,
-        expiresIn: Math.max(0, ttl - ageMs),
+        expiresIn,
         savedAt:   new Date(saved).toISOString(),
       };
     } catch {
