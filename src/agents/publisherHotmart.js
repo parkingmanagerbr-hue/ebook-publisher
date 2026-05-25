@@ -440,6 +440,55 @@ async function createProduct(page, session, ebook) {
   }
   await sleep(4000);
 
+  // Handle "Seus dados não foram salvos" confirmation modal.
+  // Hotmart shows this when navigating away from a page with "unsaved" changes.
+  // We must click "Sair mesmo assim" (Leave anyway) to proceed to /pricing.
+  const dismissConfirmModal = async (label) => {
+    const result = await page.evaluate(() => {
+      // Selectors: hot-modal.confirmation-modal or data-testid="modal-component"
+      const modal = document.querySelector(
+        'hot-modal.confirmation-modal, [data-testid="modal-component"], hot-modal[class*="confirm"]'
+      );
+      if (!modal) return null;
+      const allBtns = Array.from(modal.querySelectorAll('button'));
+      if (allBtns.length === 0) {
+        // Maybe modal uses shadow DOM
+        const host = modal.shadowRoot;
+        if (host) {
+          const shadowBtns = Array.from(host.querySelectorAll('button'));
+          allBtns.push(...shadowBtns);
+        }
+      }
+      // "Sair mesmo assim" / "Leave anyway" / "Descartar" / "Discard" — the confirm-leave button
+      const leaveBtn = allBtns.find(b => {
+        const t = (b.textContent||'').toLowerCase().trim();
+        return t.includes('sair') || t.includes('leave') || t.includes('descartar') ||
+               t.includes('discard') || t.includes('continuar mesmo') || t.includes('confirmar');
+      });
+      if (leaveBtn) { leaveBtn.click(); return 'leave:' + leaveBtn.textContent.trim().slice(0,30); }
+      // Fallback: primary/danger styled button (usually the "proceed" action)
+      const primary = allBtns.find(b => {
+        const cls = (b.className||'').toLowerCase();
+        return (cls.includes('primary') || cls.includes('danger')) && b.getBoundingClientRect().width > 0;
+      });
+      if (primary) { primary.click(); return 'primary:' + primary.textContent.trim().slice(0,30); }
+      // Last resort: last visible button in modal (typically confirm action)
+      const visible = allBtns.filter(b => b.getBoundingClientRect().width > 0);
+      if (visible.length > 0) {
+        const last = visible[visible.length - 1];
+        last.click();
+        return 'last:' + last.textContent.trim().slice(0,30);
+      }
+      return 'modal-found-no-btn';
+    }).catch(() => null);
+    if (result) { log.info('[' + label + '] Confirmation modal dismissed: ' + result); }
+    return result;
+  };
+
+  // Immediate check after Continuar clicks
+  const modalResult1 = await dismissConfirmModal('post-continuar');
+  if (modalResult1) await sleep(2000);
+
   // Check for inline validation errors (e.g., duplicate title) — log them
   const validationErrors = await page.evaluate(()=>{
     const errors = Array.from(document.querySelectorAll(
@@ -462,6 +511,9 @@ async function createProduct(page, session, ebook) {
       log.info('Pricing/manage URL t='+(i+1)+'s: '+u.slice(0,80));
       break;
     }
+    // Check for confirmation modal on every tick (it may appear with a delay)
+    await dismissConfirmModal('wait-loop-t' + (i+1));
+
     // If still on /info after 10s, try clicking Continuar again (form may need re-fill)
     if (i === 9 && u.includes('/4/info')) {
       log.warn('Still on /info after 10s — retrying Continuar...');
