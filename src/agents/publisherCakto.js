@@ -311,36 +311,61 @@ async function publishToCakto(ebook) {
     if (tryCreateBtn) {
       log.info('Criar produto btn: "' + tryCreateBtn.text + '" @(' + Math.round(tryCreateBtn.x) + ',' + Math.round(tryCreateBtn.y) + ')');
       await page.mouse.click(tryCreateBtn.x, tryCreateBtn.y);
-      // Wait up to 10s for form inputs to appear (SPA modal animation)
+      // Wait up to 10s for a PRODUCT form (not the search box) to appear
       await page.waitForFunction(() => {
-        const inputs = document.querySelectorAll('input[type="text"], input[name="name"], input[placeholder], textarea');
-        return Array.from(inputs).some(i => {
+        const inputs = Array.from(document.querySelectorAll('input[type="text"], textarea'));
+        return inputs.some(i => {
           const r = i.getBoundingClientRect();
-          return r.width > 0 && r.height > 0;
+          const ph = (i.placeholder || '').toLowerCase();
+          // Exclude search/filter inputs — we need a real product name field
+          return r.width > 0 && r.height > 0 &&
+                 !ph.includes('pesquis') && !ph.includes('search') &&
+                 !ph.includes('busca') && !ph.includes('filter') && !ph.includes('filtro');
         });
       }, { timeout: 10000 }).catch(() => {});
-      const hasForm = await page.evaluate(() => {
+      const { hasForm, currentUrl } = await page.evaluate(() => {
         const inputs = Array.from(document.querySelectorAll('input[type="text"], input[name], textarea'));
-        return inputs.filter(i => i.getBoundingClientRect().width > 0).length;
+        const nonSearchInputs = inputs.filter(i => {
+          const r = i.getBoundingClientRect();
+          const ph = (i.placeholder || '').toLowerCase();
+          return r.width > 0 && r.height > 0 &&
+                 !ph.includes('pesquis') && !ph.includes('search') &&
+                 !ph.includes('busca') && !ph.includes('filter') && !ph.includes('filtro');
+        });
+        return { hasForm: nonSearchInputs.length, currentUrl: window.location.href };
       });
-      log.info('Form inputs after FAB click: ' + hasForm);
-      if (hasForm >= 1) { formOpened = true; log.info('Form aberto via click no botão'); }
+      // Also reject if still on the products list (FAB opened no modal)
+      const stillOnList = currentUrl.includes('/dashboard/products') && !currentUrl.includes('/new');
+      log.info('Form inputs after FAB click: ' + hasForm + ' (url=' + currentUrl + ', stillOnList=' + stillOnList + ')');
+      if (hasForm >= 1 && !stillOnList) { formOpened = true; log.info('Form aberto via click no botão'); }
     }
 
     if (!formOpened) {
       // Strategy 2: Navigate to /new route and wait for React hydration
       log.info('Tentando page.goto para /dashboard/products/new...');
       await page.goto(BASE_URL + '/dashboard/products/new', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(e => log.warn('goto /new: ' + e.message));
-      // Wait up to 12s for any form input to appear (React hydration + render)
+      // Wait up to 12s for a PRODUCT form input (exclude search boxes)
       await page.waitForFunction(() => {
         const inputs = Array.from(document.querySelectorAll('input[type="text"], input[name], textarea, input[placeholder]'));
-        return inputs.some(i => i.getBoundingClientRect().width > 0);
+        return inputs.some(i => {
+          const r = i.getBoundingClientRect();
+          const ph = (i.placeholder || '').toLowerCase();
+          return r.width > 0 && r.height > 0 &&
+                 !ph.includes('pesquis') && !ph.includes('search') &&
+                 !ph.includes('busca') && !ph.includes('filter') && !ph.includes('filtro');
+        });
       }, { timeout: 12000 }).catch(e => log.warn('waitForForm: ' + e.message));
       await sleep(1000);
 
       // Strategy 3: if still no form, scroll down — form might be below fold
       const formAfterGoto = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('input[type="text"], input[name], textarea')).filter(i => i.getBoundingClientRect().width > 0).length
+        Array.from(document.querySelectorAll('input[type="text"], input[name], textarea')).filter(i => {
+          const r = i.getBoundingClientRect();
+          const ph = (i.placeholder || '').toLowerCase();
+          return r.width > 0 && r.height > 0 &&
+                 !ph.includes('pesquis') && !ph.includes('search') &&
+                 !ph.includes('busca') && !ph.includes('filter') && !ph.includes('filtro');
+        }).length
       );
       if (!formAfterGoto) {
         log.info('Form still not visible — trying scroll + wait');
@@ -401,7 +426,8 @@ async function publishToCakto(ebook) {
       'input[placeholder*="title" i]',
       'input[id*="name" i]:not([type="hidden"])',
       'input[id*="title" i]:not([type="hidden"])',
-      'input[type="text"]:first-of-type',
+      // Last-resort: first visible text input that is NOT a search/filter box
+      'input[type="text"]:not([placeholder*="esquisa"]):not([placeholder*="earch"]):not([placeholder*="usca"]):not([placeholder*="iltro"])',
     ], ebook.title);
     log.info('Name filled: ' + nameFilled);
     await sleep(400);
@@ -610,77 +636,153 @@ async function publishToCakto(ebook) {
       }
     } else {
       // ── createdInStep1: modal closed after Continuar — product IS created ────
-      // Navigate explicitly to products list to find the checkout URL
-      log.info('createdInStep1=true — navegando para lista de produtos...');
-      await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
-        waitUntil: 'domcontentloaded', timeout: 25000
-      }).catch(e => log.warn('goto products list: ' + e.message));
-      await page.waitForFunction(() => {
-        const btns = Array.from(document.querySelectorAll('button, a, td, [class*="product"]'));
-        return btns.length > 5;
-      }, { timeout: 12000 }).catch(() => {});
-      await sleep(3000); // give React list time to render
+      // The products list filters by "Ativo" by default; newly created products are "Rascunho".
+      // Strategy: navigate to products list, reset filter to show all, find product, publish it.
+      log.info('createdInStep1=true — buscando produto na lista (incluindo rascunhos)...');
 
-      for (let attempt = 0; attempt < 4 && !caktoProductId; attempt++) {
-        if (attempt > 0) {
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-          await sleep(3000);
+      const findAndPublishProduct = async () => {
+        // 1. Navigate to products list with networkidle2 to ensure React renders
+        await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
+          waitUntil: 'networkidle2', timeout: 30000
+        }).catch(e => log.warn('goto products list: ' + e.message));
+        await sleep(3000);
+
+        // 2. Reset the Status filter to show ALL products (not just "Ativo")
+        // Click the Status dropdown and select "Todos"
+        const filterReset = await page.evaluate(() => {
+          // Find the Status dropdown button/select — look for elements containing "Ativo" text
+          const all = Array.from(document.querySelectorAll('button, select, [role="combobox"], [class*="select"], [class*="dropdown"], [class*="filter"]'));
+          const statusBtn = all.find(el => {
+            const t = (el.textContent || el.value || '').trim();
+            return (t === 'Ativo' || t.includes('Ativo') || t.includes('Status')) && el.getBoundingClientRect().width > 0;
+          });
+          if (statusBtn) { statusBtn.click(); return 'clicked:' + (statusBtn.textContent || statusBtn.tagName).slice(0, 30); }
+          return null;
+        }).catch(() => null);
+        log.info('Status filter click: ' + filterReset);
+        if (filterReset) {
+          await sleep(1000);
+          // Select "Todos" option from the dropdown
+          const todosClicked = await page.evaluate(() => {
+            const opts = Array.from(document.querySelectorAll('li, [role="option"], [role="menuitem"], option, button'));
+            const el = opts.find(o => {
+              const t = (o.textContent || '').trim().toLowerCase();
+              return (t === 'todos' || t === 'all' || t === 'rascunho' || t.includes('todos')) && o.getBoundingClientRect().width > 0;
+            });
+            if (el) { el.click(); return (el.textContent || '').trim(); }
+            return null;
+          });
+          log.info('Status option selected: ' + todosClicked);
+          await sleep(2000); // wait for list to reload with all statuses
         }
-        const found = await page.evaluate((ebookTitle) => {
-          const short = (ebookTitle || '').slice(0, 20).toLowerCase();
-          // 1. pay.cakto.com.br links anywhere in the page
-          const links = Array.from(document.querySelectorAll('a[href*="pay.cakto"], a[href*="cakto.com.br/"]'));
-          if (links.length > 0) return links[0].href;
-          // 2. Scan full page HTML/text for pay.cakto URL pattern (may be in data attrs)
-          const m = (document.documentElement.innerHTML || '').match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
-          if (m) return m[0];
-          // 3. Title visible in list → product exists, just no URL found
-          const titleVisible = Array.from(document.querySelectorAll('td, li, [class*="product"], [class*="name"], [class*="title"]'))
-            .some(el => el.textContent.toLowerCase().includes(short) && el.textContent.length < 200);
-          return titleVisible ? '__title_found__' : null;
-        }, ebook.title).catch(() => null);
 
-        log.info('Checkout URL attempt ' + (attempt + 1) + ': ' + found);
+        // 3. Also try via URL — some apps support status param
+        // Scan the current page HTML for our product's pay link or title
+        const shortTitle = ebook.title.slice(0, 20).toLowerCase();
 
-        if (found && found !== '__title_found__') {
-          productUrl = found;
-          const m = found.match(/\/([A-Za-z0-9]{5,})$/);
-          if (m) caktoProductId = m[1];
-          log.info('URL de checkout extraída: ' + found);
-        } else if (found === '__title_found__') {
-          // Product confirmed in list but no pay link visible — try clicking product to get detail page
-          log.info('Produto visível na lista — tentando navegar para detalhes do produto...');
-          const clicked = await page.evaluate((ebookTitle) => {
-            const short = (ebookTitle || '').slice(0, 20).toLowerCase();
-            const el = Array.from(document.querySelectorAll('td, [class*="product"], [class*="name"], [class*="title"], tr'))
-              .find(e => e.textContent.toLowerCase().includes(short) && e.textContent.length < 200);
-            if (el) { el.click(); return true; }
-            return false;
-          }, ebook.title).catch(() => false);
-          if (clicked) {
+        for (let attempt = 0; attempt < 3 && !productUrl; attempt++) {
+          if (attempt > 0) {
+            await page.reload({ waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
             await sleep(3000);
-            const detailUrl = page.url();
-            const payM = await page.evaluate(() => {
-              const m = (document.documentElement.innerHTML || '').match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
-              return m ? m[0] : null;
-            }).catch(() => null);
-            if (payM) {
-              productUrl = payM;
-              const shortM = payM.match(/\/([A-Za-z0-9]{5,})$/);
-              if (shortM) caktoProductId = shortM[1];
-              log.info('Pay URL from detail page: ' + payM);
-            } else {
-              caktoProductId = 'created';
-              log.info('Em página de detalhe: ' + detailUrl + ' (sem pay link visível)');
+          }
+
+          // 4. Search page HTML for pay URL (product might be visible as data attr or link)
+          const found = await page.evaluate((sTitle) => {
+            // 4a. Any pay.cakto.com.br link on page
+            const links = Array.from(document.querySelectorAll('a[href*="pay.cakto"], a[href*="cakto.com.br/"]'));
+            if (links.length > 0) {
+              // Prefer link that's in a row matching our title
+              const match = links.find(l => {
+                const row = l.closest('tr, [class*="row"], [class*="product"], li') || l.parentElement;
+                return row && row.textContent.toLowerCase().includes(sTitle);
+              });
+              return match ? match.href : links[0].href;
             }
-          } else {
-            caktoProductId = 'created'; // sentinel — product confirmed visible
+            // 4b. Pay URL pattern anywhere in page HTML (data attrs, JSON state, etc.)
+            const html = document.documentElement.innerHTML || '';
+            const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
+            if (m && m.length > 0) return m[0];
+            // 4c. Is our product title visible in any row?
+            const rows = Array.from(document.querySelectorAll('tr, [class*="row"], li, [class*="product-item"]'));
+            const row = rows.find(r => r.textContent.toLowerCase().includes(sTitle) && r.textContent.length < 500);
+            return row ? '__row_found__' : null;
+          }, shortTitle).catch(() => null);
+
+          log.info('Produto search attempt ' + (attempt + 1) + ': ' + (found || 'null'));
+
+          if (found && found !== '__row_found__' && found.includes('pay.cakto')) {
+            productUrl = found;
+            const m = found.match(/\/([A-Za-z0-9]{5,})$/);
+            if (m) caktoProductId = m[1];
+            log.info('Pay URL encontrada na lista: ' + productUrl);
+            break;
+          } else if (found === '__row_found__' || (found && found.includes('pay.cakto'))) {
+            // Product found in list — click on it to get detail page
+            log.info('Produto encontrado na lista — navegando para detalhes...');
+            const clickResult = await page.evaluate((sTitle) => {
+              const rows = Array.from(document.querySelectorAll('tr, [class*="row"], li, [class*="product-item"], td'));
+              const row = rows.find(r => r.textContent.toLowerCase().includes(sTitle) && r.textContent.length < 500);
+              if (!row) return null;
+              // Click on the row or a link within it
+              const link = row.querySelector('a') || row;
+              const r = link.getBoundingClientRect();
+              link.click();
+              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+            }, shortTitle).catch(() => null);
+
+            if (clickResult) {
+              await sleep(3000);
+              await screenshot(page, 'cakto_product_detail');
+              const detailUrl = page.url();
+              log.info('Detail page URL: ' + detailUrl);
+
+              // Look for pay URL in detail page
+              const payUrl = await page.evaluate(() => {
+                const html = document.documentElement.innerHTML || '';
+                const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
+                if (m) return m[0];
+                const links = Array.from(document.querySelectorAll('a[href*="pay.cakto"]'));
+                return links.length > 0 ? links[0].href : null;
+              }).catch(() => null);
+
+              if (payUrl) {
+                productUrl = payUrl;
+                const m = payUrl.match(/\/([A-Za-z0-9]{5,})$/);
+                if (m) caktoProductId = m[1];
+                log.info('Pay URL from detail: ' + payUrl);
+              } else {
+                // Try clicking "Publicar" if product is in draft state
+                log.info('Tentando publicar produto do detalhe...');
+                const published = await clickByText(page, ['Publicar', 'Ativar', 'Publish', 'Activate'], 8000);
+                if (published) {
+                  await sleep(5000);
+                  const payAfterPublish = await page.evaluate(() => {
+                    const html = document.documentElement.innerHTML || '';
+                    const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
+                    return m ? m[0] : null;
+                  }).catch(() => null);
+                  if (payAfterPublish) {
+                    productUrl = payAfterPublish;
+                    const m = payAfterPublish.match(/\/([A-Za-z0-9]{5,})$/);
+                    if (m) caktoProductId = m[1];
+                    log.info('Pay URL após publicar: ' + payAfterPublish);
+                  }
+                }
+                if (!productUrl) {
+                  caktoProductId = caktoProductId || 'created';
+                  log.warn('Pay URL não encontrada no detalhe — produto criado mas sem URL de checkout');
+                }
+              }
+            }
+            break; // exit retry loop
           }
         }
-      }
+      };
+
+      await findAndPublishProduct();
 
       if (!caktoProductId) {
-        // Product was created (modal closed) but we couldn't confirm via list — still success
+        // Product was created (modal closed) but we couldn't locate via list — still success
         caktoProductId = 'created';
         log.warn('createdInStep1 mas checkout URL não encontrada — marcando como sucesso');
       }
