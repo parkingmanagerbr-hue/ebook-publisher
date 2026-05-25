@@ -1133,6 +1133,15 @@ async function uploadCoverImage(page, numericId, coverPath) {
     let fileInput = await waitForCoverInput(45000); // 45s — SPA can take up to 45s to render
     log.info('Cover input after /info nav: ' + (fileInput ? 'FOUND' : 'not found'));
 
+    // If 45s wasn't enough, try a full page reload (same technique that helps finalizar)
+    if (!fileInput) {
+      log.info('Cover input: reloading /info page to help SPA mount...');
+      await page.reload({waitUntil:'domcontentloaded', timeout:20000}).catch(()=>{});
+      await sleep(3000);
+      fileInput = await waitForCoverInput(25000); // 25s more after reload
+      log.info('Cover input after reload: ' + (fileInput ? 'FOUND' : 'not found'));
+    }
+
     if (!fileInput) {
       // Step 2: /overview to warm up the SPA shell, then soft-navigate to /info via tab click, poll 30s
       await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
