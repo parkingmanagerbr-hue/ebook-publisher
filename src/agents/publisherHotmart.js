@@ -320,7 +320,8 @@ async function createProduct(page, session, ebook) {
       const t = norm(b.textContent||'');
       return b.getBoundingClientRect().width > 0 && (t === catNorm || t === catFirst);
     });
-    if (exact) { exact.scrollIntoView({behavior:'instant',block:'center'}); exact.click(); return exact.textContent.trim().slice(0,40); }
+    // Return position for trusted page.mouse.click() — NOT evaluate().click() which is untrusted
+    if (exact) { exact.scrollIntoView({behavior:'instant',block:'center'}); const r=exact.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2, text:exact.textContent.trim().slice(0,40)}; }
 
     // Priority 2: partial text match on buttons (catFirst appears in text, but full text is short enough)
     const partial = buttons.find(b => {
@@ -328,7 +329,7 @@ async function createProduct(page, session, ebook) {
       const r = b.getBoundingClientRect();
       return r.width > 0 && t.length < 60 && catFirst.length > 4 && t.includes(catFirst);
     });
-    if (partial) { partial.scrollIntoView({behavior:'instant',block:'center'}); partial.click(); return partial.textContent.trim().slice(0,40); }
+    if (partial) { partial.scrollIntoView({behavior:'instant',block:'center'}); const r=partial.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2, text:partial.textContent.trim().slice(0,40)}; }
 
     // Priority 3: any element type with text match
     const all = Array.from(document.querySelectorAll('button, [class*="categor"], [class*="option"], li, [role="option"], span, div'));
@@ -337,15 +338,16 @@ async function createProduct(page, session, ebook) {
       const r = b.getBoundingClientRect();
       return r.width > 0 && t.length < 80 && catFirst.length > 4 && t.includes(catFirst);
     });
-    if (fallback) { fallback.scrollIntoView({behavior:'instant',block:'center'}); fallback.click(); return 'fallback:' + fallback.textContent.trim().slice(0,40); }
+    if (fallback) { fallback.scrollIntoView({behavior:'instant',block:'center'}); const r=fallback.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2, text:'fallback:'+fallback.textContent.trim().slice(0,40)}; }
 
     return {notFound: true, catNorm, catFirst, visibleOptions: debug};
   }, category);
-  if (catClicked && typeof catClicked === 'object') {
+  if (catClicked && typeof catClicked === 'object' && catClicked.notFound) {
     log.warn('Category NOT found — debug: ' + JSON.stringify(catClicked));
-    // Try: click Continuar anyway and see if there's a default category
-  } else {
-    log.info('Category clicked: ' + catClicked);
+  } else if (catClicked && catClicked.x) {
+    await sleep(200); // let scrollIntoView settle
+    await page.mouse.click(catClicked.x, catClicked.y); // TRUSTED — triggers React onCategorySelect -> NAV /pricing
+    log.info('Category clicked (trusted): ' + catClicked.text + ' @(' + Math.round(catClicked.x) + ',' + Math.round(catClicked.y) + ')');
   }
   await sleep(800);
 
