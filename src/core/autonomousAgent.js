@@ -90,6 +90,8 @@ async function publishReadyEbooks() {
   let published = 0;
   for (const ebook of readyEbooks) {
     logger.info('[publish-ready] => ' + ebook.title.slice(0, 50));
+    // Mark in_progress immediately to prevent duplicate runs from race conditions
+    updateEbookStatus(ebook.id, 'in_progress', {});
     // Hot-reload publishers per ebook so injected files take effect immediately
     ['../agents/publisherHotmart','../agents/publisherCakto','../agents/publisherAmazon'].forEach(m => {
       try { delete require.cache[require.resolve(m)]; } catch {}
@@ -168,6 +170,11 @@ async function publishReadyEbooks() {
 
 // ─── Um ciclo completo de geração + publicação ───────────────────────────────
 async function runOneCycle(topicOverride = null) {
+  // Hot-reload generation agents so patched files take effect immediately
+  ['../index','../agents/pdfAgent','../agents/coverAgent','../agents/imageGenAgent',
+   '../agents/writerAgent','../agents/claudeDesignAgent'].forEach(m => {
+    try { delete require.cache[require.resolve(m)]; } catch {}
+  });
   const { runPipeline } = require('../index');
   const db = require('./database');
 
@@ -228,6 +235,22 @@ async function runOneCycle(topicOverride = null) {
     try { delete require.cache[require.resolve(m)]; } catch {}
   });
 
+  // HOTMART first so we have the real product URL for Cakto's salesPage
+  if (shouldPublishTo('HOTMART')) {
+    setState({ currentStep: 'publishing:hotmart' });
+    try {
+      await ensureSession('hotmart'); // renova cookies se necessário
+      const { publishToHotmart } = require('../agents/publisherHotmart');
+      publishResults.hotmart = await publishToHotmart(ebookData);
+      if (publishResults.hotmart?.success) {
+        setState({ totalPublished: state.totalPublished + 1 });
+        logger.info(`✅ Publicado no Hotmart: ${publishResults.hotmart.url}`);
+        // Pass the real Hotmart URL to ebookData so Cakto can use it as salesPage
+        if (publishResults.hotmart.url) ebookData.hotmartUrl = publishResults.hotmart.url;
+      }
+    } catch (e) { logger.warn(`⚠️  Hotmart: ${e.message}`); }
+  }
+
   if (shouldPublishTo('CAKTO')) {
     setState({ currentStep: 'publishing:cakto' });
     try {
@@ -239,19 +262,6 @@ async function runOneCycle(topicOverride = null) {
         logger.info(`✅ Publicado no Cakto: ${publishResults.cakto.url}`);
       }
     } catch (e) { logger.warn(`⚠️  Cakto: ${e.message}`); }
-  }
-
-  if (shouldPublishTo('HOTMART')) {
-    setState({ currentStep: 'publishing:hotmart' });
-    try {
-      await ensureSession('hotmart'); // renova cookies se necessário
-      const { publishToHotmart } = require('../agents/publisherHotmart');
-      publishResults.hotmart = await publishToHotmart(ebookData);
-      if (publishResults.hotmart?.success) {
-        setState({ totalPublished: state.totalPublished + 1 });
-        logger.info(`✅ Publicado no Hotmart: ${publishResults.hotmart.url}`);
-      }
-    } catch (e) { logger.warn(`⚠️  Hotmart: ${e.message}`); }
   }
 
   if (shouldPublishTo('AMAZON')) {
@@ -303,8 +313,15 @@ async function loop() {
   await sleep(15_000);
 
   while (state.enabled) {
-    // Publicar ebooks ready antes de gerar novos
-    await publishReadyEbooks().catch(e => logger.error('publishReady erro: ' + e.message));
+    // Publicar ebooks ready — drena TODA a fila antes de gerar novos
+    // (sem pausa entre batches: 5 a 5 até zerar)
+    let readyPublished = 0;
+    do {
+      readyPublished = await publishReadyEbooks().catch(e => {
+        logger.error('publishReady erro: ' + e.message);
+        return 0;
+      });
+    } while (readyPublished > 0 && state.enabled);
 
     if (state.paused) {
       setState({ currentStep: 'paused', nextRunAt: null });
@@ -334,6 +351,15 @@ async function loop() {
     }
 
     // Pausa mínima entre ciclos (cooldown de 5s para logs drenarem)
+    // Se ainda há ebooks prontos (gerados durante o ciclo), pula a pausa longa
+    const { getDb } = require('./database');
+    const pendingReady = getDb().prepare("SELECT COUNT(*) as n FROM ebooks WHERE status='ready'").get().n;
+    if (pendingReady > 0) {
+      // Volta imediatamente ao topo para publicar os ebooks prontos
+      logger.info(`📚 ${pendingReady} ebooks prontos — publicando sem pausa...`);
+      await sleep(3000);
+      continue;
+    }
     const intervalMs = getIntervalMs();
     if (intervalMs > 0) {
       const nextRun = new Date(Date.now() + intervalMs).toISOString();
