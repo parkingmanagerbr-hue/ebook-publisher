@@ -108,6 +108,32 @@ async function doSignin(page) {
       try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12000 }); } catch(e) {}
       await sleep(3000);
       await screenshot(page, 'signin_after_switch');
+      // After "Trocar contas" we may land on an ACCOUNT SELECTION page showing current accounts.
+      // Need to click "Adicionar contas" (+ button) to get to the email signin form.
+      const adicionarPos = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('a, button, span, div, p'));
+        const el = all.find(e => {
+          const t = (e.textContent || '').toLowerCase().trim();
+          const r = e.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && (
+            t.includes('adicionar conta') || t.includes('add account') || t.includes('use another') ||
+            t.includes('sign in with a different') || t.includes('mudar de conta')
+          );
+        });
+        if (el) {
+          const r = el.getBoundingClientRect();
+          return { x: r.left + r.width/2, y: r.top + r.height/2, text: (el.textContent||'').trim().slice(0,50) };
+        }
+        return null;
+      }).catch(() => null);
+      if (adicionarPos) {
+        log.info('Página de seleção de conta — clicando "' + adicionarPos.text + '"...');
+        await page.mouse.click(adicionarPos.x, adicionarPos.y);
+        await sleep(2000);
+        try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }); } catch(e) {}
+        await sleep(2000);
+        await screenshot(page, 'signin_after_add_account');
+      }
     }
   } catch(e) { log.warn('Switch account check: ' + e.message); }
 
