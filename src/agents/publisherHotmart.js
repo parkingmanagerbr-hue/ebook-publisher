@@ -1220,6 +1220,77 @@ async function uploadCoverImage(page, numericId, coverPath) {
       log.info('Cover uploaded!');
       return true;
     }
+
+    // ── API FALLBACK ── When SPA file input never renders, upload directly via Hotmart REST API.
+    // The JWT token (from localStorage) authenticates the multipart POST.
+    // Tries multiple known Hotmart API URL patterns (vulcano v2/v1, api-sec) until one responds 2xx.
+    log.info('SPA cover input unreachable — trying direct API upload...');
+    try {
+      const coverBase64 = fs.readFileSync(coverPath).toString('base64');
+      // Make sure page is on hotmart.com so localStorage has the JWT
+      const curUrl = page.url();
+      if (!curUrl.includes('hotmart.com')) {
+        await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
+          {waitUntil:'domcontentloaded', timeout:15000}).catch(()=>{});
+        await sleep(2000);
+      }
+      const apiResult = await page.evaluate(async (b64, id) => {
+        const token = localStorage.getItem('token');
+        if (!token) return {ok: false, error: 'no_jwt_token'};
+        const binary = atob(b64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], {type: 'image/png'});
+        const endpoints = [
+          ['POST', `https://api-product.vulcano.hotmart.com/product/v2/products/${id}/cover`],
+          ['PUT',  `https://api-product.vulcano.hotmart.com/product/v2/products/${id}/cover`],
+          ['POST', `https://api-product.vulcano.hotmart.com/product/v1/products/${id}/cover`],
+          ['POST', `https://api-product.vulcano.hotmart.com/product/v2/user/product/${id}/cover`],
+          ['PUT',  `https://api-product.vulcano.hotmart.com/product/v2/user/product/${id}/cover`],
+          ['POST', `https://api-sec.hotmart.com/product/rest/v2/product/${id}/cover`],
+          ['PATCH',`https://api-product.vulcano.hotmart.com/product/v2/products/${id}`],
+        ];
+        const results = [];
+        for (const [method, url] of endpoints) {
+          try {
+            const fd = new FormData();
+            fd.append('cover', blob, 'cover.png');
+            fd.append('file', blob, 'cover.png');
+            fd.append('image', blob, 'cover.png');
+            const r = await fetch(url, {
+              method,
+              headers: {'Authorization': 'Bearer ' + token},
+              body: fd
+            });
+            const text = await r.text().catch(() => '');
+            const entry = {method, url: url.slice(url.lastIndexOf('/')-15), status: r.status, body: text.slice(0,120)};
+            results.push(entry);
+            if (r.ok || r.status === 201 || r.status === 204) {
+              return {ok: true, ...entry, results};
+            }
+          } catch(e) {
+            results.push({method, url: url.slice(-40), error: e.message.slice(0,60)});
+          }
+        }
+        return {ok: false, results};
+      }, coverBase64, numericId);
+
+      log.info('API cover result: ' + JSON.stringify({
+        ok: apiResult.ok,
+        status: apiResult.status,
+        method: apiResult.method,
+        url: apiResult.url,
+        results: (apiResult.results||[]).map(r=>r.method+' '+r.status+' '+r.url).join(' | ')
+      }).slice(0, 400));
+
+      if (apiResult && apiResult.ok) {
+        log.info('Cover uploaded via API!');
+        return true;
+      }
+    } catch(e) {
+      log.warn('API cover upload error: ' + e.message.slice(0, 100));
+    }
+
     log.warn('Cover file input not found — skipping cover (non-fatal)');
     return false;
   } catch(e) {
