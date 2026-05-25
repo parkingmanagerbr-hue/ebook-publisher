@@ -110,22 +110,35 @@ async function publishReadyEbooks() {
       amazonAsin: ebook.amazon_asin || null,
     };
     const results = {};
+    // Skip platforms where a valid product URL already exists (avoid duplicates)
+    const alreadyOnHotmart = ebook.hotmart_url && ebook.hotmart_url.includes('hotmart.com/product/');
+    const alreadyOnCakto   = ebook.cakto_url   && ebook.cakto_url.includes('pay.cakto.com.br/');
+    const alreadyOnAmazon  = ebook.amazon_url   && ebook.amazon_url.includes('amazon.com.br/');
     try {
-      if (shouldPublishTo('HOTMART') && await ensureSession('hotmart')) {
+      if (alreadyOnHotmart) {
+        results.hotmart = { success: true, url: ebook.hotmart_url, skipped: true };
+        logger.info('[publish-ready] Hotmart já publicado: ' + ebook.hotmart_url);
+      } else if (shouldPublishTo('HOTMART') && await ensureSession('hotmart')) {
         setState({ currentStep: 'publishing:hotmart' });
         results.hotmart = await publishToHotmart(ebookData);
         if (results.hotmart?.success) logger.info('[publish-ready] Hotmart OK: ' + (results.hotmart.url || results.hotmart.productId));
         else logger.warn('[publish-ready] Hotmart falhou: ' + (results.hotmart?.error || 'desconhecido'));
       }
       await new Promise(r => setTimeout(r, 3000));
-      if (shouldPublishTo('CAKTO') && await ensureSession('cakto')) {
+      if (alreadyOnCakto) {
+        results.cakto = { success: true, url: ebook.cakto_url, skipped: true };
+        logger.info('[publish-ready] Cakto já publicado: ' + ebook.cakto_url);
+      } else if (shouldPublishTo('CAKTO') && await ensureSession('cakto')) {
         setState({ currentStep: 'publishing:cakto' });
         results.cakto = await publishToCakto(ebookData);
         if (results.cakto?.success) logger.info('[publish-ready] Cakto OK: ' + (results.cakto.url || ''));
         else logger.warn('[publish-ready] Cakto falhou: ' + (results.cakto?.error || 'desconhecido'));
       }
       await new Promise(r => setTimeout(r, 3000));
-      if (shouldPublishTo('AMAZON') && await ensureSession('amazon')) {
+      if (alreadyOnAmazon) {
+        results.amazon = { success: true, url: ebook.amazon_url, skipped: true };
+        logger.info('[publish-ready] Amazon já publicado: ' + ebook.amazon_url);
+      } else if (shouldPublishTo('AMAZON') && await ensureSession('amazon')) {
         setState({ currentStep: 'publishing:amazon' });
         results.amazon = await publishToAmazon(ebookData);
         if (results.amazon?.success) logger.info('[publish-ready] Amazon OK: ' + (results.amazon.url || ''));
@@ -135,14 +148,17 @@ async function publishReadyEbooks() {
       logger.error('[publish-ready] Erro: ' + e.message.slice(0, 100));
     }
     const anyOk = Object.values(results).some(r => r?.success);
-    updateEbookStatus(ebook.id, anyOk ? 'published' : 'ready', {
-      hotmartUrl: results.hotmart?.url || null,
-      hotmartProductId: results.hotmart?.hotmartProductId || results.hotmart?.productId || null,
-      caktoUrl: results.cakto?.url || null,
-      caktoProductId: results.cakto?.caktoProductId || results.cakto?.productId || null,
-      amazonAsin: results.amazon?.asin || null,
-      amazonUrl: results.amazon?.url || null,
-    });
+    // Preserve existing URLs — only pass non-null values to avoid overwriting valid data
+    const statusUpdate = {};
+    if (results.hotmart?.url) statusUpdate.hotmartUrl = results.hotmart.url;
+    if (results.hotmart?.hotmartProductId || results.hotmart?.productId)
+      statusUpdate.hotmartProductId = results.hotmart.hotmartProductId || results.hotmart.productId;
+    if (results.cakto?.url) statusUpdate.caktoUrl = results.cakto.url;
+    if (results.cakto?.caktoProductId || results.cakto?.productId)
+      statusUpdate.caktoProductId = results.cakto.caktoProductId || results.cakto.productId;
+    if (results.amazon?.asin) statusUpdate.amazonAsin = results.amazon.asin;
+    if (results.amazon?.url) statusUpdate.amazonUrl = results.amazon.url;
+    updateEbookStatus(ebook.id, anyOk ? 'published' : 'ready', statusUpdate);
     if (anyOk) published++;
     await new Promise(r => setTimeout(r, 5000));
   }
