@@ -276,23 +276,43 @@ async function publishToCakto(ebook) {
     await screenshot(page, 'new_product_form');
     await dumpFormState(page, 'form_open');
 
-    // ── Select product type ───────────────────────────────────────────────────
-    // Some Cakto forms show type selection first
-    const typeSelected = await page.evaluate(() => {
+    // ── Select product type & set hidden type field ───────────────────────────
+    // Check current type field value and set it if empty
+    const typeResult = await page.evaluate(() => {
+      // First check what type input currently has
+      const typeInput = document.querySelector('input[name="type"]');
+      const currentType = typeInput ? typeInput.value : 'N/A';
+
+      // Try clicking a type card (e-book / digital product)
       const all = Array.from(document.querySelectorAll('button, [role="button"], label, [class*="card"], [class*="type"], [class*="tipo"]'));
       const el = all.find(e => {
         const t = (e.textContent || '').toLowerCase();
         return (t.includes('e-book') || t.includes('ebook') || t.includes('infoproduto') ||
                 t.includes('digital') || t.includes('arquivo')) && e.getBoundingClientRect().width > 0;
       });
-      if (el) { el.click(); return (el.textContent || '').trim().slice(0, 30); }
-      return null;
+      if (el) { el.click(); }
+
+      // If type input still empty, set it via native setter
+      if (typeInput && !typeInput.value) {
+        const candidates = ['EBOOK', 'ebook', 'digital', 'DIGITAL'];
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+        for (const v of candidates) {
+          if (nativeSetter && nativeSetter.set) nativeSetter.set.call(typeInput, v);
+          else typeInput.value = v;
+          typeInput.dispatchEvent(new Event('input',  { bubbles: true }));
+          typeInput.dispatchEvent(new Event('change', { bubbles: true }));
+          if (typeInput.value) break;
+        }
+      }
+
+      return {
+        cardClicked: el ? (el.textContent || '').trim().slice(0, 30) : null,
+        typeWas:    currentType,
+        typeNow:    typeInput ? typeInput.value : 'N/A',
+      };
     });
-    if (typeSelected) {
-      log.info('Tipo selecionado: ' + typeSelected);
-      await sleep(1000);
-      await screenshot(page, 'type_selected');
-    }
+    log.info('Type: was="' + typeResult.typeWas + '" now="' + typeResult.typeNow + '" card=' + (typeResult.cardClicked || 'none'));
+    if (typeResult.cardClicked || typeResult.typeNow) await sleep(1000);
 
     // ── Fill product name ─────────────────────────────────────────────────────
     await sleep(500);
@@ -310,8 +330,17 @@ async function publishToCakto(ebook) {
     log.info('Name filled: ' + nameFilled);
     await sleep(400);
 
-    // ── Description (max 99 chars to respect Cakto's 100-char limit) ─────────
-    const desc = (ebook.description || ebook.subtitle || 'Guia completo sobre ' + (ebook.topic || ebook.title)).slice(0, 99);
+    // ── Description (Cakto requires MINIMUM 100 chars) ───────────────────────
+    let desc = ebook.description || ebook.subtitle || '';
+    if (!desc || desc.length < 100) {
+      // Build a longer default description
+      const base = 'Guia completo e prático sobre ' + (ebook.topic || ebook.title);
+      const suffix = '. Aprenda as melhores estratégias e técnicas com conteúdo direto ao ponto, desenvolvido para quem quer resultados reais.';
+      desc = (desc ? desc + ' ' + suffix : base + suffix);
+    }
+    // Cap at 500 chars to avoid potential upper limits
+    desc = desc.slice(0, 500);
+    log.info('Desc len=' + desc.length + ' (min100)');
     await fillInput(page, [
       'textarea[name="description"]',
       'textarea[placeholder*="descri" i]',
