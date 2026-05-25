@@ -386,16 +386,23 @@ async function publishToCakto(ebook) {
         await sleep(4000);
         await screenshot(page, 'step2_attempt' + attempt);
         await dumpFormState(page, 'step2_attempt' + attempt);
-        // Check if we actually advanced (new file inputs appear, or URL changes)
+        // Check if we actually advanced: file inputs appeared, URL changed, OR modal closed
         const newState = await page.evaluate(() => {
           const files = document.querySelectorAll('input[type="file"]');
+          // Modal closed = step1 form fields (name/description) are gone from DOM
+          const nameInput = document.querySelector('input[name="name"]');
+          const descInput = document.querySelector('textarea[name="description"]');
           const url = location.href;
-          return { fileCount: files.length, url: url.slice(-80) };
+          return {
+            fileCount: files.length,
+            url: url.slice(-80),
+            modalClosed: !nameInput && !descInput,
+          };
         });
-        log.info('Step2 check: fileCount=' + newState.fileCount + ' url=' + newState.url);
-        if (newState.fileCount > 0 || page.url() !== beforeStep1Url) {
+        log.info('Step2 check: fileCount=' + newState.fileCount + ' modalClosed=' + newState.modalClosed + ' url=' + newState.url);
+        if (newState.fileCount > 0 || page.url() !== beforeStep1Url || newState.modalClosed) {
           step2reached = true;
-          log.info('Avançou para step 2!');
+          log.info(newState.modalClosed ? 'Modal fechou — produto criado em step 1!' : 'Avançou para step 2!');
         }
       }
     }
@@ -519,11 +526,17 @@ async function publishToCakto(ebook) {
     let titleFoundInList = false;
 
     if (isTabUrl && !caktoProductId && step2reached) {
-      // Step 2 was reached and published — check if title appears in the product list
+      // Cakto creates product when "Continuar" is clicked (modal closes) — check if title is now in list
+      // Wait a moment for the product list to refresh
+      await sleep(2000);
       titleFoundInList = await page.evaluate((title) => {
-        const short = title.slice(0, 35).toLowerCase();
-        return Array.from(document.querySelectorAll('td, [class*="name"], [class*="title"], [class*="product-name"]'))
-          .some(el => el.children.length <= 1 && el.textContent.toLowerCase().includes(short));
+        const short = title.slice(0, 30).toLowerCase();
+        // Check all text-bearing elements on the page
+        return Array.from(document.querySelectorAll('td, tr, li, [role="row"], [class*="name"], [class*="title"], [class*="product"]'))
+          .some(el => {
+            const t = el.textContent.toLowerCase();
+            return t.includes(short) && t.length < 200; // avoid matching huge containers
+          });
       }, ebook.title).catch(() => false);
       log.info('Título na lista após publicar: ' + titleFoundInList);
     }
