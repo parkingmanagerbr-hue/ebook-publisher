@@ -752,21 +752,27 @@ async function uploadCoverImage(page, numericId, coverPath) {
     });
     await sleep(3000);
     const imgAreaClicked = await page.evaluate(()=>{
+      // Priority 1: Hotmart's known cover button ID
+      const known = document.querySelector('#input-file-cover, button[id*="cover" i], button[id*="imagem" i]');
+      if(known && known.getBoundingClientRect().width > 0){known.click();return '#'+known.id||'known';}
+      // Priority 2: class-based selectors
       const selectors = ['[class*="upload"][class*="image"]','[class*="image"][class*="upload"]','[class*="cover"]','[class*="thumbnail"]','[class*="imagem"]','[class*="foto"]'];
       for (const sel of selectors) {
         const el = document.querySelector(sel);
         if(el && el.getBoundingClientRect().width > 0){el.click();return sel;}
       }
+      // Priority 3: button text
       const btn = Array.from(document.querySelectorAll('button,[role="button"]')).find(b=>{
         const t=(b.textContent||'').toLowerCase();
-        return t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('image')||t.includes('cover');
+        return t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('image')||t.includes('cover')||t.includes('selecione');
       });
       if(btn){btn.click();return 'button:'+btn.textContent.trim().slice(0,30);}
       return null;
     });
     log.info('Image area clicked: '+imgAreaClicked);
     await sleep(1500);
-    let fileInput = await page.$('input[type="file"][accept*="image"]').catch(()=>null);
+    // Look for file input — Hotmart may use a hidden input triggered by button click
+    let fileInput = await page.$('#input-file-cover ~ input[type="file"], input[type="file"][accept*="image"]').catch(()=>null);
     if(!fileInput) fileInput = await page.$('input[type="file"]').catch(()=>null);
     if(fileInput){
       await fileInput.uploadFile(coverPath);
