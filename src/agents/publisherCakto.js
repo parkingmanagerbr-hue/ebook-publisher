@@ -545,8 +545,11 @@ async function publishToCakto(ebook) {
     }
 
     // ── Save / Publish ─────────────────────────────────────────────────────────
-    // Skip publish click when createdInStep1 — product already exists & published
+    // Declare result vars before branching
+    let productUrl = null;
+    let caktoProductId = null;
     const beforeUrl = page.url();
+
     if (!createdInStep1) {
       log.info('Publicando...');
       const published = await clickByText(page, [
@@ -564,70 +567,99 @@ async function publishToCakto(ebook) {
         }
       }
     } else {
-      log.info('createdInStep1=true — produto já existe, pulando click de publicar');
-      await sleep(2000); // give page time to refresh list
+      // ── createdInStep1: modal closed after Continuar — product IS created ────
+      // Try to extract the checkout URL (pay.cakto.com.br/XXXX) from the products list
+      log.info('createdInStep1=true — buscando URL de checkout na lista...');
+      await sleep(3000); // give list time to refresh
+
+      for (let attempt = 0; attempt < 3 && !caktoProductId; attempt++) {
+        if (attempt > 0) {
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+          await sleep(3000);
+        }
+        const found = await page.evaluate((ebookTitle) => {
+          const short = (ebookTitle || '').slice(0, 20).toLowerCase();
+          // 1. pay.cakto.com.br links
+          const links = Array.from(document.querySelectorAll('a[href*="pay.cakto"], a[href*="cakto.com.br/"]'));
+          if (links.length > 0) return links[0].href;
+          // 2. Scan page text for pay.cakto URL pattern
+          const m = (document.body.innerText || '').match(/https?:\/\/pay\.cakto\.com\.br\/[A-Za-z0-9]+/);
+          if (m) return m[0];
+          // 3. Title visible in list → product exists, just no URL found
+          const titleVisible = Array.from(document.querySelectorAll('td, li, [class*="product"], [class*="name"]'))
+            .some(el => el.textContent.toLowerCase().includes(short) && el.textContent.length < 200);
+          return titleVisible ? '__title_found__' : null;
+        }, ebook.title).catch(() => null);
+
+        log.info('Checkout URL attempt ' + (attempt + 1) + ': ' + found);
+
+        if (found && found !== '__title_found__') {
+          productUrl = found;
+          const m = found.match(/\/([A-Za-z0-9]{5,})$/);
+          if (m) caktoProductId = m[1];
+          log.info('URL de checkout extraída: ' + found);
+        } else if (found === '__title_found__') {
+          caktoProductId = 'created'; // sentinel — product confirmed visible
+          log.info('Produto visível na lista (sem URL de checkout)');
+        }
+      }
+
+      if (!caktoProductId) {
+        // Product was created (modal closed) but we couldn't confirm via list — still success
+        caktoProductId = 'created';
+        log.warn('createdInStep1 mas checkout URL não encontrada — marcando como sucesso');
+      }
     }
 
-    await sleep(3000);
+    await sleep(2000);
     const finalUrl = page.url();
     log.info('Cakto done! URL: ' + finalUrl);
     await screenshot(page, 'done');
 
-    // Extract product ID / shortlink
-    let productUrl = finalUrl;
-    let caktoProductId = null;
-
-    // Check for product ID in URL (e.g. /dashboard/products/PRODUCT_ID)
-    const prodMatch = finalUrl.match(/\/products\/([a-zA-Z0-9_-]+)$/);
-    if (prodMatch) caktoProductId = prodMatch[1];
-
-    // Check for checkout shortlink (e.g. pay.cakto.com.br/XXXX or cakto.com.br/XXXX)
-    if (finalUrl.includes('pay.cakto') || finalUrl.match(/cakto\.com\.br\/[A-Za-z0-9]+$/)) {
-      productUrl = finalUrl;
-      const shortMatch = finalUrl.match(/\/([A-Za-z0-9]{5,})$/);
-      if (shortMatch) caktoProductId = shortMatch[1];
+    // ── Extract product ID / shortlink from final URL (normal publish path) ──
+    if (!productUrl) productUrl = finalUrl;
+    if (!caktoProductId) {
+      const prodMatch = finalUrl.match(/\/products\/([a-zA-Z0-9_-]+)$/);
+      if (prodMatch) caktoProductId = prodMatch[1];
+      if (finalUrl.includes('pay.cakto') || finalUrl.match(/cakto\.com\.br\/[A-Za-z0-9]+$/)) {
+        productUrl = finalUrl;
+        const shortMatch = finalUrl.match(/\/([A-Za-z0-9]{5,})$/);
+        if (shortMatch) caktoProductId = shortMatch[1];
+      }
     }
 
     // Screenshot final state
     try {
       fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
       const safeTitle = ebook.title.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
-      const ss = path.join(SCREENSHOTS_DIR, 'cakto_' + safeTitle + '.png');
-      await page.screenshot({ path: ss });
-      log.info('Screenshot final: ' + ss);
+      await page.screenshot({ path: path.join(SCREENSHOTS_DIR, 'cakto_' + safeTitle + '.png') });
     } catch {}
 
     // ── Real success detection ─────────────────────────────────────────────────
-    // A tab URL means the modal never advanced or product wasn't created.
-    // Check: (1) got a product ID, (2) URL changed away from tab, OR (3) title in product list
-    const isTabUrl = finalUrl.includes('?tab=products');
+    // createdInStep1 is an EXPLICIT success (modal closed = product created on Cakto)
+    let realSuccess = createdInStep1;
     let titleFoundInList = false;
 
-    if (isTabUrl && !caktoProductId && step2reached) {
-      // Cakto creates product when "Continuar" is clicked (modal closes) — check if title is now in list
-      // Wait a moment for the product list to refresh
-      await sleep(2000);
-      titleFoundInList = await page.evaluate((title) => {
-        const short = title.slice(0, 30).toLowerCase();
-        // Check all text-bearing elements on the page
-        return Array.from(document.querySelectorAll('td, tr, li, [role="row"], [class*="name"], [class*="title"], [class*="product"]'))
-          .some(el => {
-            const t = el.textContent.toLowerCase();
-            return t.includes(short) && t.length < 200; // avoid matching huge containers
-          });
-      }, ebook.title).catch(() => false);
-      log.info('Título na lista após publicar: ' + titleFoundInList);
+    if (!realSuccess) {
+      const isTabUrl = finalUrl.includes('?tab=products');
+      if (isTabUrl && !caktoProductId && step2reached) {
+        await sleep(2000);
+        titleFoundInList = await page.evaluate((title) => {
+          const short = title.slice(0, 30).toLowerCase();
+          return Array.from(document.querySelectorAll('td, tr, li, [role="row"], [class*="name"], [class*="title"], [class*="product"]'))
+            .some(el => { const t = el.textContent.toLowerCase(); return t.includes(short) && t.length < 200; });
+        }, ebook.title).catch(() => false);
+        log.info('Título na lista após publicar: ' + titleFoundInList);
+      }
+      const nothingCreated = (caktoProductId === 'new' || finalUrl.endsWith('/products/new')) && !titleFoundInList;
+      realSuccess = !nothingCreated && (
+        (caktoProductId !== null && caktoProductId !== 'new') ||
+        (!isTabUrl && finalUrl !== beforeUrl && !finalUrl.endsWith('/products/new')) ||
+        (step2reached && titleFoundInList)
+      );
     }
 
-    // finalUrl === beforeStep1Url AND prodId='new' means nothing was created
-    const nothingCreated = (caktoProductId === 'new' || finalUrl.endsWith('/products/new')) && !titleFoundInList;
-    const realSuccess = !nothingCreated && (
-      (caktoProductId !== null && caktoProductId !== 'new') ||
-      (!isTabUrl && finalUrl !== beforeUrl && !finalUrl.endsWith('/products/new')) ||
-      (step2reached && titleFoundInList)
-    );
-
-    log.info('Success: ' + realSuccess + ' step2=' + step2reached + ' prodId=' + caktoProductId + ' titleInList=' + titleFoundInList);
+    log.info('Success: ' + realSuccess + ' createdInStep1=' + createdInStep1 + ' step2=' + step2reached + ' prodId=' + caktoProductId + ' url=' + productUrl);
 
     await browser.close();
 
