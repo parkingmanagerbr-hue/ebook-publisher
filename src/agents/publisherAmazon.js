@@ -103,6 +103,9 @@ async function doSignin(page) {
     if (pageInfo.switchPos && (!pageInfo.shownEmail || !pageInfo.shownEmail.includes(KDP_EMAIL))) {
       log.info('Trocar contas link encontrado (email=' + (pageInfo.shownEmail||'?') + ') — clicando...');
       await page.mouse.click(pageInfo.switchPos.x, pageInfo.switchPos.y);
+      // Wait for page to fully load after account switch (loading spinner needs time)
+      await sleep(2000);
+      try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12000 }); } catch(e) {}
       await sleep(3000);
       await screenshot(page, 'signin_after_switch');
     }

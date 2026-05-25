@@ -409,11 +409,10 @@ async function publishToCakto(ebook) {
 
     // ── Step 2: Product type selection ("O que você vai vender?") ───────────
     // If Cakto advanced to the type selection screen, pick "Acesso por e-mail"
-    // which allows sending a Google Drive / Hotmart link to buyers via email.
+    // CRITICAL: use page.mouse.click() (trusted event) — React ignores evaluate().click()
     if (step2reached) {
-      const typeSelected = await page.evaluate(() => {
+      const typePos = await page.evaluate(() => {
         const all = Array.from(document.querySelectorAll('button, [role="button"], div, h3, p, span'));
-        // Look for type cards: "Acesso por e-mail", "Link de pagamento", etc.
         const typeCards = ['acesso por e-mail', 'link de pagamento', 'infoproduto', 'ebook', 'arquivo'];
         for (const target of typeCards) {
           const el = all.find(e => {
@@ -421,15 +420,17 @@ async function publishToCakto(ebook) {
             return t === target || t.startsWith(target.slice(0, 12));
           });
           if (el && el.getBoundingClientRect().width > 0) {
-            el.click();
-            return target;
+            const r = el.getBoundingClientRect();
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, target };
           }
         }
         return null;
       });
-      if (typeSelected) {
-        log.info('Tipo selecionado: ' + typeSelected);
+      if (typePos) {
+        log.info('Tipo encontrado: ' + typePos.target + ' @(' + Math.round(typePos.x) + ',' + Math.round(typePos.y) + ')');
+        await page.mouse.click(typePos.x, typePos.y); // TRUSTED click — React requires isTrusted=true
         await sleep(1500);
+        log.info('Tipo clicado (trusted): ' + typePos.target);
         // Click "Cadastrar" to confirm type selection
         const cadastrarClicked = await clickByText(page, ['Cadastrar', 'Confirmar', 'Criar'], 5000);
         if (cadastrarClicked) {
