@@ -191,7 +191,12 @@ async function doSignin(page) {
 
   // Check if we're now logged in
   const finalUrl = page.url();
-  const isSignedIn = !finalUrl.includes('signin') && !finalUrl.includes('ap/signin');
+  // CVF (/ap/cvf/) = Amazon verification challenge (OTP sent by email) — not signed in yet
+  const isCvf    = finalUrl.includes('/ap/cvf');
+  const isSignedIn = !finalUrl.includes('signin') && !finalUrl.includes('ap/signin') && !isCvf;
+  if (isCvf) {
+    log.warn('Amazon CVF challenge (verificação por email) — não é possível continuar automaticamente. URL: ' + finalUrl.slice(0, 80));
+  }
   log.info('Signin resultado: ' + (isSignedIn ? 'OK' : 'FALHOU') + ' url=' + finalUrl.slice(0, 80));
 
   if (isSignedIn) {
@@ -412,24 +417,24 @@ async function publishToAmazon(ebook) {
     await sleep(4000);
     currentUrl = page.url();
 
-    // Handle step-up auth if redirected to signin
-    if (currentUrl.includes('signin') || currentUrl.includes('ap/signin')) {
+    // Handle step-up auth if redirected to signin or CVF
+    if (currentUrl.includes('signin') || currentUrl.includes('ap/signin') || currentUrl.includes('/ap/cvf')) {
       log.info('Step-up auth necessário para criar título — fazendo login...');
       const ok = await doSignin(page);
       if (!ok) {
         await screenshot(page, 'signin_failed');
         await browser.close();
-        return { success: false, error: 'Step-up auth falhou (OTP ou credenciais inválidas)', platform: 'amazon' };
+        return { success: false, error: 'Step-up auth falhou (CVF/OTP — requer verificação manual)', platform: 'amazon' };
       }
       // Navigate back to new title after signin
       await page.goto(NEW_TITLE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
       await sleep(4000);
       currentUrl = page.url();
-      if (currentUrl.includes('signin')) {
-        log.warn('Ainda redirecionando após login');
+      if (currentUrl.includes('signin') || currentUrl.includes('/ap/cvf')) {
+        log.warn('Ainda redirecionando após login (CVF challenge persistente)');
         await screenshot(page, 'still_signin');
         await browser.close();
-        return { success: false, error: 'Não foi possível acessar new-title após login', platform: 'amazon' };
+        return { success: false, error: 'Amazon CVF challenge persistente — VPS IP não verificado', platform: 'amazon' };
       }
     }
     log.info('Etapa 1 URL: ' + currentUrl.slice(0, 80));
