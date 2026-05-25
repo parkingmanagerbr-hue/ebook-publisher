@@ -610,25 +610,32 @@ async function publishToCakto(ebook) {
       }
     } else {
       // ── createdInStep1: modal closed after Continuar — product IS created ────
-      // Try to extract the checkout URL (pay.cakto.com.br/XXXX) from the products list
-      log.info('createdInStep1=true — buscando URL de checkout na lista...');
-      await sleep(3000); // give list time to refresh
+      // Navigate explicitly to products list to find the checkout URL
+      log.info('createdInStep1=true — navegando para lista de produtos...');
+      await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
+        waitUntil: 'domcontentloaded', timeout: 25000
+      }).catch(e => log.warn('goto products list: ' + e.message));
+      await page.waitForFunction(() => {
+        const btns = Array.from(document.querySelectorAll('button, a, td, [class*="product"]'));
+        return btns.length > 5;
+      }, { timeout: 12000 }).catch(() => {});
+      await sleep(3000); // give React list time to render
 
-      for (let attempt = 0; attempt < 3 && !caktoProductId; attempt++) {
+      for (let attempt = 0; attempt < 4 && !caktoProductId; attempt++) {
         if (attempt > 0) {
           await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
           await sleep(3000);
         }
         const found = await page.evaluate((ebookTitle) => {
           const short = (ebookTitle || '').slice(0, 20).toLowerCase();
-          // 1. pay.cakto.com.br links
+          // 1. pay.cakto.com.br links anywhere in the page
           const links = Array.from(document.querySelectorAll('a[href*="pay.cakto"], a[href*="cakto.com.br/"]'));
           if (links.length > 0) return links[0].href;
-          // 2. Scan page text for pay.cakto URL pattern
-          const m = (document.body.innerText || '').match(/https?:\/\/pay\.cakto\.com\.br\/[A-Za-z0-9]+/);
+          // 2. Scan full page HTML/text for pay.cakto URL pattern (may be in data attrs)
+          const m = (document.documentElement.innerHTML || '').match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
           if (m) return m[0];
           // 3. Title visible in list → product exists, just no URL found
-          const titleVisible = Array.from(document.querySelectorAll('td, li, [class*="product"], [class*="name"]'))
+          const titleVisible = Array.from(document.querySelectorAll('td, li, [class*="product"], [class*="name"], [class*="title"]'))
             .some(el => el.textContent.toLowerCase().includes(short) && el.textContent.length < 200);
           return titleVisible ? '__title_found__' : null;
         }, ebook.title).catch(() => null);
@@ -641,8 +648,34 @@ async function publishToCakto(ebook) {
           if (m) caktoProductId = m[1];
           log.info('URL de checkout extraída: ' + found);
         } else if (found === '__title_found__') {
-          caktoProductId = 'created'; // sentinel — product confirmed visible
-          log.info('Produto visível na lista (sem URL de checkout)');
+          // Product confirmed in list but no pay link visible — try clicking product to get detail page
+          log.info('Produto visível na lista — tentando navegar para detalhes do produto...');
+          const clicked = await page.evaluate((ebookTitle) => {
+            const short = (ebookTitle || '').slice(0, 20).toLowerCase();
+            const el = Array.from(document.querySelectorAll('td, [class*="product"], [class*="name"], [class*="title"], tr'))
+              .find(e => e.textContent.toLowerCase().includes(short) && e.textContent.length < 200);
+            if (el) { el.click(); return true; }
+            return false;
+          }, ebook.title).catch(() => false);
+          if (clicked) {
+            await sleep(3000);
+            const detailUrl = page.url();
+            const payM = await page.evaluate(() => {
+              const m = (document.documentElement.innerHTML || '').match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
+              return m ? m[0] : null;
+            }).catch(() => null);
+            if (payM) {
+              productUrl = payM;
+              const shortM = payM.match(/\/([A-Za-z0-9]{5,})$/);
+              if (shortM) caktoProductId = shortM[1];
+              log.info('Pay URL from detail page: ' + payM);
+            } else {
+              caktoProductId = 'created';
+              log.info('Em página de detalhe: ' + detailUrl + ' (sem pay link visível)');
+            }
+          } else {
+            caktoProductId = 'created'; // sentinel — product confirmed visible
+          }
         }
       }
 
@@ -659,7 +692,17 @@ async function publishToCakto(ebook) {
     await screenshot(page, 'done');
 
     // ── Extract product ID / shortlink from final URL (normal publish path) ──
-    if (!productUrl) productUrl = finalUrl;
+    // Only use finalUrl as productUrl if it's a valid pay/checkout URL (not a dashboard page)
+    if (!productUrl) {
+      if (finalUrl.includes('pay.cakto') || finalUrl.match(/cakto\.com\.br\/[A-Za-z0-9]{5,}$/)) {
+        productUrl = finalUrl;
+      } else if (!createdInStep1) {
+        // For non-createdInStep1 path, use finalUrl as fallback
+        productUrl = finalUrl;
+      }
+      // For createdInStep1 with no pay URL found, leave productUrl null
+      // (caller will save as null rather than a wrong dashboard URL)
+    }
     if (!caktoProductId) {
       const prodMatch = finalUrl.match(/\/products\/([a-zA-Z0-9_-]+)$/);
       if (prodMatch) caktoProductId = prodMatch[1];
