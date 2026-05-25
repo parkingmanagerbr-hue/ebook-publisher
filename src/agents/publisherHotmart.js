@@ -410,10 +410,12 @@ async function createProduct(page, session, ebook) {
   if (subCatClicked) { log.info('Subcategory clicked: ' + subCatClicked); await sleep(500); }
 
   // === COVER UPLOAD DURING WIZARD ===
-  // The /add/4/info page IS fully rendered at this point (we found name input above).
-  // Upload cover HERE instead of post-creation /manage/<id>/info which shows a loading spinner.
+  // NOTE: Disabled — uploading cover during the wizard interferes with the Continuar navigation
+  // and causes numericId=null (URL stays on /info instead of navigating to /pricing).
+  // The post-creation approach (/manage/<id>/info with 45s wait) is used instead.
+  // TODO: Investigate why the wizard Continuar doesn't navigate after cover upload.
   let wizardCoverUploaded = false;
-  if (coverPath && fs.existsSync(coverPath)) {
+  if (false && coverPath && fs.existsSync(coverPath)) {
     log.info('Attempting wizard cover upload on /add/4/info...');
     // Wait up to 5s for any file input to appear (cover section may be below the fold)
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(()=>{});
@@ -1128,7 +1130,7 @@ async function uploadCoverImage(page, numericId, coverPath) {
       if (capaEl) { capaEl.scrollIntoView({behavior:'instant',block:'center'}); capaEl.click(); }
     }).catch(()=>{});
     await sleep(1000);
-    let fileInput = await waitForCoverInput(25000); // 25s — component mounts async
+    let fileInput = await waitForCoverInput(45000); // 45s — SPA can take up to 45s to render
     log.info('Cover input after /info nav: ' + (fileInput ? 'FOUND' : 'not found'));
 
     if (!fileInput) {
