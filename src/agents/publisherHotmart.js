@@ -1368,6 +1368,12 @@ async function publishToHotmart(ebook) {
     if(!uploaded) log.warn('PDF upload failed');
     // Step 4: Finalizar cadastro
     const finalized=await finalizarCadastro(page,numericId);
+    // Step 4b: Retry cover upload after finalization (product has been live for 60-120s now)
+    if (!coverUploaded && finalized && coverPath && fs.existsSync(coverPath)) {
+      log.info('Cover not uploaded yet — retrying after finalization...');
+      coverUploaded = await uploadCoverImage(page, numericId, coverPath);
+      log.info('Cover retry after finalize: '+coverUploaded);
+    }
     // Step 5: Screenshot
     const screenshot=await screenshotLandingPage(page,numericId,title);
     await browser.close();
