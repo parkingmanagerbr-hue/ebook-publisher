@@ -301,27 +301,44 @@ async function createProduct(page, session, ebook) {
   log.info('Category dropdown open attempt: ' + catOpened);
   if (catOpened) await sleep(1000); // wait for dropdown to render
 
-  // Step 2: click the correct category option (try twice: once now, once after re-open if needed)
+  // Step 2: find and click the correct category option
   const catClicked = await page.evaluate((cat) => {
     function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
     const catNorm = norm(cat);
     const catFirst = catNorm.split(' ')[0]; // e.g. "negocios" from "Negocios e Carreira"
+
     // Debug: log all visible text-bearing elements
     const debug = Array.from(document.querySelectorAll('button, li, [role="option"], [class*="option"], [class*="categor"]'))
       .filter(el => el.getBoundingClientRect().width > 0)
-      .map(el => norm(el.textContent||'').slice(0,25))
+      .map(el => norm(el.textContent||'').slice(0,30))
       .filter(t => t.length > 2)
-      .slice(0,20);
-    const all = Array.from(document.querySelectorAll(
-      'button, [class*="categor"], [class*="option"], li, [role="option"], [role="listitem"], span, div'
-    ));
-    const b = all.find(b => {
+      .slice(0,25);
+
+    // Priority 1: exact text match on buttons
+    const buttons = Array.from(document.querySelectorAll('button, li, [role="option"], [role="listitem"]'));
+    const exact = buttons.find(b => {
+      const t = norm(b.textContent||'');
+      return b.getBoundingClientRect().width > 0 && (t === catNorm || t === catFirst);
+    });
+    if (exact) { exact.scrollIntoView({behavior:'instant',block:'center'}); exact.click(); return exact.textContent.trim().slice(0,40); }
+
+    // Priority 2: partial text match on buttons (catFirst appears in text, but full text is short enough)
+    const partial = buttons.find(b => {
       const t = norm(b.textContent||'');
       const r = b.getBoundingClientRect();
-      // Only match leaf-like elements (not giant containers)
-      return r.width > 0 && b.children.length < 3 && (t === catNorm || (catFirst.length > 4 && t.includes(catFirst)));
+      return r.width > 0 && t.length < 60 && catFirst.length > 4 && t.includes(catFirst);
     });
-    if (b) { b.click(); return b.textContent.trim().slice(0,40); }
+    if (partial) { partial.scrollIntoView({behavior:'instant',block:'center'}); partial.click(); return partial.textContent.trim().slice(0,40); }
+
+    // Priority 3: any element type with text match
+    const all = Array.from(document.querySelectorAll('button, [class*="categor"], [class*="option"], li, [role="option"], span, div'));
+    const fallback = all.find(b => {
+      const t = norm(b.textContent||'');
+      const r = b.getBoundingClientRect();
+      return r.width > 0 && t.length < 80 && catFirst.length > 4 && t.includes(catFirst);
+    });
+    if (fallback) { fallback.scrollIntoView({behavior:'instant',block:'center'}); fallback.click(); return 'fallback:' + fallback.textContent.trim().slice(0,40); }
+
     return {notFound: true, catNorm, catFirst, visibleOptions: debug};
   }, category);
   if (catClicked && typeof catClicked === 'object') {
