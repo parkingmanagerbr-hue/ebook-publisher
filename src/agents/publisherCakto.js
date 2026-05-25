@@ -266,6 +266,108 @@ async function publishToCakto(ebook) {
     log.info('Sessão válida. URL: ' + currentUrl.slice(0, 80));
     await screenshot(page, 'products_list');
 
+    // ── Check if product already exists (avoid duplicates on retry) ────────────
+    // Products list uses "Ativo" filter by default — reset to Todos and search by title
+    const shortTitle = ebook.title.slice(0, 20).toLowerCase();
+    let existingPayUrl = null;
+    {
+      // Try to reset Status filter to show all products (including drafts)
+      const statusBtn = await page.evaluate(() => {
+        const all = Array.from(document.querySelectorAll('button, select, [role="combobox"], [class*="select"], [class*="dropdown"], [class*="filter"]'));
+        const el = all.find(e => {
+          const t = (e.textContent || e.value || '').trim();
+          return (t === 'Ativo' || t.includes('Status')) && e.getBoundingClientRect().width > 0;
+        });
+        if (el) { el.click(); return true; }
+        return false;
+      }).catch(() => false);
+      if (statusBtn) {
+        await sleep(800);
+        await page.evaluate(() => {
+          const opts = Array.from(document.querySelectorAll('li, [role="option"], [role="menuitem"], option, button'));
+          const el = opts.find(o => {
+            const t = (o.textContent || '').trim().toLowerCase();
+            return (t === 'todos' || t === 'all') && o.getBoundingClientRect().width > 0;
+          });
+          if (el) el.click();
+        }).catch(() => {});
+        await sleep(1500);
+      }
+      // Search for product by title in the (now unfiltered) list
+      const found = await page.evaluate((sTitle) => {
+        const html = document.documentElement.innerHTML || '';
+        const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
+        // Check if any pay URL is near our title in the HTML
+        const rows = Array.from(document.querySelectorAll('tr, [class*="row"], li, [class*="product-item"]'));
+        for (const row of rows) {
+          if (!row.textContent.toLowerCase().includes(sTitle)) continue;
+          const rowHtml = row.innerHTML || '';
+          const pm = rowHtml.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
+          if (pm) return pm[0];
+          // Title matched but no pay URL in row — product might be in draft
+          return '__exists_no_url__';
+        }
+        return null;
+      }, shortTitle).catch(() => null);
+
+      if (found && found !== '__exists_no_url__') {
+        existingPayUrl = found;
+        log.info('Produto já existe no Cakto com pay URL: ' + found);
+      } else if (found === '__exists_no_url__') {
+        log.info('Produto já existe no Cakto (sem pay URL visível) — tentando publicar...');
+        // Click the product row to navigate to its detail page
+        const clickedRow = await page.evaluate((sTitle) => {
+          const rows = Array.from(document.querySelectorAll('tr, [class*="row"], li, [class*="product-item"]'));
+          const row = rows.find(r => r.textContent.toLowerCase().includes(sTitle) && r.textContent.length < 500);
+          if (row) { (row.querySelector('a') || row).click(); return true; }
+          return false;
+        }, shortTitle).catch(() => false);
+        if (clickedRow) {
+          await sleep(3000);
+          const payFromDetail = await page.evaluate(() => {
+            const m = (document.documentElement.innerHTML || '').match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
+            return m ? m[0] : null;
+          }).catch(() => null);
+          if (payFromDetail) {
+            existingPayUrl = payFromDetail;
+          } else {
+            // Try to publish the draft product
+            const published = await clickByText(page, ['Publicar', 'Ativar', 'Publish', 'Activate'], 8000);
+            if (published) {
+              await sleep(4000);
+              const payAfter = await page.evaluate(() => {
+                const m = (document.documentElement.innerHTML || '').match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
+                return m ? m[0] : null;
+              }).catch(() => null);
+              if (payAfter) existingPayUrl = payAfter;
+            }
+          }
+          log.info('Existing product pay URL: ' + (existingPayUrl || 'not found'));
+        }
+      }
+    }
+
+    // If we found the product already exists with a pay URL, return early
+    if (existingPayUrl) {
+      const m = existingPayUrl.match(/\/([A-Za-z0-9]{5,})$/);
+      const existingId = m ? m[1] : 'found';
+      log.info('Produto já existia — usando URL: ' + existingPayUrl);
+      await browser.close();
+      return {
+        success: true, platform: 'cakto',
+        productUrl: existingPayUrl, caktoProductId: existingId,
+        caktoUrl: existingPayUrl,
+      };
+    }
+
+    // If we navigated away during the existing-product check, go back to the products list
+    if (!page.url().includes('/dashboard/products')) {
+      await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', {
+        waitUntil: 'domcontentloaded', timeout: 20000
+      }).catch(() => {});
+      await sleep(2000);
+    }
+
     // ── Open new product form (SPA navigation) ────────────────────────────────
     // Strategy 1: Click "Criar produto" button (avoid sidebar at x<=280 and top-bar at y<=80)
     let formOpened = false;
