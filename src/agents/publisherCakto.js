@@ -628,22 +628,21 @@ async function publishToCakto(ebook) {
     log.info('Avançando para step 2...');
     const beforeStep1Url = page.url();
 
-    // ── Network interception: capture Cakto API response containing the new product ──
-    // When "Continuar" is clicked, Cakto's backend creates the product and returns its data
-    // (shortcode, pay URL, product ID) in an API response — capture it before we lose context.
+    // ── Network interception: capture ALL API responses to find product data ──
     let interceptedPayUrl = null;
     let interceptedProductId = null;
+    const capturedApiCalls = []; // DEBUG: log all JSON responses
     const responseHandler = async (response) => {
       try {
         const rUrl = response.url();
-        // Only Cakto API responses with JSON content
-        if (!rUrl.includes('cakto.com.br')) return;
         if (response.status() < 200 || response.status() >= 300) return;
         const ct = (response.headers()['content-type'] || '').toLowerCase();
         if (!ct.includes('json')) return;
         const json = await response.json().catch(() => null);
         if (!json) return;
         const text = JSON.stringify(json);
+        // DEBUG: log every JSON response URL and snippet
+        capturedApiCalls.push(rUrl.slice(-80) + ' → ' + text.slice(0, 100));
         // Look for pay URL pattern directly in response
         const payMatch = text.match(/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
         if (payMatch) {
@@ -652,15 +651,12 @@ async function publishToCakto(ebook) {
           log.info('API intercepted pay URL: ' + interceptedPayUrl);
           return;
         }
-        // Look for shortcode/slug/id fields that form the pay URL
-        const shortMatch = text.match(/"(?:shortlink|shortcode|slug|checkout_url|checkoutUrl|pay_url|payUrl|payment_link|paymentLink|link|short_link)":\s*"([A-Za-z0-9_\-]{5,})"/) ||
-                           text.match(/"(?:id|productId|product_id)":\s*"([A-Za-z0-9]{8,})"/) ;
-        if (shortMatch && !shortMatch[1].match(/^\d{4}-\d{2}-\d{2}/)) {
-          // Exclude date strings; store potential product ID
-          if (!interceptedProductId) {
-            interceptedProductId = shortMatch[1];
-            log.info('API intercepted product field: ' + shortMatch[0].slice(0, 60));
-          }
+        // Look for shortcode/slug/id fields
+        const shortMatch = text.match(/"(?:shortlink|shortcode|slug|checkout_url|checkoutUrl|pay_url|payUrl|payment_link|paymentLink|short_link)":\s*"([A-Za-z0-9_\-]{4,})"/) ||
+                           text.match(/"(?:id|productId|product_id|uuid)":\s*"([A-Za-z0-9\-]{8,})"/) ;
+        if (shortMatch && !shortMatch[1].match(/^\d{4}-\d{2}-\d{2}/) && !interceptedProductId) {
+          interceptedProductId = shortMatch[1];
+          log.info('API intercepted product field: ' + shortMatch[0].slice(0, 80) + ' from ' + rUrl.slice(-60));
         }
       } catch {}
     };
@@ -703,8 +699,10 @@ async function publishToCakto(ebook) {
       }
     }
 
-    // ── Remove network listener (no longer needed after step 1) ─────────────
+    // ── Remove network listener — log what was captured ─────────────────────
     page.off('response', responseHandler);
+    log.info('API calls captured during Continuar: ' + capturedApiCalls.length);
+    capturedApiCalls.forEach((c, i) => log.info('  API[' + i + ']: ' + c));
 
     // ── Secondary: scan page HTML / React state for pay URL (if interception missed) ──
     if (!interceptedPayUrl && createdInStep1) {
@@ -725,8 +723,54 @@ async function publishToCakto(ebook) {
         const html = document.documentElement.innerHTML || '';
         const m = html.match(/https?:\/\/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/g);
         if (m && m.length > 0) return m[0];
+        // Check for any product ID/shortcode in the page state data
+        const idMatch = html.match(/"(?:shortlink|shortcode|slug)":\s*"([A-Za-z0-9]{4,})"/);
+        if (idMatch) return '__id:' + idMatch[1];
         return null;
       }).catch(() => null);
+
+      // Also try direct API fetch using session cookies
+      if (!fromPageState) {
+        const apiResult = await page.evaluate(async (sTitle) => {
+          const endpoints = [
+            '/api/v1/products?limit=10&sort=-createdAt',
+            '/api/products?limit=10&sort=-createdAt',
+            '/api/v1/products?status=draft&limit=10',
+            '/api/products?status=draft&limit=10',
+            '/graphql',
+          ];
+          for (const ep of endpoints) {
+            try {
+              const r = await fetch(ep, {
+                credentials: 'include',
+                headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                ...(ep.includes('graphql') ? {
+                  method: 'POST',
+                  body: JSON.stringify({ query: '{ products { id shortcode title status } }' })
+                } : {})
+              });
+              if (r.ok) {
+                const txt = await r.text();
+                const snippet = txt.slice(0, 300);
+                return { endpoint: ep, snippet };
+              }
+            } catch (e) {}
+          }
+          return null;
+        }, shortTitle).catch(() => null);
+        if (apiResult) {
+          log.info('Direct API fetch ' + apiResult.endpoint + ': ' + apiResult.snippet);
+          // Try to extract pay URL from result
+          const pm = (apiResult.snippet || '').match(/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
+          if (pm) {
+            interceptedPayUrl = 'https://pay.cakto.com.br/' + pm[1];
+            interceptedProductId = pm[1];
+            log.info('API fetch pay URL: ' + interceptedPayUrl);
+          }
+        } else {
+          log.info('Direct API fetch: all endpoints failed or returned non-200');
+        }
+      }
 
       if (fromPageState) {
         if (fromPageState.startsWith('__id:')) {
