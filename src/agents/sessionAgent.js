@@ -392,9 +392,22 @@ async function checkPlatform(platform) {
       logger.info(`✅ [${platform}] Sessão válida (~${h}h restantes)`);
     }
   } else {
-    // Sem token JWT — testar por data de salvamento
+    // Sem token JWT — testar por data de salvamento e por expiração de cookies
     const ageDays = (Date.now() - (session.savedAt || 0)) / 86400000;
-    if (ageDays > 5) {
+    // Verificar se cookies de auth ainda são válidos (sessionid, session-*, cf_clearance)
+    const cookies = session.cookies || [];
+    const authCookieNames = ['sessionid', 'cf_clearance'];
+    const authCookies = cookies.filter(c =>
+      authCookieNames.includes(c.name) || c.name.startsWith('session-')
+    );
+    const minAuthExpiry = authCookies.length > 0
+      ? Math.min(...authCookies.map(c => (c.expires || 0) * 1000))
+      : 0;
+    const authCookieDaysLeft = minAuthExpiry > 0 ? (minAuthExpiry - Date.now()) / 86400000 : 0;
+    if (authCookieDaysLeft > 3) {
+      // Auth cookies still valid — no renewal needed regardless of savedAt age
+      if (ageDays > 3) logger.info(`[${platform}] Cookies de auth válidos por mais ${authCookieDaysLeft.toFixed(0)} dias — sem renovação`);
+    } else if (ageDays > 25) {
       needsRenewal = true;
       logger.warn(`[${platform}] Sessão antiga (${ageDays.toFixed(1)} dias) — renovando`);
     }
@@ -464,11 +477,22 @@ async function ensureSession(platform) {
       needsRenewal = true;
     }
   } else {
-    // Sem JWT — verificar por idade da sessão
-    const ageDays = (Date.now() - (session.savedAt || 0)) / 86400000;
-    if (ageDays > 6) {
-      logger.warn(`[${platform}] Sessão com ${ageDays.toFixed(1)} dias — renovando`);
-      needsRenewal = true;
+    // Sem JWT — verificar por cookies de auth e idade da sessão
+    const cookies = session.cookies || [];
+    const authCookieNames = ['sessionid', 'cf_clearance'];
+    const authCookies = cookies.filter(c =>
+      authCookieNames.includes(c.name) || c.name.startsWith('session-')
+    );
+    const minAuthExpiry = authCookies.length > 0
+      ? Math.min(...authCookies.map(c => (c.expires || 0) * 1000))
+      : 0;
+    const authCookieDaysLeft = minAuthExpiry > 0 ? (minAuthExpiry - Date.now()) / 86400000 : 0;
+    if (authCookieDaysLeft <= 3) {
+      const ageDays = (Date.now() - (session.savedAt || 0)) / 86400000;
+      if (ageDays > 25) {
+        logger.warn(`[${platform}] Sessão com ${ageDays.toFixed(1)} dias — renovando`);
+        needsRenewal = true;
+      }
     }
   }
 
