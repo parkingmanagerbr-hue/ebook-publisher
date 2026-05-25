@@ -510,7 +510,9 @@ async function createProduct(page, session, ebook) {
         const found = btns.find(b => {
           const t = (b.textContent||'').toLowerCase().trim();
           const r = b.getBoundingClientRect();
-          return r.width > 0 && (t.includes('sair') || t.includes('leave') || t.includes('descartar') || t.includes('discard') || t.includes('continuar mesmo'));
+          // Accept any "proceed" button: sair/leave/descartar = explicit leave buttons
+          // 'continuar' = proceed in Hotmart's "continue without cover" type dialogs
+          return r.width > 0 && (t.includes('sair') || t.includes('leave') || t.includes('descartar') || t.includes('discard') || t.includes('continuar mesmo') || t === 'continuar');
         });
         if (found) {
           const r = found.getBoundingClientRect();
@@ -537,12 +539,10 @@ async function createProduct(page, session, ebook) {
         return null;
       }
 
-      const modal = document.querySelector('hot-modal.confirmation-modal, hot-modal[class*=confirm]');
+      const modal = document.querySelector('hot-modal.confirmation-modal, hot-modal[class*=confirm], hot-modal[open]');
       if (!modal) return null;
-      const txt = (modal.textContent || '').toLowerCase();
-      if (!txt.includes('não foram salvos') && !txt.includes('sair') && !txt.includes('leave') && !txt.includes('descartar')) {
-        return null; // false positive
-      }
+      // Accept any confirmation modal — the content filter was too restrictive
+      // (Hotmart shows different modal texts for different scenarios)
       // 1. Search hot-modal-footer shadow root (most likely location)
       const footer = modal.querySelector('hot-modal-footer');
       if (footer && footer.shadowRoot) {
@@ -557,9 +557,10 @@ async function createProduct(page, session, ebook) {
       // 3. Search modal light DOM
       const r = findLeaveBtn(modal);
       if (r) return r;
-      // 4. Last resort: return all visible button positions for logging
-      const allVisible = Array.from(document.querySelectorAll('button')).filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,20));
-      return {x: 0, y: 0, text: 'no-btn:'+allVisible.join('|')};
+      // 4. Last resort: return visible buttons inside the modal + page for debugging
+      const modalBtns = Array.from(modal.querySelectorAll('button')).filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,20));
+      const pageBtns = Array.from(document.querySelectorAll('button')).filter(b=>b.getBoundingClientRect().width>0).map(b=>b.textContent.trim().slice(0,20));
+      return {x: 0, y: 0, text: 'no-btn-modal:'+modalBtns.join('|')+'|page:'+pageBtns.join('|').slice(0,200)};
     }).catch(() => null);
 
     if (!btnPos) { return null; } // no modal visible
