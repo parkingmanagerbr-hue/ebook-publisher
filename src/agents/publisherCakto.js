@@ -245,7 +245,17 @@ async function publishToCakto(ebook) {
 
     // ── Verify login ──────────────────────────────────────────────────────────
     await page.goto(BASE_URL + '/dashboard/products', { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-    await sleep(3000);
+    // Wait for page CONTENT to render (React SPA hydration can lag beyond networkidle2)
+    await page.waitForFunction(() => {
+      // Consider page ready when we see ANY button outside the sidebar (<= x280),
+      // or at least 3 buttons total (sidebar has ~10 nav items visible anyway)
+      const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+      return btns.filter(b => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }).length > 5;
+    }, { timeout: 12000 }).catch(() => {});
+    await sleep(2000); // additional buffer for React render
 
     const currentUrl = page.url();
     if (currentUrl.includes('/login') || currentUrl.includes('/auth') || currentUrl.includes('/signin')) {
@@ -257,54 +267,86 @@ async function publishToCakto(ebook) {
     await screenshot(page, 'products_list');
 
     // ── Open new product form (SPA navigation) ────────────────────────────────
-    // Strategy 1: Click "Criar produto" button — try scrolling to find it
+    // Strategy 1: Click "Criar produto" button (avoid sidebar at x<=280 and top-bar at y<=80)
     let formOpened = false;
     const tryCreateBtn = await page.evaluate(() => {
-      // Scroll through page to find button
       const all = Array.from(document.querySelectorAll(
         'button, [role="button"], a[class*="btn"], a[class*="button"]'
       ));
       const targets = ['criar produto','novo produto','adicionar produto','+ produto','criar','new product','add product','novo'];
+      // Priority 1: exact text match outside sidebar/topbar
       for (const el of all) {
         const t = (el.textContent || '').toLowerCase().trim();
-        if (targets.some(tgt => t === tgt || t.includes(tgt))) {
-          el.scrollIntoView({ behavior: 'instant', block: 'center' });
-          const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 30) };
+        const r = el.getBoundingClientRect();
+        // Must be OUTSIDE the left sidebar (x > 280) and below topbar (y > 60)
+        if (r.width > 0 && r.height > 0 && r.left > 280 && r.top > 60) {
+          if (targets.some(tgt => t === tgt || t.includes(tgt))) {
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: t.slice(0, 30) };
+          }
         }
       }
-      // Also try elements with "+" text or icon-only FABs
+      // Priority 2: FAB "+" button in content area (x > 280, y > 60), small button
       const fab = all.find(el => {
         const t = (el.textContent || '').trim();
         const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && r.width < 80 && (t === '+' || t === '');
+        return r.width > 0 && r.height > 0 && r.width < 80 && r.left > 280 && r.top > 60 &&
+               (t === '+' || t === '' || t === 'add');
       });
       if (fab) {
         const r = fab.getBoundingClientRect();
         return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: 'FAB:' + (fab.textContent || '+') };
+      }
+      // Priority 3: any "criar" text anywhere (may be in content)
+      const anyCreate = all.find(el => {
+        const t = (el.textContent || '').toLowerCase();
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && (t.includes('criar') || t.includes('novo produto'));
+      });
+      if (anyCreate) {
+        const r = anyCreate.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: 'any:' + (anyCreate.textContent||'').trim().slice(0,30) };
       }
       return null;
     });
     if (tryCreateBtn) {
       log.info('Criar produto btn: "' + tryCreateBtn.text + '" @(' + Math.round(tryCreateBtn.x) + ',' + Math.round(tryCreateBtn.y) + ')');
       await page.mouse.click(tryCreateBtn.x, tryCreateBtn.y);
-      await sleep(3000);
-      // Check if form appeared
+      // Wait up to 10s for form inputs to appear (SPA modal animation)
+      await page.waitForFunction(() => {
+        const inputs = document.querySelectorAll('input[type="text"], input[name="name"], input[placeholder], textarea');
+        return Array.from(inputs).some(i => {
+          const r = i.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+      }, { timeout: 10000 }).catch(() => {});
       const hasForm = await page.evaluate(() => {
-        const inputs = document.querySelectorAll('input[type="text"], input[name], textarea');
-        return inputs.length > 1; // more than just the checkbox
+        const inputs = Array.from(document.querySelectorAll('input[type="text"], input[name], textarea'));
+        return inputs.filter(i => i.getBoundingClientRect().width > 0).length;
       });
-      if (hasForm) { formOpened = true; log.info('Form aberto via click no botão'); }
+      log.info('Form inputs after FAB click: ' + hasForm);
+      if (hasForm >= 1) { formOpened = true; log.info('Form aberto via click no botão'); }
     }
 
     if (!formOpened) {
-      // Strategy 2: Full page.goto() navigation — triggers React Router properly
+      // Strategy 2: Navigate to /new route and wait for React hydration
       log.info('Tentando page.goto para /dashboard/products/new...');
       await page.goto(BASE_URL + '/dashboard/products/new', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(e => log.warn('goto /new: ' + e.message));
-      await sleep(2000);
-      // Wait for any form input to appear (React hydration)
-      await page.waitForSelector('input[type="text"], input[name], textarea, input[placeholder]', { timeout: 10000 }).catch(e => log.warn('waitForSelector: ' + e.message));
-      await sleep(2000);
+      // Wait up to 12s for any form input to appear (React hydration + render)
+      await page.waitForFunction(() => {
+        const inputs = Array.from(document.querySelectorAll('input[type="text"], input[name], textarea, input[placeholder]'));
+        return inputs.some(i => i.getBoundingClientRect().width > 0);
+      }, { timeout: 12000 }).catch(e => log.warn('waitForForm: ' + e.message));
+      await sleep(1000);
+
+      // Strategy 3: if still no form, scroll down — form might be below fold
+      const formAfterGoto = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('input[type="text"], input[name], textarea')).filter(i => i.getBoundingClientRect().width > 0).length
+      );
+      if (!formAfterGoto) {
+        log.info('Form still not visible — trying scroll + wait');
+        await page.evaluate(() => window.scrollTo(0, 500));
+        await sleep(2000);
+      }
     }
 
     await screenshot(page, 'new_product_form');
