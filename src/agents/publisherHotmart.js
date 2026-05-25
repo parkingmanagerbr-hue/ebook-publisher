@@ -451,16 +451,9 @@ async function createProduct(page, session, ebook) {
     if (wizCoverInput) {
       try {
         await wizCoverInput.uploadFile(coverPath);
-        await sleep(3000);
-        // Save/confirm if needed
-        await page.evaluate(() => {
-          const b = Array.from(document.querySelectorAll('button')).find(b => {
-            const t = (b.textContent||'').trim().toLowerCase();
-            return (t === 'salvar' || t === 'save' || t.includes('confirmar')) && b.getBoundingClientRect().width > 0;
-          });
-          if (b) b.click();
-        }).catch(()=>{});
-        await sleep(1500);
+        // Wait for upload to process — do NOT click any save buttons here,
+        // the form saves automatically when 'Continuar' is clicked below.
+        await sleep(4000);
         wizardCoverUploaded = true;
         log.info('Wizard cover upload OK!');
       } catch(e) {
