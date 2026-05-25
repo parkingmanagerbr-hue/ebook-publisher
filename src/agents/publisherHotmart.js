@@ -142,7 +142,7 @@ async function handleSessionDialog(page) {
 }
 
 async function createProduct(page, session, ebook) {
-  const { title, description, topic } = ebook;
+  const { title, description, topic, coverPath } = ebook;
   const category = getCategoryPT(title, topic);
   log.info('Creating: "' + title + '" => ' + category);
 
@@ -408,6 +408,68 @@ async function createProduct(page, session, ebook) {
     return null;
   }).catch(()=>null);
   if (subCatClicked) { log.info('Subcategory clicked: ' + subCatClicked); await sleep(500); }
+
+  // === COVER UPLOAD DURING WIZARD ===
+  // The /add/4/info page IS fully rendered at this point (we found name input above).
+  // Upload cover HERE instead of post-creation /manage/<id>/info which shows a loading spinner.
+  let wizardCoverUploaded = false;
+  if (coverPath && fs.existsSync(coverPath)) {
+    log.info('Attempting wizard cover upload on /add/4/info...');
+    // Wait up to 5s for any file input to appear (cover section may be below the fold)
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(()=>{});
+    await sleep(500);
+    await page.evaluate(() => window.scrollTo(0, 0)).catch(()=>{});
+    await sleep(500);
+    // Try direct selector first
+    let wizCoverInput = null;
+    for (const sel of ['input[accept*="image"][type="file"]', 'input[type="file"]', 'input[id*="cover"]', 'input[id*="imagem"]', 'input[id*="image"]']) {
+      wizCoverInput = await page.$(sel).catch(()=>null);
+      if (wizCoverInput) { log.info('Wizard cover input found via: '+sel); break; }
+    }
+    // Deep shadow DOM search
+    if (!wizCoverInput) {
+      const handle = await page.evaluateHandle(() => {
+        function findFileInput(root) {
+          if (!root) return null;
+          const inputs = Array.from(root.querySelectorAll ? root.querySelectorAll('input[type="file"]') : []);
+          if (inputs.length > 0) {
+            inputs[0].style.cssText = 'display:block!important;visibility:visible!important;opacity:1!important;position:fixed!important;top:0;left:0;width:1px;height:1px;';
+            return inputs[0];
+          }
+          const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+          for (const el of all) { if (el.shadowRoot) { const r = findFileInput(el.shadowRoot); if (r) return r; } }
+          return null;
+        }
+        return findFileInput(document);
+      }).catch(()=>null);
+      if (handle) {
+        const el = handle.asElement ? handle.asElement() : null;
+        if (el) { log.info('Wizard cover input found via shadow DOM'); wizCoverInput = el; }
+        else await handle.dispose().catch(()=>{});
+      }
+    }
+    if (wizCoverInput) {
+      try {
+        await wizCoverInput.uploadFile(coverPath);
+        await sleep(3000);
+        // Save/confirm if needed
+        await page.evaluate(() => {
+          const b = Array.from(document.querySelectorAll('button')).find(b => {
+            const t = (b.textContent||'').trim().toLowerCase();
+            return (t === 'salvar' || t === 'save' || t.includes('confirmar')) && b.getBoundingClientRect().width > 0;
+          });
+          if (b) b.click();
+        }).catch(()=>{});
+        await sleep(1500);
+        wizardCoverUploaded = true;
+        log.info('Wizard cover upload OK!');
+      } catch(e) {
+        log.warn('Wizard cover upload error: '+e.message);
+      }
+    } else {
+      log.info('Wizard cover input not found on /add/4/info — will try post-creation fallback');
+    }
+  }
 
   // Step B: find ALL visible Continuar buttons and click them in order (panel first, then main)
   const continList = await page.evaluate(()=>{
@@ -1001,8 +1063,8 @@ async function createProduct(page, session, ebook) {
   }
 
   if (client) await client.detach().catch(()=>{});
-  log.info('createProduct done: numericId=' + capturedNumericId + ' category=' + category);
-  return { numericId: capturedNumericId, category };
+  log.info('createProduct done: numericId=' + capturedNumericId + ' category=' + category + ' wizardCover=' + wizardCoverUploaded);
+  return { numericId: capturedNumericId, category, wizardCoverUploaded };
 }
 
 async function uploadCoverImage(page, numericId, coverPath) {
@@ -1287,10 +1349,15 @@ async function publishToHotmart(ebook) {
     }
     if (!sessionReady) log.warn('Session not confirmed -- proceeding anyway');
     // Step 1: Create product (wizard + pricing)
-    const {numericId,category}=await createProduct(page,session,{title,topic,description,coverPath,pdfPath});
+    const {numericId,category,wizardCoverUploaded}=await createProduct(page,session,{title,topic,description,coverPath,pdfPath});
     if(!numericId || !/^\d+$/.test(String(numericId))) throw new Error('No product ID after creation (got: '+numericId+')');
-    // Step 2: Upload cover image
-    const coverUploaded = await uploadCoverImage(page, numericId, coverPath);
+    // Step 2: Upload cover image (skip if already done during wizard)
+    let coverUploaded = wizardCoverUploaded || false;
+    if (!coverUploaded) {
+      coverUploaded = await uploadCoverImage(page, numericId, coverPath);
+    } else {
+      log.info('Cover already uploaded during wizard — skipping post-creation upload');
+    }
     log.info('Cover uploaded: '+coverUploaded);
     // Step 3: Upload PDF content
     const uploaded=await uploadPDF(page,numericId,pdfPath);
