@@ -491,81 +491,111 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
 
         // Phase 2: Vue reactive state update + comprehensive event dispatch.
         //
-        // Root cause of disabled Finalizar:
-        //   - Vue 3 v-model listens for 'input' events on the textarea
-        //   - Shadow DOM event retargeting: when event crosses shadow boundary,
-        //     event.target is rewritten to the shadow HOST element, not the textarea
-        //   - So Vue's handler sees event.target.value = (host.value = undefined)
-        //     → sets formData.information = undefined → Finalizar stays disabled
-        //
-        // Fix: dispatch events from EACH shadow host in the chain (not just ta),
-        //   AND directly manipulate Vue's reactive setupState for the 'information' ref.
+        // Root cause v2 (from logs: hostCount=0, vueInfo=[]):
+        //   Previous fix used `instanceof ShadowRoot` which fails when the ShadowRoot
+        //   comes from a different JavaScript realm (HOT-LOADING custom element).
+        //   Fix: use `nodeType === 11` (always reliable) for shadow root detection.
+        //   Also: search ALL elements in ALL shadow roots for Vue components,
+        //   and call Vue's _vei (event listener) handler directly on the textarea.
         const vueResult = await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
           const desc = ${JSON.stringify(description)};
           const ta = deepFindTextarea();
+          const btn0 = deepFindButton('Finalizar');
           if (!ta) return {error: 'no ta'};
 
-          // 1. Set DOM value via native setter
-          const ns = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-          ns.call(ta, desc);
+          // 1. Set textarea DOM value via native prototype setter
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, desc);
 
-          // 2. Collect shadow host chain above the textarea
+          // 2. Collect shadow host chain — use nodeType===11 (avoids instanceof realm bug)
           const hosts = [];
           let el = ta;
           for (let i = 0; i < 12; i++) {
             const r = el.getRootNode ? el.getRootNode() : null;
-            if (r instanceof ShadowRoot) { el = r.host; hosts.push(el); }
+            if (r && r.nodeType === 11) { el = r.host; hosts.push(el); }
             else { el = el.parentElement; if (!el) break; }
           }
 
-          // 3. Scan chain for Vue 3 component instances and update reactive data
+          // 3. Search ALL elements across ALL shadow roots for Vue 3 component instances.
+          //    This is necessary because the component containing 'information' state
+          //    may not be a direct ancestor of the textarea in the DOM tree.
           const vueInfo = [];
-          el = ta;
-          for (let i = 0; i < 15; i++) {
-            if (!el) break;
-            const comp = el.__vueParentComponent;
-            if (comp) {
-              const info = {tag: el.tagName};
-              try {
-                const ss = comp.setupState;
-                if (ss) {
-                  const raw = (ss.__v_raw !== undefined ? ss.__v_raw : ss);
-                  const keys = Object.keys(raw).filter(k => !k.startsWith('_') && !k.startsWith('$')).slice(0, 25);
-                  info.keys = keys;
-                  // Attempt to find and set 'information' (or similar) reactive ref
-                  const candidates = ['information','description','affiliateDescription','programDescription','text','content'];
-                  for (const k of candidates) {
-                    if (k in raw) {
-                      try { raw[k] = desc; info.set = k; } catch(e) {}
-                      break;
-                    }
+          const CANDIDATES = ['information','description','affiliateDescription','programDescription',
+                              'text','content','programInfo','details','affiliateInfo'];
+
+          function setVueState(comp, tag) {
+            const info = {tag};
+            try {
+              const ss = comp.setupState;
+              const data = comp.data ? comp.data() : null;
+              const allSources = [ss, data].filter(Boolean);
+              for (const src of allSources) {
+                if (!src) continue;
+                const raw = (src.__v_raw !== undefined ? src.__v_raw : src);
+                const keys = Object.keys(raw).filter(k => !k.startsWith('_') && !k.startsWith('$')).slice(0,30);
+                info.keys = keys;
+                // Direct key
+                for (const k of CANDIDATES) {
+                  if (k in raw) {
+                    try { src[k] = desc; raw[k] = desc; info.set = k; } catch(e) {}
+                    break;
                   }
-                  // Also try nested objects (formData.information, form.information, etc.)
-                  for (const k of keys) {
-                    if (!info.set && raw[k] && typeof raw[k] === 'object') {
-                      for (const sub of candidates) {
-                        if (sub in raw[k]) {
-                          try { raw[k][sub] = desc; info.set = k+'.'+sub; } catch(e) {}
-                          break;
-                        }
+                }
+                // Nested object (formData.information, form.description, etc.)
+                for (const k of keys) {
+                  if (info.set) break;
+                  const v = raw[k];
+                  if (v && typeof v === 'object' && !Array.isArray(v)) {
+                    for (const sub of CANDIDATES) {
+                      if (sub in v) {
+                        try { v[sub] = desc; info.set = k+'.'+sub; } catch(e) {}
+                        break;
                       }
                     }
-                    if (info.set) break;
                   }
-                  try { comp.update && comp.update(); } catch(e) {}
                 }
-              } catch(e) { info.err = String(e).slice(0, 60); }
-              vueInfo.push(info);
-            }
-            const r2 = el.getRootNode ? el.getRootNode() : null;
-            el = r2 instanceof ShadowRoot ? r2.host : el.parentElement;
+                if (info.set) break;
+              }
+              try { comp.update && comp.update(); } catch(e) {}
+            } catch(e) { info.err = String(e).slice(0,60); }
+            return info;
           }
 
-          // 4. Dispatch input events from the textarea AND from each shadow host.
-          //    When input event from inner shadow DOM crosses boundary, event.target becomes
-          //    the host — but the value Vue reads is host.value, not ta.value.
-          //    So we set host.value too, then dispatch from host.
+          function searchVue(root, depth) {
+            if (depth > 8 || vueInfo.length >= 6) return;
+            const ctx = (root && root.nodeType === 11) ? root : (root.shadowRoot || root);
+            try {
+              for (const elem of ctx.querySelectorAll('*')) {
+                const comp = elem.__vueParentComponent;
+                if (comp) vueInfo.push(setVueState(comp, elem.tagName));
+                if (vueInfo.length >= 6) return;
+              }
+            } catch(e) {}
+            try {
+              for (const elem of ctx.querySelectorAll('*')) {
+                if (elem.shadowRoot) searchVue(elem.shadowRoot, depth+1);
+                if (vueInfo.length >= 6) return;
+              }
+            } catch(e) {}
+          }
+          searchVue(document, 0);
+
+          // 4. Direct call to Vue's _vei input handler (bypasses event retargeting entirely)
+          //    Vue 3 stores bound event listeners in el._vei = { input: fn, ... }
+          let veiCalled = false;
+          try {
+            const vei = ta._vei;
+            if (vei) {
+              const handler = vei.onInput || vei.input;
+              const fn = handler && (handler.attached || handler.value || handler);
+              if (typeof fn === 'function') {
+                fn({type:'input', target:ta, currentTarget:ta, data:desc});
+                veiCalled = true;
+              }
+            }
+          } catch(e) {}
+
+          // 5. Dispatch events from textarea AND each shadow host
           const fire = (node) => {
             try {
               node.dispatchEvent(new InputEvent('input', {bubbles:true,cancelable:true,composed:true,inputType:'insertText',data:desc}));
@@ -573,25 +603,22 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
             } catch(e) {}
           };
           fire(ta);
-          for (const h of hosts) {
-            try {
-              const hns = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(h), 'value');
-              if (hns && hns.set) hns.set.call(h, desc);
-            } catch(e) {}
-            fire(h);
-          }
+          for (const h of hosts) fire(h);
 
-          // 5. Wait one microtask tick for Vue to process events, then check Finalizar
+          // 6. Wait for Vue to re-render (setTimeout > microtask to catch full cycle)
           return new Promise(resolve => {
-            Promise.resolve().then(() => {
-              const btn = deepFindButton('Finalizar');
+            setTimeout(() => {
+              const btn2 = deepFindButton('Finalizar');
               resolve({
-                taValue: (deepFindTextarea()?.value || '').slice(0, 50),
-                finDisabled: btn ? btn.disabled : null,
-                vueInfo,
+                taRootType: (ta.getRootNode()||{}).nodeType,
                 hostCount: hosts.length,
+                hostTags: hosts.map(h=>h.tagName),
+                vueInfo: vueInfo.slice(0,4),
+                veiCalled,
+                taValue: (deepFindTextarea()?.value || '').slice(0,50),
+                finDisabled: btn2 ? btn2.disabled : null,
               });
-            });
+            }, 800);
           });
         `)).catch(e => ({error: String(e).slice(0, 80)}));
 
