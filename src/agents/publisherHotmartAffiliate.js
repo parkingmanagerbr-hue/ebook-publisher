@@ -91,6 +91,8 @@ async function refreshJWT(browser, session) {
 
 // ── Setup new page with anti-detection ───────────────────────────────────────
 async function setupPage(page, session, jwt) {
+  // Set default timeout for all page operations (evaluate, click, etc.) to 15s
+  page.setDefaultTimeout(15000);
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
   await page.evaluateOnNewDocument(() => {
@@ -206,17 +208,27 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
   }
 
   // Poll for page to be ready (wait for HOT-LOADING spinner to clear, up to 30s)
+  log.info(`[${productId}] Waiting for SPA to render...`);
   for (let i = 0; i < 30; i++) {
     await sleep(1000);
-    const isLoading = await page.evaluate(() => {
-      const hotLoading = document.querySelector('HOT-LOADING');
-      const bodyLen = document.body ? document.body.innerHTML.length : 0;
-      return { hotLoading: !!hotLoading, bodyLen };
-    }).catch(() => ({ hotLoading: true, bodyLen: 0 }));
+    const isLoading = await Promise.race([
+      page.evaluate(() => {
+        const hotLoading = document.querySelector('HOT-LOADING');
+        const bodyLen = document.body ? document.body.innerHTML.length : 0;
+        return { hotLoading: !!hotLoading, bodyLen };
+      }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('eval_timeout')), 8000)),
+    ]).catch(e => {
+      log.warn(`[${productId}] Poll eval error (${i}): ${e.message.slice(0, 40)}`);
+      return { hotLoading: true, bodyLen: 0 };
+    });
 
     if (!isLoading.hotLoading && isLoading.bodyLen > 2000) {
       log.info(`[${productId}] Page ready after ${i + 1}s (body: ${isLoading.bodyLen}b)`);
       break;
+    }
+    if (i % 5 === 4) {
+      log.info(`[${productId}] Still waiting... ${i + 1}s hotLoading=${isLoading.hotLoading} bodyLen=${isLoading.bodyLen}`);
     }
     if (i === 29) {
       log.warn(`[${productId}] Page still loading after 30s — proceeding anyway`);
