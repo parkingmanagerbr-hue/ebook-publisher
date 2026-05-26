@@ -227,14 +227,31 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
   // or eval_timeout — we catch these and keep waiting.
   log.info(`[${productId}] Waiting for SPA to render (up to 120s, handling OIDC redirect)...`);
   let oauthSeen = false;
+
+  // HOT-LOADING check that also walks shadow DOM (Hotmart uses nested HOT-LOADING for routes)
+  const HAS_HOT_LOADING_FN = `
+    function hasHotLoading(node, depth) {
+      if (depth > 6) return false;
+      try {
+        if (node.tagName === 'HOT-LOADING') return true;
+        const ctx = node.shadowRoot || node;
+        if (ctx.querySelector && ctx.querySelector('HOT-LOADING')) return true;
+        for (const child of ctx.querySelectorAll('*')) {
+          if (child.shadowRoot && hasHotLoading(child, depth + 1)) return true;
+        }
+      } catch(e) {}
+      return false;
+    }
+    return hasHotLoading(document.documentElement, 0);
+  `;
+
   for (let i = 0; i < 120; i++) {
     await sleep(1000);
     const state = await Promise.race([
-      page.evaluate(() => ({
-        url: location.href,
-        hotLoading: !!document.querySelector('HOT-LOADING'),
-        bodyLen: document.body ? document.body.innerHTML.length : 0,
-      })),
+      page.evaluate(new Function(`
+        const hotLoading = (function() { ${HAS_HOT_LOADING_FN} })();
+        return { url: location.href, hotLoading, bodyLen: document.body ? document.body.innerHTML.length : 0 };
+      `)),
       new Promise((_, rej) => setTimeout(() => rej(new Error('eval_timeout')), 8000)),
     ]).catch(e => {
       // "execution context was destroyed" = page is navigating (OIDC redirect in progress)
@@ -262,9 +279,9 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
       continue;
     }
 
-    // We're at the product URL
+    // We're at the product URL — check for HOT-LOADING (including nested shadow DOM)
     if (!state.hotLoading && state.bodyLen > 2000) {
-      log.info(`[${productId}] Page ready after ${i + 1}s (body: ${state.bodyLen}b${oauthSeen ? ', after OIDC' : ''})`);
+      log.info(`[${productId}] HOT-LOADING cleared after ${i + 1}s (body: ${state.bodyLen}b${oauthSeen ? ', after OIDC' : ''})`);
       break;
     }
 
@@ -273,6 +290,31 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     }
     if (i === 119) {
       log.warn(`[${productId}] Still loading after 120s — proceeding anyway`);
+    }
+  }
+
+  // Secondary poll: wait for wizard content to appear (up to 30s).
+  // The affiliation micro-frontend may load AFTER the main HOT-LOADING clears.
+  log.info(`[${productId}] Waiting for wizard content (up to 30s)...`);
+  let wizardFound = false;
+  for (let j = 0; j < 30; j++) {
+    await sleep(1000);
+    const wiz = await page.evaluate(new Function(`
+      ${SHADOW_HELPERS};
+      return {
+        hasConfigurar: !!deepFindButton('Configurar programa'),
+        hasEditar: !!deepFindButton('Editar programa'),
+        hasContinuar: !!deepFindButton('Continuar'),
+        hasFinalizar: !!deepFindButton('Finalizar'),
+      };
+    `)).catch(() => ({}));
+    if (wiz.hasConfigurar || wiz.hasEditar || wiz.hasContinuar || wiz.hasFinalizar) {
+      log.info(`[${productId}] Wizard content ready after ${j+1}s`);
+      wizardFound = true;
+      break;
+    }
+    if (j % 5 === 4) {
+      log.info(`[${productId}] Waiting for wizard... ${j+1}s`);
     }
   }
 
@@ -310,23 +352,23 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
 
   // If "Configurar programa" not found and no wizard buttons either → can't configure
   if (!btnState.hasConfigurar && !btnState.hasContinuar && !btnState.hasFinalizar) {
-    // Capture shadow DOM text to understand what's on the page
+    // Capture shadow DOM text (deep) to understand what's on the page
     const pageText = await page.evaluate(new Function(`
       ${SHADOW_HELPERS};
       function getAllShadowText(node, depth) {
-        if (depth > 4) return '';
+        if (depth > 6) return '';
         let text = '';
         try {
           const ctx = node.shadowRoot || node;
           const nodeText = (ctx.innerText || ctx.textContent || '').replace(/\\s+/g,' ').trim();
-          if (nodeText) text += nodeText.slice(0, 200) + ' | ';
+          if (nodeText) text += nodeText.slice(0, 300) + ' | ';
           ctx.querySelectorAll('*').forEach(child => {
             if (child.shadowRoot) text += getAllShadowText(child, depth + 1);
           });
         } catch(e) {}
         return text;
       }
-      return getAllShadowText(document.documentElement, 0).slice(0, 400);
+      return getAllShadowText(document.documentElement, 0).slice(0, 800);
     `)).catch(() => 'eval error');
     log.warn('[' + productId + '] No wizard buttons found. URL: ' + landedUrl.slice(-60));
     log.warn('[' + productId + '] Page content: ' + pageText);
