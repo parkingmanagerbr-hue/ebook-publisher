@@ -904,8 +904,9 @@ async function launchHotmartBrowser() {
   const rawToken = await page.evaluate(() => localStorage.getItem('token') || '').catch(() => '');
 
   // Extend JWT expiry to prevent OIDC re-auth on product pages.
-  // The SPA checks token.exp locally (without signature verification) to decide
-  // whether to trigger OIDC. Extending exp prevents this without needing a fresh token.
+  // Many SPAs decode JWT payload without verifying signature to check exp locally.
+  // We also intercept the OIDC token endpoint to return this extended token so the
+  // SPA's OIDC callback receives a "fresh" token and stops the auth loop.
   const extToken = extendJWTExpiry(rawToken || jwt || '');
   if (extToken && extToken !== (rawToken || jwt)) {
     log.info('JWT exp extended by 48h to prevent OIDC re-auth');
@@ -915,18 +916,69 @@ async function launchHotmartBrowser() {
     // Inject into the currently open page's localStorage
     await page.evaluate((t) => {
       localStorage.setItem('token', t);
-      // Also patch any jwt-decode or verify calls the SPA might make
       try {
-        const ev = { type: 'storage', key: 'token', newValue: t, storageArea: localStorage };
-        window.dispatchEvent(new StorageEvent('storage', ev));
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'token', newValue: t, storageArea: localStorage
+        }));
       } catch (_) {}
     }, extToken).catch(() => {});
 
-    // Ensure the extended token is injected into every future navigation on this page
+    // Ensure the extended token is injected into every future navigation on this page.
+    // Also patch Date.now so the exp check uses our extended time.
     await page.evaluateOnNewDocument((t) => {
-      // This runs before any page script — set token before the SPA reads it
       try { localStorage.setItem('token', t); } catch (_) {}
     }, extToken).catch(() => {});
+
+    // Global CDP intercept: intercept OIDC token endpoint + session monitor
+    // so the SPA completes its OIDC flow with our fake token (no CAS needed).
+    try {
+      const globalCdp = await page.target().createCDPSession();
+      const tokenEndpointBody = JSON.stringify({
+        access_token: extToken,
+        id_token: extToken,
+        token_type: 'Bearer',
+        expires_in: 172800,
+        scope: 'openid profile email',
+      });
+      const tokenEndpointB64 = Buffer.from(tokenEndpointBody).toString('base64');
+
+      await globalCdp.send('Fetch.enable', {
+        patterns: [
+          { urlPattern: '*sso.hotmart.com/oauth2.0/accessToken*' },
+          { urlPattern: '*sso.hotmart.com/oauth2.0/profile*' },
+          { urlPattern: '*sso.hotmart.com/rest/v1/session/monitor*' },
+        ],
+      });
+      globalCdp.on('Fetch.requestPaused', async (evt) => {
+        try {
+          const url = evt.request.url;
+          if (url.includes('/accessToken') || url.includes('/profile')) {
+            // Return fake token response — SPA uses this to complete OIDC without CAS
+            await globalCdp.send('Fetch.fulfillRequest', {
+              requestId: evt.requestId,
+              responseCode: 200,
+              responseHeaders: [
+                { name: 'content-type', value: 'application/json' },
+                { name: 'access-control-allow-origin', value: '*' },
+              ],
+              body: tokenEndpointB64,
+            });
+            log.info('OIDC token endpoint intercepted → returned extended token');
+          } else {
+            // session/monitor → active
+            await globalCdp.send('Fetch.fulfillRequest', {
+              requestId: evt.requestId,
+              responseCode: 200,
+              responseHeaders: [{ name: 'content-type', value: 'application/json' }],
+              body: Buffer.from('{"active":true}').toString('base64'),
+            });
+          }
+        } catch (_) {}
+      });
+      log.info('Global CDP intercept active (token endpoint + session monitor)');
+    } catch (e) {
+      log.warn('Global CDP intercept failed: ' + e.message.slice(0, 60));
+    }
   }
 
   const token = extToken || rawToken;
