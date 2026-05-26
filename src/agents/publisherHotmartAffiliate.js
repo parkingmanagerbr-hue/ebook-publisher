@@ -204,7 +204,24 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     // ERR_ABORTED is common with SPAs doing client-side routing — not fatal
     log.warn(`[${productId}] goto error: ${e.message.slice(0, 60)}`);
   }
-  await sleep(5000); // Wait longer for SPA to render shadow DOM
+
+  // Poll for page to be ready (wait for HOT-LOADING spinner to clear, up to 30s)
+  for (let i = 0; i < 30; i++) {
+    await sleep(1000);
+    const isLoading = await page.evaluate(() => {
+      const hotLoading = document.querySelector('HOT-LOADING');
+      const bodyLen = document.body ? document.body.innerHTML.length : 0;
+      return { hotLoading: !!hotLoading, bodyLen };
+    }).catch(() => ({ hotLoading: true, bodyLen: 0 }));
+
+    if (!isLoading.hotLoading && isLoading.bodyLen > 2000) {
+      log.info(`[${productId}] Page ready after ${i + 1}s (body: ${isLoading.bodyLen}b)`);
+      break;
+    }
+    if (i === 29) {
+      log.warn(`[${productId}] Page still loading after 30s — proceeding anyway`);
+    }
+  }
 
   // Check if we're on the right page (not redirected to login)
   const landedUrl = page.url();
