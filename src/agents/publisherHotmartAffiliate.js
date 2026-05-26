@@ -230,6 +230,7 @@ const SHADOW_HELPERS = `
 //   accessToken     → fake token response with extended JWT
 //   oauth2.0/profile → fake user profile
 let _masterCdp = null;
+let _casInterceptCount = 0;  // loop-breaker: stop CAS intercept after N hits
 
 async function enableMasterCDPIntercept(page, extToken, label) {
   // Disable any previous intercept
@@ -237,6 +238,7 @@ async function enableMasterCDPIntercept(page, extToken, label) {
     try { await _masterCdp.send('Fetch.disable'); } catch (_) {}
     _masterCdp = null;
   }
+  _casInterceptCount = 0;  // reset loop counter for each browser session
 
   try {
     _masterCdp = await page.target().createCDPSession();
@@ -258,16 +260,20 @@ async function enableMasterCDPIntercept(page, extToken, label) {
     await _masterCdp.send('Fetch.enable', {
       patterns: [
         { urlPattern: '*sso.hotmart.com/rest/v1/session/monitor*' },
+        // CAS login page — the SPA navigates here directly (not via /oidc/authorize)
+        { urlPattern: '*sso.hotmart.com/cas/login*' },
+        { urlPattern: '*sso.hotmart.com/cas*authorize*' },
         { urlPattern: '*hotmart.com/oidc/authorize*' },
         { urlPattern: '*sso.hotmart.com/oauth2.0/accessToken*' },
-        { urlPattern: '*sso.hotmart.com/oauth2.0/profile*' },
         { urlPattern: '*sso.hotmart.com/cas/oauth2.0/accessToken*' },
+        { urlPattern: '*sso.hotmart.com/oauth2.0/profile*' },
       ],
     });
 
     _masterCdp.on('Fetch.requestPaused', async (evt) => {
       try {
-        const url = evt.request.url;
+        const url        = evt.request.url;
+        const rType      = evt.resourceType || '';
 
         if (url.includes('/session/monitor')) {
           await _masterCdp.send('Fetch.fulfillRequest', {
@@ -278,24 +284,45 @@ async function enableMasterCDPIntercept(page, extToken, label) {
           });
           log.info(`[${label}] session/monitor → active`);
 
-        } else if (url.includes('/oidc/authorize') || url.includes('/cas/oauth2.0/authorize')) {
-          // Return JS that sets the extended token in localStorage then navigates back.
-          // We return HTML for the authorize URL so it runs in the SPA's domain context
-          // — this avoids the code exchange loop from a fake callback redirect.
-          const currentUrl = await page.url().catch(() => '');
-          const safeToken = (extToken || '').replace(/'/g, "\\'");
-          const safeDest  = currentUrl.replace(/'/g, "\\'") || 'https://app.hotmart.com/';
-          const htmlBody  = `<!DOCTYPE html><html><body><script>
-try{localStorage.setItem('token','${safeToken}');}catch(_){}
+        } else if (
+          url.includes('sso.hotmart.com/cas/login') ||
+          url.includes('/oidc/authorize') ||
+          (url.includes('sso.hotmart.com') && url.includes('authorize'))
+        ) {
+          // CAS login page or OIDC authorize — the Hotmart SPA navigates here when JWT is
+          // considered expired. We intercept and inject our extended token, then send the
+          // browser back to the product page so the SPA can continue without OIDC.
+          // Loop-breaker: if the SPA still keeps triggering OIDC after N redirects,
+          // stop intercepting and let it through (headless can't solve CAPTCHA, so
+          // we'd rather fail fast than spin forever).
+          _casInterceptCount++;
+          if (_casInterceptCount > 4) {
+            log.warn(`[${label}] CAS/OIDC intercept count=${_casInterceptCount} > 4 — passing through`);
+            await _masterCdp.send('Fetch.continueRequest', { requestId: evt.requestId }).catch(() => {});
+          } else {
+            // page.url() still returns the product URL (navigation hasn't committed yet)
+            const currentUrl = await page.url().catch(() => '');
+            const destUrl    = (currentUrl && currentUrl.includes('hotmart.com'))
+              ? currentUrl
+              : 'https://app.hotmart.com/market/products';
+            const safeToken  = (extToken || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            const safeDest   = destUrl.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            const htmlBody   = `<!DOCTYPE html><html><body><script>
+try{
+  localStorage.setItem('token','${safeToken}');
+  localStorage.setItem('access_token','${safeToken}');
+  localStorage.setItem('id_token','${safeToken}');
+}catch(_){}
 window.location.replace('${safeDest}');
 </script></body></html>`;
-          await _masterCdp.send('Fetch.fulfillRequest', {
-            requestId: evt.requestId,
-            responseCode: 200,
-            responseHeaders: [{ name: 'content-type', value: 'text/html' }],
-            body: Buffer.from(htmlBody).toString('base64'),
-          });
-          log.info(`[${label}] oidc/authorize intercepted → inject token + redirect to SPA`);
+            await _masterCdp.send('Fetch.fulfillRequest', {
+              requestId: evt.requestId,
+              responseCode: 200,
+              responseHeaders: [{ name: 'content-type', value: 'text/html' }],
+              body: Buffer.from(htmlBody).toString('base64'),
+            });
+            log.info(`[${label}] CAS/OIDC#${_casInterceptCount} intercepted (${rType}) → inject token + redirect to ${destUrl.slice(-50)}`);
+          }
 
         } else if (url.includes('/accessToken')) {
           if (tokenB64) {
@@ -959,9 +986,23 @@ async function launchHotmartBrowser() {
       } catch (_) {}
     }, extToken).catch(() => {});
 
-    // Inject extended token into every future page navigation (before SPA scripts run)
+    // Inject extended token into every future page navigation BEFORE SPA scripts run.
+    // Also override localStorage.getItem so the SPA always gets a non-expired token
+    // even if it re-checks after our CAS-redirect intercept brings it back to the product URL.
     await page.evaluateOnNewDocument((t) => {
-      try { localStorage.setItem('token', t); } catch (_) {}
+      try {
+        localStorage.setItem('token', t);
+        localStorage.setItem('access_token', t);
+        localStorage.setItem('id_token', t);
+        // Override getItem: for auth keys return our extended token so the SPA's
+        // client-side JWT expiry check never triggers OIDC re-auth
+        const AUTH_KEYS = new Set(['token', 'access_token', 'id_token']);
+        const origGet   = Storage.prototype.getItem;
+        Storage.prototype.getItem = function(key) {
+          if (this === localStorage && AUTH_KEYS.has(key)) return t;
+          return origGet.call(this, key);
+        };
+      } catch (_) {}
     }, extToken).catch(() => {});
   }
 
