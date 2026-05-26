@@ -464,36 +464,8 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
       // Final step: description + Finalizar
       log.info(`[${productId}] Wizard step ${step}: FINAL — entering description`);
 
-      // Dump all form elements for debugging (first product only, to understand page structure)
-      const formDump = await page.evaluate(new Function(`
-        ${SHADOW_HELPERS};
-        function dumpForms(node, depth) {
-          if (depth > 6) return [];
-          const items = [];
-          try {
-            const ctx = node.shadowRoot || node;
-            ctx.querySelectorAll('input,textarea,select,button,[role="checkbox"],[role="radio"],[role="button"]').forEach(el => {
-              items.push({
-                tag: el.tagName, type: el.type || el.getAttribute('type') || '',
-                name: el.name || el.id || '',
-                value: (el.value || '').slice(0, 30),
-                disabled: el.disabled, checked: el.checked,
-                visible: el.offsetWidth > 0 || el.offsetHeight > 0,
-                text: (el.textContent || '').trim().slice(0, 30),
-              });
-            });
-            ctx.querySelectorAll('*').forEach(child => {
-              if (child.shadowRoot) items.push(...dumpForms(child, depth + 1));
-            });
-          } catch(e) {}
-          return items;
-        }
-        return dumpForms(document.documentElement, 0);
-      `)).catch(() => []);
-      log.info(`[${productId}] Step ${step} form elements: ${JSON.stringify(formDump.filter(e => e.visible))}`);
-
       if (s.hasTextarea) {
-        // Get textarea coordinates — use page.mouse.click() for proper Puppeteer focus transfer.
+        // Phase 1: Click textarea via mouse to ensure proper browser focus
         const taPos = await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
           const ta = deepFindTextarea();
@@ -506,83 +478,127 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
         if (taPos && taPos.x > 0 && taPos.y > 0) {
           await page.mouse.click(taPos.x, taPos.y);
           await sleep(300);
-          // Select all & delete pre-existing content
           await page.keyboard.down('Control');
           await page.keyboard.press('a');
           await page.keyboard.up('Control');
           await page.keyboard.press('Backspace');
           await sleep(200);
-          // Type description at moderate speed
           await page.keyboard.type(description, { delay: 15 });
           await sleep(500);
+          await page.keyboard.press('Tab'); // blur → trigger SPA field validation
+          await sleep(800);
         }
 
-        // After typing: use nativeSetter + InputEvent to trigger Vue/Angular reactive bindings.
-        // InputEvent with inputType='insertText' is what real browser typing generates —
-        // generic Event('input') is often ignored by SPA framework validators.
-        const taVal = await page.evaluate(new Function(`
+        // Phase 2: Vue reactive state update + comprehensive event dispatch.
+        //
+        // Root cause of disabled Finalizar:
+        //   - Vue 3 v-model listens for 'input' events on the textarea
+        //   - Shadow DOM event retargeting: when event crosses shadow boundary,
+        //     event.target is rewritten to the shadow HOST element, not the textarea
+        //   - So Vue's handler sees event.target.value = (host.value = undefined)
+        //     → sets formData.information = undefined → Finalizar stays disabled
+        //
+        // Fix: dispatch events from EACH shadow host in the chain (not just ta),
+        //   AND directly manipulate Vue's reactive setupState for the 'information' ref.
+        const vueResult = await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
+          const desc = ${JSON.stringify(description)};
           const ta = deepFindTextarea();
-          if (ta) {
-            const ns = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-            ns.call(ta, ${JSON.stringify(description)});
-            ta.dispatchEvent(new InputEvent('input', {
-              bubbles: true, cancelable: true,
-              inputType: 'insertText', data: ${JSON.stringify(description)},
-            }));
-            ta.dispatchEvent(new Event('change', {bubbles: true}));
-            return ta.value;
+          if (!ta) return {error: 'no ta'};
+
+          // 1. Set DOM value via native setter
+          const ns = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+          ns.call(ta, desc);
+
+          // 2. Collect shadow host chain above the textarea
+          const hosts = [];
+          let el = ta;
+          for (let i = 0; i < 12; i++) {
+            const r = el.getRootNode ? el.getRootNode() : null;
+            if (r instanceof ShadowRoot) { el = r.host; hosts.push(el); }
+            else { el = el.parentElement; if (!el) break; }
           }
-          return null;
-        `)).catch(() => null);
-        log.info(`[${productId}] Wizard step ${step}: textarea value="${String(taVal).slice(0, 60)}"`);
 
-        // Press Tab to blur textarea and trigger SPA validation on the field
-        await page.keyboard.press('Tab');
-        await sleep(1000);
-      }
-
-      // Check if there are any required checkboxes (e.g., terms & conditions)
-      const checkboxes = await page.evaluate(new Function(`
-        ${SHADOW_HELPERS};
-        const boxes = [];
-        function walk(node, depth) {
-          if (depth > 6) return;
-          try {
-            const ctx = node.shadowRoot || node;
-            ctx.querySelectorAll('input[type="checkbox"],[role="checkbox"]').forEach(el => {
-              boxes.push({checked: el.checked, label: (el.closest('label') || el.parentElement || el).textContent?.trim().slice(0, 60) || ''});
-            });
-            ctx.querySelectorAll('*').forEach(child => { if (child.shadowRoot) walk(child, depth + 1); });
-          } catch(e) {}
-        }
-        walk(document.documentElement, 0);
-        return boxes;
-      `)).catch(() => []);
-      if (checkboxes.length > 0) {
-        log.info(`[${productId}] Wizard step ${step}: found checkboxes: ${JSON.stringify(checkboxes)}`);
-        // Click any unchecked checkboxes (required acceptance)
-        const unchecked = checkboxes.filter(c => !c.checked).length;
-        if (unchecked > 0) {
-          await page.evaluate(new Function(`
-            ${SHADOW_HELPERS};
-            function walk(node, depth) {
-              if (depth > 6) return;
+          // 3. Scan chain for Vue 3 component instances and update reactive data
+          const vueInfo = [];
+          el = ta;
+          for (let i = 0; i < 15; i++) {
+            if (!el) break;
+            const comp = el.__vueParentComponent;
+            if (comp) {
+              const info = {tag: el.tagName};
               try {
-                const ctx = node.shadowRoot || node;
-                ctx.querySelectorAll('input[type="checkbox"],[role="checkbox"]').forEach(el => {
-                  if (!el.checked) el.click();
-                });
-                ctx.querySelectorAll('*').forEach(child => { if (child.shadowRoot) walk(child, depth + 1); });
-              } catch(e) {}
+                const ss = comp.setupState;
+                if (ss) {
+                  const raw = (ss.__v_raw !== undefined ? ss.__v_raw : ss);
+                  const keys = Object.keys(raw).filter(k => !k.startsWith('_') && !k.startsWith('$')).slice(0, 25);
+                  info.keys = keys;
+                  // Attempt to find and set 'information' (or similar) reactive ref
+                  const candidates = ['information','description','affiliateDescription','programDescription','text','content'];
+                  for (const k of candidates) {
+                    if (k in raw) {
+                      try { raw[k] = desc; info.set = k; } catch(e) {}
+                      break;
+                    }
+                  }
+                  // Also try nested objects (formData.information, form.information, etc.)
+                  for (const k of keys) {
+                    if (!info.set && raw[k] && typeof raw[k] === 'object') {
+                      for (const sub of candidates) {
+                        if (sub in raw[k]) {
+                          try { raw[k][sub] = desc; info.set = k+'.'+sub; } catch(e) {}
+                          break;
+                        }
+                      }
+                    }
+                    if (info.set) break;
+                  }
+                  try { comp.update && comp.update(); } catch(e) {}
+                }
+              } catch(e) { info.err = String(e).slice(0, 60); }
+              vueInfo.push(info);
             }
-            walk(document.documentElement, 0);
-          `));
-          await sleep(500);
-        }
+            const r2 = el.getRootNode ? el.getRootNode() : null;
+            el = r2 instanceof ShadowRoot ? r2.host : el.parentElement;
+          }
+
+          // 4. Dispatch input events from the textarea AND from each shadow host.
+          //    When input event from inner shadow DOM crosses boundary, event.target becomes
+          //    the host — but the value Vue reads is host.value, not ta.value.
+          //    So we set host.value too, then dispatch from host.
+          const fire = (node) => {
+            try {
+              node.dispatchEvent(new InputEvent('input', {bubbles:true,cancelable:true,composed:true,inputType:'insertText',data:desc}));
+              node.dispatchEvent(new Event('change',{bubbles:true,composed:true}));
+            } catch(e) {}
+          };
+          fire(ta);
+          for (const h of hosts) {
+            try {
+              const hns = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(h), 'value');
+              if (hns && hns.set) hns.set.call(h, desc);
+            } catch(e) {}
+            fire(h);
+          }
+
+          // 5. Wait one microtask tick for Vue to process events, then check Finalizar
+          return new Promise(resolve => {
+            Promise.resolve().then(() => {
+              const btn = deepFindButton('Finalizar');
+              resolve({
+                taValue: (deepFindTextarea()?.value || '').slice(0, 50),
+                finDisabled: btn ? btn.disabled : null,
+                vueInfo,
+                hostCount: hosts.length,
+              });
+            });
+          });
+        `)).catch(e => ({error: String(e).slice(0, 80)}));
+
+        log.info(`[${productId}] Wizard step ${step}: vue=${JSON.stringify(vueResult)}`);
       }
 
-      // Check Finalizar state before clicking
+      // Check Finalizar state and click
       const finPos = await page.evaluate(new Function(`
         ${SHADOW_HELPERS};
         const btn = deepFindButton('Finalizar');
@@ -590,30 +606,27 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
         const r = btn.getBoundingClientRect();
         return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), disabled: btn.disabled };
       `)).catch(() => null);
-      log.info(`[${productId}] Wizard step ${step}: Finalizar pos=${JSON.stringify(finPos)}`);
+      log.info(`[${productId}] Wizard step ${step}: Finalizar=${JSON.stringify(finPos)}`);
 
-      if (finPos && finPos.disabled) {
-        // Still disabled — try JS click anyway (some SPAs allow click on disabled button via JS)
-        log.warn(`[${productId}] Wizard step ${step}: Finalizar still disabled — attempting JS force-click`);
+      if (finPos && !finPos.disabled && finPos.x > 0) {
+        // Button enabled — clean click
+        log.info(`[${productId}] Wizard step ${step}: clicking Finalizar (enabled)`);
+        await page.mouse.click(finPos.x, finPos.y);
+      } else {
+        // Button still disabled — force-remove disabled and click
+        log.warn(`[${productId}] Wizard step ${step}: Finalizar disabled — force-click`);
         await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
           const btn = deepFindButton('Finalizar');
           if (btn) {
+            btn.removeAttribute('disabled');
             btn.disabled = false;
-            btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+            btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, composed:true}));
           }
-        `));
-      } else if (finPos && finPos.x > 0 && finPos.y > 0) {
-        await page.mouse.click(finPos.x, finPos.y);
-      } else {
-        await page.evaluate(new Function(`
-          ${SHADOW_HELPERS};
-          const btn = deepFindButton('Finalizar');
-          if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}));
         `));
       }
 
-      // Wait for page to update (Hotmart may show toast then update UI)
+      // Wait for page to update
       await sleep(10000);
       wizardDone = true; break;
     }
