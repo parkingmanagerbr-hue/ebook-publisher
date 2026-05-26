@@ -222,29 +222,118 @@ const SHADOW_HELPERS = `
   }
 `;
 
-// ── Enable CDP Fetch intercept for SSO session/monitor ──────────────────────
-// Prevents the Hotmart SPA from triggering infinite OIDC re-auth loops.
-// Returns the CDP session so it can be checked/reattached later.
-async function enableCDPSSOIntercept(page, label) {
+// ── Master CDP intercept — single session handles ALL SSO/OIDC interceptions ──
+// Must use ONE CDP session (multiple Fetch.enable sessions conflict in Chrome).
+// Intercepts:
+//   session/monitor → {"active":true}  (prevent SPA from detecting expired SSO)
+//   oidc/authorize  → JS page that sets extended token + navigates back to product
+//   accessToken     → fake token response with extended JWT
+//   oauth2.0/profile → fake user profile
+let _masterCdp = null;
+
+async function enableMasterCDPIntercept(page, extToken, label) {
+  // Disable any previous intercept
+  if (_masterCdp) {
+    try { await _masterCdp.send('Fetch.disable'); } catch (_) {}
+    _masterCdp = null;
+  }
+
   try {
-    const cdp = await page.target().createCDPSession();
-    await cdp.send('Fetch.enable', {
-      patterns: [{ urlPattern: '*sso.hotmart.com/rest/v1/session/monitor*' }]
+    _masterCdp = await page.target().createCDPSession();
+
+    const tokenB64 = extToken
+      ? Buffer.from(JSON.stringify({
+          access_token: extToken,
+          id_token: extToken,
+          token_type: 'Bearer',
+          expires_in: 172800,
+          scope: 'openid profile email',
+        })).toString('base64')
+      : null;
+
+    const profileB64 = Buffer.from(JSON.stringify({
+      sub: 'user', email: 'mrovariz@gmail.com', name: 'GENIA',
+    })).toString('base64');
+
+    await _masterCdp.send('Fetch.enable', {
+      patterns: [
+        { urlPattern: '*sso.hotmart.com/rest/v1/session/monitor*' },
+        { urlPattern: '*hotmart.com/oidc/authorize*' },
+        { urlPattern: '*sso.hotmart.com/oauth2.0/accessToken*' },
+        { urlPattern: '*sso.hotmart.com/oauth2.0/profile*' },
+        { urlPattern: '*sso.hotmart.com/cas/oauth2.0/accessToken*' },
+      ],
     });
-    cdp.on('Fetch.requestPaused', async (evt) => {
+
+    _masterCdp.on('Fetch.requestPaused', async (evt) => {
       try {
-        await cdp.send('Fetch.fulfillRequest', {
-          requestId: evt.requestId,
-          responseCode: 200,
-          responseHeaders: [{ name: 'content-type', value: 'application/json' }],
-          body: Buffer.from('{"active":true}').toString('base64'),
-        });
-        log.info(`[${label}] SSO monitor intercepted → returned 200`);
-      } catch (_) {}
+        const url = evt.request.url;
+
+        if (url.includes('/session/monitor')) {
+          await _masterCdp.send('Fetch.fulfillRequest', {
+            requestId: evt.requestId,
+            responseCode: 200,
+            responseHeaders: [{ name: 'content-type', value: 'application/json' }],
+            body: Buffer.from('{"active":true}').toString('base64'),
+          });
+          log.info(`[${label}] session/monitor → active`);
+
+        } else if (url.includes('/oidc/authorize') || url.includes('/cas/oauth2.0/authorize')) {
+          // Return JS that sets the extended token in localStorage then navigates back.
+          // We return HTML for the authorize URL so it runs in the SPA's domain context
+          // — this avoids the code exchange loop from a fake callback redirect.
+          const currentUrl = await page.url().catch(() => '');
+          const safeToken = (extToken || '').replace(/'/g, "\\'");
+          const safeDest  = currentUrl.replace(/'/g, "\\'") || 'https://app.hotmart.com/';
+          const htmlBody  = `<!DOCTYPE html><html><body><script>
+try{localStorage.setItem('token','${safeToken}');}catch(_){}
+window.location.replace('${safeDest}');
+</script></body></html>`;
+          await _masterCdp.send('Fetch.fulfillRequest', {
+            requestId: evt.requestId,
+            responseCode: 200,
+            responseHeaders: [{ name: 'content-type', value: 'text/html' }],
+            body: Buffer.from(htmlBody).toString('base64'),
+          });
+          log.info(`[${label}] oidc/authorize intercepted → inject token + redirect to SPA`);
+
+        } else if (url.includes('/accessToken')) {
+          if (tokenB64) {
+            await _masterCdp.send('Fetch.fulfillRequest', {
+              requestId: evt.requestId,
+              responseCode: 200,
+              responseHeaders: [
+                { name: 'content-type', value: 'application/json' },
+                { name: 'access-control-allow-origin', value: '*' },
+              ],
+              body: tokenB64,
+            });
+            log.info(`[${label}] accessToken intercepted → returned extended token`);
+          } else {
+            await _masterCdp.send('Fetch.continueRequest', { requestId: evt.requestId });
+          }
+
+        } else if (url.includes('/profile')) {
+          await _masterCdp.send('Fetch.fulfillRequest', {
+            requestId: evt.requestId,
+            responseCode: 200,
+            responseHeaders: [{ name: 'content-type', value: 'application/json' }],
+            body: profileB64,
+          });
+          log.info(`[${label}] oauth profile intercepted → returned fake profile`);
+
+        } else {
+          await _masterCdp.send('Fetch.continueRequest', { requestId: evt.requestId }).catch(() => {});
+        }
+      } catch (e) {
+        try { await _masterCdp.send('Fetch.continueRequest', { requestId: evt.requestId }); } catch (_) {}
+      }
     });
-    return cdp;
+
+    log.info(`[${label}] Master CDP intercept enabled (session/monitor + oidc + token)`);
+    return _masterCdp;
   } catch (e) {
-    log.warn(`[${label}] CDP intercept setup failed: ${e.message.slice(0, 50)}`);
+    log.warn(`[${label}] Master CDP intercept failed: ${e.message.slice(0, 60)}`);
     return null;
   }
 }
@@ -260,49 +349,8 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
   const setupUrl = `https://app.hotmart.com/products/manage/${productId}/affiliation-setup`;
   log.info(`[${productId}] Navigating to ${setupUrl}`);
 
-  // Enable CDP SSO intercept BEFORE navigating (catches monitor fired during load)
-  await enableCDPSSOIntercept(page, productId);
-
-  // Also intercept OIDC authorize request — redirect it back immediately with a fake success
-  // so the SPA doesn't loop through CAS when the JWT is slightly expired.
-  // Note: page.evaluateOnNewDocument in launchHotmartBrowser should have already extended
-  // the token, so OIDC may not trigger. This is an additional safety net.
-  const cdp2 = await page.target().createCDPSession().catch(() => null);
-  if (cdp2) {
-    try {
-      await cdp2.send('Fetch.enable', {
-        patterns: [{ urlPattern: '*hotmart.com/oidc/authorize*', requestStage: 'Request' }],
-      });
-      cdp2.on('Fetch.requestPaused', async (evt) => {
-        try {
-          // Check if we can extract state from the authorize URL to construct a valid-looking callback
-          const authUrl = evt.request.url;
-          const stateM  = authUrl.match(/[?&]state=([^&]+)/);
-          const redirM  = authUrl.match(/[?&]redirect_uri=([^&]+)/);
-          if (stateM && redirM) {
-            const redirectUri = decodeURIComponent(redirM[1]);
-            const state       = decodeURIComponent(stateM[1]);
-            const fakeCode    = 'bypass_' + Date.now();
-            const callbackUrl = redirectUri + (redirectUri.includes('?') ? '&' : '?') + `code=${fakeCode}&state=${state}`;
-            log.info(`[${productId}] OIDC authorize intercepted — redirecting to callback with fake code`);
-            await cdp2.send('Fetch.fulfillRequest', {
-              requestId: evt.requestId,
-              responseCode: 302,
-              responseHeaders: [{ name: 'location', value: callbackUrl }],
-              body: '',
-            });
-          } else {
-            // Can't construct redirect — just continue normally
-            await cdp2.send('Fetch.continueRequest', { requestId: evt.requestId }).catch(() => {});
-          }
-        } catch (_) {
-          await cdp2.send('Fetch.continueRequest', { requestId: evt.requestId }).catch(() => {});
-        }
-      });
-    } catch (e) {
-      log.warn(`[${productId}] OIDC intercept setup failed: ${e.message.slice(0,50)}`);
-    }
-  }
+  // Master CDP intercept is already active from launchHotmartBrowser — handles session/monitor,
+  // oidc/authorize, accessToken and profile for the entire browser session.
 
   try {
     await page.goto(setupUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -325,7 +373,6 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
   // or eval_timeout — we catch these and keep waiting.
   log.info(`[${productId}] Waiting for SPA to render (up to 120s, handling OIDC redirect)...`);
   let oauthSeen = false;
-  let cdpReenabled = false;
 
   // HOT-LOADING check that also walks shadow DOM (Hotmart uses nested HOT-LOADING for routes)
   const HAS_HOT_LOADING_FN = `
@@ -376,15 +423,6 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
         log.info(`[${productId}] Waiting for OIDC to complete... ${i+1}s url=${currentUrl.slice(-60)}`);
       }
       continue;
-    }
-
-    // Page returned to product URL after OIDC — re-attach CDP intercept.
-    // The initial OIDC navigation creates a new renderer; re-enabling ensures
-    // the session/monitor intercept is active on the fresh renderer.
-    if (oauthSeen && !cdpReenabled) {
-      cdpReenabled = true;
-      await enableCDPSSOIntercept(page, productId);
-      log.info(`[${productId}] CDP intercept re-attached after OIDC return`);
     }
 
     // We're at the product URL — check for HOT-LOADING (including nested shadow DOM)
@@ -913,78 +951,28 @@ async function launchHotmartBrowser() {
   }
 
   if (extToken) {
-    // Inject into the currently open page's localStorage
+    // Inject extended token into the current page's localStorage
     await page.evaluate((t) => {
       localStorage.setItem('token', t);
       try {
-        window.dispatchEvent(new StorageEvent('storage', {
-          key: 'token', newValue: t, storageArea: localStorage
-        }));
+        window.dispatchEvent(new StorageEvent('storage', { key: 'token', newValue: t, storageArea: localStorage }));
       } catch (_) {}
     }, extToken).catch(() => {});
 
-    // Ensure the extended token is injected into every future navigation on this page.
-    // Also patch Date.now so the exp check uses our extended time.
+    // Inject extended token into every future page navigation (before SPA scripts run)
     await page.evaluateOnNewDocument((t) => {
       try { localStorage.setItem('token', t); } catch (_) {}
     }, extToken).catch(() => {});
-
-    // Global CDP intercept: intercept OIDC token endpoint + session monitor
-    // so the SPA completes its OIDC flow with our fake token (no CAS needed).
-    try {
-      const globalCdp = await page.target().createCDPSession();
-      const tokenEndpointBody = JSON.stringify({
-        access_token: extToken,
-        id_token: extToken,
-        token_type: 'Bearer',
-        expires_in: 172800,
-        scope: 'openid profile email',
-      });
-      const tokenEndpointB64 = Buffer.from(tokenEndpointBody).toString('base64');
-
-      await globalCdp.send('Fetch.enable', {
-        patterns: [
-          { urlPattern: '*sso.hotmart.com/oauth2.0/accessToken*' },
-          { urlPattern: '*sso.hotmart.com/oauth2.0/profile*' },
-          { urlPattern: '*sso.hotmart.com/rest/v1/session/monitor*' },
-        ],
-      });
-      globalCdp.on('Fetch.requestPaused', async (evt) => {
-        try {
-          const url = evt.request.url;
-          if (url.includes('/accessToken') || url.includes('/profile')) {
-            // Return fake token response — SPA uses this to complete OIDC without CAS
-            await globalCdp.send('Fetch.fulfillRequest', {
-              requestId: evt.requestId,
-              responseCode: 200,
-              responseHeaders: [
-                { name: 'content-type', value: 'application/json' },
-                { name: 'access-control-allow-origin', value: '*' },
-              ],
-              body: tokenEndpointB64,
-            });
-            log.info('OIDC token endpoint intercepted → returned extended token');
-          } else {
-            // session/monitor → active
-            await globalCdp.send('Fetch.fulfillRequest', {
-              requestId: evt.requestId,
-              responseCode: 200,
-              responseHeaders: [{ name: 'content-type', value: 'application/json' }],
-              body: Buffer.from('{"active":true}').toString('base64'),
-            });
-          }
-        } catch (_) {}
-      });
-      log.info('Global CDP intercept active (token endpoint + session monitor)');
-    } catch (e) {
-      log.warn('Global CDP intercept failed: ' + e.message.slice(0, 60));
-    }
   }
+
+  // Enable single master CDP intercept covering all SSO/OIDC endpoints.
+  // Do this ONCE in launchHotmartBrowser; don't create additional sessions per-product.
+  await enableMasterCDPIntercept(page, extToken || rawToken, 'browser');
 
   const token = extToken || rawToken;
   log.info(`Token present: ${!!token} (extended: ${extToken !== rawToken})`);
 
-  return { browser, page, jwt, token };
+  return { browser, page, jwt, token, extToken };
 }
 
 // ── DB ───────────────────────────────────────────────────────────────────────
