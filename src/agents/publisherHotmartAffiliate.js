@@ -422,29 +422,66 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     await sleep(2500);
   }
 
+  // Helper: poll for wizard state change after Continuar click (up to 8s)
+  async function pollWizardStep(label, timeoutMs = 8000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      await sleep(400);
+      const s = await page.evaluate(new Function(`
+        ${SHADOW_HELPERS};
+        return {
+          hasRadio:     !!deepFindRadio(0),
+          hasInput:     !!deepFindInput(),
+          hasTextarea:  !!deepFindTextarea(),
+          hasContinuar: !!deepFindButton('Continuar'),
+          hasFinalizar: !!deepFindButton('Finalizar'),
+        };
+      `)).catch(() => null);
+      if (!s) continue;
+      // Something new appeared: textarea (desc step), Finalizar, or new radio (email step)
+      if (s.hasTextarea || s.hasFinalizar || (s.hasRadio && !s.hasInput)) {
+        log.info(`[${productId}] ${label}: next step appeared (${JSON.stringify(s)})`);
+        return s;
+      }
+    }
+    // Timeout — return current state anyway
+    const fallback = await page.evaluate(new Function(`
+      ${SHADOW_HELPERS};
+      return {
+        hasRadio:!!deepFindRadio(0), hasInput:!!deepFindInput(),
+        hasTextarea:!!deepFindTextarea(), hasContinuar:!!deepFindButton('Continuar'),
+        hasFinalizar:!!deepFindButton('Finalizar'),
+      };
+    `)).catch(() => ({}));
+    log.warn(`[${productId}] ${label}: step poll timed out, state=${JSON.stringify(fallback)}`);
+    return fallback;
+  }
+
   // ── STEP 1: Choose affiliation type (look for radio buttons) ─────────────────
   const step1State = await page.evaluate(new Function(`
     ${SHADOW_HELPERS};
     return { hasRadio: !!deepFindRadio(0), hasContinuar: !!deepFindButton('Continuar') };
   `)).catch(() => ({}));
 
+  let afterStep1 = step1State;
   if (step1State.hasRadio) {
     log.info(`[${productId}] Step 1: Selecting 1-click affiliation`);
     await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindRadio(0)?.click();`));
     await sleep(500);
     await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-    await sleep(2500);
+    afterStep1 = await pollWizardStep('after-step1');
   } else if (step1State.hasContinuar) {
-    // Already past step 1
     log.info(`[${productId}] Step 1: Already past radio selection`);
   }
 
   // ── STEP 2: Set commission (look for text input) ─────────────────────────────
-  const step2State = await page.evaluate(new Function(`
+  // afterStep1 tells us if commission input is present
+  const step2State = afterStep1.hasInput ? afterStep1 : await page.evaluate(new Function(`
     ${SHADOW_HELPERS};
     return { hasInput: !!deepFindInput(), hasContinuar: !!deepFindButton('Continuar') };
   `)).catch(() => ({}));
 
+  let afterStep2 = null;
   if (step2State.hasInput) {
     log.info(`[${productId}] Step 2: Setting commission ${commission}% (typing "${commDigits}")`);
     await page.evaluate(new Function(`
@@ -472,34 +509,39 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     log.info(`[${productId}] Commission field value: "${commValue}"`);
 
     await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-    await sleep(2500);
+    afterStep2 = await pollWizardStep('after-step2', 10000);
   }
 
-  // ── STEP 3: Contact email (check for radio + Continuar, no textarea yet) ────
-  const step3State = await page.evaluate(new Function(`
+  // ── STEP 3: Contact email (check for radio + no textarea yet) ────────────────
+  const step3State = afterStep2 || await page.evaluate(new Function(`
     ${SHADOW_HELPERS};
     return {
       hasRadio: !!deepFindRadio(0),
       hasInput: !!deepFindInput(),
       hasTextarea: !!deepFindTextarea(),
       hasContinuar: !!deepFindButton('Continuar'),
+      hasFinalizar: !!deepFindButton('Finalizar'),
     };
   `)).catch(() => ({}));
 
-  if (step3State.hasRadio && !step3State.hasTextarea) {
+  log.info(`[${productId}] Step 3 state: ${JSON.stringify(step3State)}`);
+  let afterStep3 = step3State;
+  if (step3State.hasRadio && !step3State.hasTextarea && !step3State.hasFinalizar) {
     log.info(`[${productId}] Step 3: Selecting Hotmart email`);
     await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindRadio(0)?.click();`));
     await sleep(500);
     await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-    await sleep(2500);
+    afterStep3 = await pollWizardStep('after-step3', 10000);
   }
 
-  // ── STEP 4: Benefits description (check for textarea) ─────────────────────
-  const step4State = await page.evaluate(new Function(`
-    ${SHADOW_HELPERS};
-    return { hasTextarea: !!deepFindTextarea(), hasFinalizar: !!deepFindButton('Finalizar') };
-  `)).catch(() => ({}));
+  // ── STEP 4: Benefits description (check for textarea or Finalizar) ───────────
+  const step4State = (afterStep3.hasTextarea || afterStep3.hasFinalizar) ? afterStep3
+    : await page.evaluate(new Function(`
+        ${SHADOW_HELPERS};
+        return { hasTextarea: !!deepFindTextarea(), hasFinalizar: !!deepFindButton('Finalizar') };
+      `)).catch(() => ({}));
 
+  log.info(`[${productId}] Step 4 state: ${JSON.stringify(step4State)}`);
   if (step4State.hasTextarea || step4State.hasFinalizar) {
     log.info(`[${productId}] Step 4: Entering description`);
 
