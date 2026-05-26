@@ -221,9 +221,9 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     log.warn(`[${productId}] goto error: ${e.message.slice(0, 60)}`);
   }
 
-  // Poll for HOT-LOADING to clear (up to 30s; SSO monitor intercepted so no more re-auth loops)
+  // Poll for HOT-LOADING to clear (up to 60s; SSO monitor intercepted so no more re-auth loops)
   log.info(`[${productId}] Waiting for SPA to render...`);
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 60; i++) {
     await sleep(1000);
     const state = await Promise.race([
       page.evaluate(() => ({
@@ -285,7 +285,26 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
 
   // If "Configurar programa" not found and no wizard buttons either → can't configure
   if (!btnState.hasConfigurar && !btnState.hasContinuar && !btnState.hasFinalizar) {
-    log.warn(`[${productId}] No wizard buttons found. URL: ${landedUrl.slice(-60)}`);
+    // Capture shadow DOM text to understand what's on the page
+    const pageText = await page.evaluate(new Function(`
+      ${SHADOW_HELPERS};
+      function getAllShadowText(node, depth) {
+        if (depth > 4) return '';
+        let text = '';
+        try {
+          const ctx = node.shadowRoot || node;
+          const nodeText = (ctx.innerText || ctx.textContent || '').replace(/\\s+/g,' ').trim();
+          if (nodeText) text += nodeText.slice(0, 200) + ' | ';
+          ctx.querySelectorAll('*').forEach(child => {
+            if (child.shadowRoot) text += getAllShadowText(child, depth + 1);
+          });
+        } catch(e) {}
+        return text;
+      }
+      return getAllShadowText(document.documentElement, 0).slice(0, 400);
+    `)).catch(() => 'eval error');
+    log.warn('[' + productId + '] No wizard buttons found. URL: ' + landedUrl.slice(-60));
+    log.warn('[' + productId + '] Page content: ' + pageText);
     return { ok: false, reason: 'no_wizard_buttons', url: landedUrl };
   }
 
