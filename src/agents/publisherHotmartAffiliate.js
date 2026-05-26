@@ -74,15 +74,19 @@ async function refreshJWT(browser, session) {
   }
 
   try {
-    // Use 'load' (not 'networkidle2') — OAuth callback fires multiple redirects
-    // and never reaches network-idle within 30s, causing JWT refresh to fail.
-    await lp.goto(oauth2Service + '&ticket=' + st.body, { waitUntil: 'load', timeout: 20000 });
+    // Use 'domcontentloaded' — fires early enough for SPA to start, then we poll for token
+    await lp.goto(oauth2Service + '&ticket=' + st.body, { waitUntil: 'domcontentloaded', timeout: 15000 });
   } catch (e) {
-    log.warn('OAuth callback error: ' + e.message.slice(0, 60));
+    log.warn('OAuth callback navigate: ' + e.message.slice(0, 50));
   }
-  await sleep(3000);
 
-  const tok = await lp.evaluate(() => localStorage.getItem('token')).catch(() => null);
+  // Retry reading token from localStorage (SPA sets it async after OAuth redirect)
+  let tok = null;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    tok = await lp.evaluate(() => localStorage.getItem('token')).catch(() => null);
+    if (tok) break;
+    await sleep(1500);
+  }
   await lp.close();
 
   if (tok) { log.info('JWT refreshed via CAS ✓'); return tok; }
@@ -335,11 +339,12 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     }
   }
 
-  // Secondary poll: wait for wizard content to appear (up to 30s).
-  // The affiliation micro-frontend may load AFTER the main HOT-LOADING clears.
-  log.info(`[${productId}] Waiting for wizard content (up to 30s)...`);
+  // Secondary poll: wait for wizard content to appear (up to 60s).
+  // The affiliation micro-frontend (app-vlc.hotmart.com iframe) may load AFTER
+  // the main HOT-LOADING element clears. With slow OIDC, it can take 40-50s.
+  log.info(`[${productId}] Waiting for wizard content (up to 60s)...`);
   let wizardFound = false;
-  for (let j = 0; j < 30; j++) {
+  for (let j = 0; j < 60; j++) {
     await sleep(1000);
     const wiz = await page.evaluate(new Function(`
       ${SHADOW_HELPERS};
