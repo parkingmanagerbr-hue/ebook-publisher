@@ -465,18 +465,69 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
       log.info(`[${productId}] Wizard step ${step}: FINAL — entering description`);
 
       if (s.hasTextarea) {
-        // Phase 1: Click textarea via mouse to ensure proper browser focus
-        const taPos = await page.evaluate(new Function(`
+        // Phase 1: Fill textarea using ElementHandle.type() (uses CDP DOM.focus = reliable focus)
+        // Previous approach (page.mouse.click + page.keyboard.type) may fail if an overlay
+        // absorbs the click, leaving focus on the wrong element.
+
+        // 1a. Get textarea info and element handle
+        const taInfo = await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
           const ta = deepFindTextarea();
           if (!ta) return null;
           const r = ta.getBoundingClientRect();
-          return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) };
+          return { x: Math.round(r.left+r.width/2), y: Math.round(r.top+r.height/2),
+                   name: ta.name, id: ta.id, w: Math.round(r.width), h: Math.round(r.height),
+                   taClass: (ta.className||'').slice(0,40) };
         `)).catch(() => null);
-        log.info(`[${productId}] Wizard step ${step}: textarea pos=${JSON.stringify(taPos)}`);
+        log.info(`[${productId}] Wizard step ${step}: textarea=${JSON.stringify(taInfo)}`);
 
-        if (taPos && taPos.x > 0 && taPos.y > 0) {
-          await page.mouse.click(taPos.x, taPos.y);
+        const taHandle = await page.evaluateHandle(new Function(`
+          ${SHADOW_HELPERS}; return deepFindTextarea();
+        `)).catch(() => null);
+        const taEl = taHandle && taHandle.asElement ? taHandle.asElement() : null;
+
+        let typedOk = false;
+        if (taEl) {
+          try {
+            // Use ElementHandle methods: CDP DOM.focus + trusted key events
+            await taEl.click();  // ElementHandle.click uses exact bbox coords
+            await sleep(200);
+            // Select all and clear
+            await page.keyboard.down('Control');
+            await page.keyboard.press('a');
+            await page.keyboard.up('Control');
+            await page.keyboard.press('Delete');
+            await sleep(100);
+            await taEl.type(description, { delay: 12 }); // ElementHandle.type → DOM.focus + keystrokes
+            await sleep(400);
+            await page.keyboard.press('Tab'); // blur → triggers validation
+            await sleep(600);
+
+            // Check state immediately after typing
+            const afterType = await page.evaluate(new Function(`
+              ${SHADOW_HELPERS};
+              const ta = deepFindTextarea();
+              const btn = deepFindButton('Finalizar');
+              const active = document.activeElement;
+              // also check all framework properties on btn and ta
+              const btnKeys = btn ? Object.getOwnPropertyNames(btn).filter(k=>k.startsWith('_')||k.startsWith('__')).slice(0,10) : [];
+              return {
+                taVal: ta ? ta.value.slice(0,30) : null,
+                btnDisabled: btn ? btn.disabled : null,
+                activeEl: active ? active.tagName : null,
+                btnKeys,
+              };
+            `));
+            log.info(`[${productId}] Wizard step ${step}: afterType=${JSON.stringify(afterType)}`);
+            typedOk = afterType.btnDisabled === false; // button enabled by typing alone!
+          } catch(e) {
+            log.warn(`[${productId}] Wizard step ${step}: elementHandle.type failed: ${e.message.slice(0,60)}`);
+          }
+        }
+
+        if (!typedOk && taInfo && taInfo.x > 0) {
+          // Fallback: coordinate-based click + keyboard type
+          await page.mouse.click(taInfo.x, taInfo.y);
           await sleep(300);
           await page.keyboard.down('Control');
           await page.keyboard.press('a');
@@ -485,11 +536,11 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
           await sleep(200);
           await page.keyboard.type(description, { delay: 15 });
           await sleep(500);
-          await page.keyboard.press('Tab'); // blur → trigger SPA field validation
+          await page.keyboard.press('Tab');
           await sleep(800);
         }
 
-        // Phase 2: Vue reactive state update + comprehensive event dispatch.
+        // Phase 2: Programmatic state update if button is still disabled.
         //
         // Root cause v2 (from logs: hostCount=0, vueInfo=[]):
         //   Previous fix used `instanceof ShadowRoot` which fails when the ShadowRoot
@@ -605,18 +656,36 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
           fire(ta);
           for (const h of hosts) fire(h);
 
-          // 6. Wait for Vue to re-render (setTimeout > microtask to catch full cycle)
+          // 6. Dump button ancestor props + iframes for deep diagnostics
+          const diagBtnAncestors = [];
+          const diagBtn = deepFindButton('Finalizar');
+          if (diagBtn) {
+            let ael = diagBtn;
+            for (let i = 0; i < 8; i++) {
+              if (!ael) break;
+              const fwKeys = Object.getOwnPropertyNames(ael)
+                .filter(k => k.startsWith('_') || k.startsWith('__') || k === 'stencil' || k === '$')
+                .slice(0,8);
+              diagBtnAncestors.push({tag: ael.tagName, fwKeys});
+              ael = ael.parentElement;
+            }
+          }
+          // Check iframes
+          const iframes = Array.from(document.querySelectorAll('iframe')).map(f => ({src: (f.src||'').slice(0,60)}));
+
+          // 7. Wait for Vue to re-render (setTimeout > microtask to catch full cycle)
           return new Promise(resolve => {
             setTimeout(() => {
               const btn2 = deepFindButton('Finalizar');
               resolve({
                 taRootType: (ta.getRootNode()||{}).nodeType,
                 hostCount: hosts.length,
-                hostTags: hosts.map(h=>h.tagName),
-                vueInfo: vueInfo.slice(0,4),
+                vueInfo: vueInfo.slice(0,3),
                 veiCalled,
                 taValue: (deepFindTextarea()?.value || '').slice(0,50),
                 finDisabled: btn2 ? btn2.disabled : null,
+                diagBtnAncestors: diagBtnAncestors.slice(0,5),
+                iframes: iframes.slice(0,3),
               });
             }, 800);
           });
