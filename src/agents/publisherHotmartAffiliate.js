@@ -95,6 +95,20 @@ async function setupPage(page, session, jwt) {
   page.setDefaultTimeout(15000);
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
+  // Intercept SSO session monitor — return 200 so SPA doesn't trigger infinite re-auth loop.
+  // The Hotmart SPA checks sso.hotmart.com/rest/v1/session/monitor; if it returns non-200,
+  // it triggers OIDC re-auth which redirects and loses the page context repeatedly.
+  await page.setRequestInterception(true);
+  page.on('request', req => {
+    const url = req.url();
+    if (url.includes('sso.hotmart.com/rest/v1/session/monitor')) {
+      // Return 200 to make SPA think session is active → skips re-auth → loads micro-frontend
+      req.respond({ status: 200, contentType: 'application/json', body: '{"active":true}' });
+    } else {
+      req.continue();
+    }
+  });
+
   await page.evaluateOnNewDocument(() => {
     const orig = String.prototype.replace;
     Object.defineProperty(Object.prototype, 'replace', {
@@ -207,10 +221,9 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     log.warn(`[${productId}] goto error: ${e.message.slice(0, 60)}`);
   }
 
-  // Poll for page ready — watch for redirect-away (SSO re-auth) and HOT-LOADING to clear
+  // Poll for HOT-LOADING to clear (up to 30s; SSO monitor intercepted so no more re-auth loops)
   log.info(`[${productId}] Waiting for SPA to render...`);
-  let renavDone = false;
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 30; i++) {
     await sleep(1000);
     const state = await Promise.race([
       page.evaluate(() => ({
@@ -230,22 +243,11 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
       break;
     }
 
-    // If we've been redirected away from the setup URL (SSO re-auth completed → homepage)
-    if (!renavDone && i > 5 && !state.url.includes('affiliation-setup') && !state.url.includes('sso.hotmart.com')) {
-      log.info(`[${productId}] SSO re-auth redirect detected (${state.url.slice(-40)}), re-navigating to setup...`);
-      renavDone = true;
-      try {
-        await page.goto(setupUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      } catch (e) {
-        log.warn(`[${productId}] Re-nav error: ${e.message.slice(0, 60)}`);
-      }
+    if (i % 5 === 4) {
+      log.info(`[${productId}] Still loading... ${i + 1}s url=${state.url.slice(-50)} hotLoading=${state.hotLoading} bodyLen=${state.bodyLen}`);
     }
-
-    if (i % 10 === 9) {
-      log.info(`[${productId}] Still loading... ${i + 1}s url=${state.url.slice(-50)} hotLoading=${state.hotLoading}`);
-    }
-    if (i === 59) {
-      log.warn(`[${productId}] Page still loading after 60s — proceeding anyway`);
+    if (i === 29) {
+      log.warn(`[${productId}] Page still loading after 30s — proceeding anyway`);
     }
   }
 
@@ -438,27 +440,11 @@ async function launchHotmartBrowser() {
   const page = await browser.newPage();
   await setupPage(page, session, jwt);
 
-  // Warm up session — use products/manage to pre-trigger SSO session check + re-auth
-  log.info('Warming up Hotmart session (pre-triggering SSO re-auth)...');
-  await page.goto('https://app.hotmart.com/products/manage/', { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
-
-  // Wait up to 90s for SSO session monitor + re-auth to complete
-  // (SSO check fires at ~42s, re-auth completes at ~47s, page settles at ~55s)
-  log.info('Waiting 90s for SSO session check and re-auth during warmup...');
-  for (let i = 0; i < 90; i++) {
-    await sleep(1000);
-    const wUrl = page.url();
-    // If re-auth redirect happened and we're back at app.hotmart.com, re-navigate to products
-    if (i > 50 && !wUrl.includes('sso.hotmart.com') && !wUrl.includes('products/manage')) {
-      log.info(`Warmup re-auth redirect detected (${wUrl.slice(-50)}), re-navigating to products/manage...`);
-      await page.goto('https://app.hotmart.com/products/manage/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-      await sleep(15000);
-      break;
-    }
-    if (i % 15 === 14) {
-      log.info(`Warmup waiting... ${i + 1}s, url=${wUrl.slice(-60)}`);
-    }
-  }
+  // Warm up session
+  log.info('Warming up Hotmart session...');
+  await page.goto('https://app.hotmart.com/', { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
+  try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }); } catch (_) {}
+  await sleep(4000);
 
   const landedUrl = page.url();
   log.info(`Warmed up at: ${landedUrl.slice(0, 80)}`);
