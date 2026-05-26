@@ -95,30 +95,9 @@ async function setupPage(page, session, jwt) {
   page.setDefaultTimeout(15000);
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
-  // Use CDP Fetch.enable to intercept the SSO session monitor request.
-  // The Hotmart SPA fires sso.hotmart.com/rest/v1/session/monitor every ~45s;
-  // if the server returns non-200, the SPA triggers OIDC re-auth in an infinite loop.
-  // CDP Fetch.enable only patches XHR/fetch requests (not document navigations),
-  // so it doesn't cause the net::ERR_ABORTED that setRequestInterception caused.
-  try {
-    const cdp = await page.target().createCDPSession();
-    await cdp.send('Fetch.enable', {
-      patterns: [{ urlPattern: '*sso.hotmart.com/rest/v1/session/monitor*' }]
-    });
-    cdp.on('Fetch.requestPaused', async (evt) => {
-      try {
-        await cdp.send('Fetch.fulfillRequest', {
-          requestId: evt.requestId,
-          responseCode: 200,
-          responseHeaders: [{ name: 'content-type', value: 'application/json' }],
-          body: Buffer.from('{"active":true,"cdp_intercepted":true}').toString('base64'),
-        });
-      } catch (_) {}
-    });
-    log.info('CDP SSO monitor intercept enabled');
-  } catch (e) {
-    log.warn('CDP Fetch setup failed (continuing without intercept): ' + e.message.slice(0, 60));
-  }
+  // Note: CDP SSO monitor intercept is set up per-product in configureProductAffiliateUI(),
+  // not here, because the OIDC navigation during product loading creates a new renderer
+  // context that requires a fresh CDPSession.
 
   await page.evaluateOnNewDocument(() => {
     const orig = String.prototype.replace;
@@ -214,6 +193,33 @@ const SHADOW_HELPERS = `
   }
 `;
 
+// ── Enable CDP Fetch intercept for SSO session/monitor ──────────────────────
+// Prevents the Hotmart SPA from triggering infinite OIDC re-auth loops.
+// Returns the CDP session so it can be checked/reattached later.
+async function enableCDPSSOIntercept(page, label) {
+  try {
+    const cdp = await page.target().createCDPSession();
+    await cdp.send('Fetch.enable', {
+      patterns: [{ urlPattern: '*sso.hotmart.com/rest/v1/session/monitor*' }]
+    });
+    cdp.on('Fetch.requestPaused', async (evt) => {
+      try {
+        await cdp.send('Fetch.fulfillRequest', {
+          requestId: evt.requestId,
+          responseCode: 200,
+          responseHeaders: [{ name: 'content-type', value: 'application/json' }],
+          body: Buffer.from('{"active":true}').toString('base64'),
+        });
+        log.info(`[${label}] SSO monitor intercepted → returned 200`);
+      } catch (_) {}
+    });
+    return cdp;
+  } catch (e) {
+    log.warn(`[${label}] CDP intercept setup failed: ${e.message.slice(0, 50)}`);
+    return null;
+  }
+}
+
 // ── Configure a single product's affiliate via UI wizard ─────────────────────
 async function configureProductAffiliateUI(page, productId, opts = {}) {
   const commission  = opts.commission  ?? 50;   // 50 = 50%
@@ -232,6 +238,11 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     log.warn(`[${productId}] goto error: ${e.message.slice(0, 60)}`);
   }
 
+  // Enable CDP SSO intercept immediately after navigation.
+  // When the SPA's session/monitor fires (~42s after OIDC), we return 200
+  // so it doesn't trigger another re-auth redirect loop.
+  await enableCDPSSOIntercept(page, productId);
+
   // Poll for SPA to fully render (up to 120s).
   //
   // The Hotmart SPA OIDC flow:
@@ -246,6 +257,7 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
   // or eval_timeout — we catch these and keep waiting.
   log.info(`[${productId}] Waiting for SPA to render (up to 120s, handling OIDC redirect)...`);
   let oauthSeen = false;
+  let cdpReenabled = false;
 
   // HOT-LOADING check that also walks shadow DOM (Hotmart uses nested HOT-LOADING for routes)
   const HAS_HOT_LOADING_FN = `
@@ -296,6 +308,15 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
         log.info(`[${productId}] Waiting for OIDC to complete... ${i+1}s url=${currentUrl.slice(-60)}`);
       }
       continue;
+    }
+
+    // Page returned to product URL after OIDC — re-attach CDP intercept.
+    // The initial OIDC navigation creates a new renderer; re-enabling ensures
+    // the session/monitor intercept is active on the fresh renderer.
+    if (oauthSeen && !cdpReenabled) {
+      cdpReenabled = true;
+      await enableCDPSSOIntercept(page, productId);
+      log.info(`[${productId}] CDP intercept re-attached after OIDC return`);
     }
 
     // We're at the product URL — check for HOT-LOADING (including nested shadow DOM)
