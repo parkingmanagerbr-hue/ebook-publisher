@@ -547,10 +547,16 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
           await sleep(800);
         }
 
-        // Phase 2 (React): Call React's onChange/onInput prop directly.
-        // CONFIRMED: The form is built with React (logs show __reactFiber$, __reactProps$ on elements).
-        // React controlled textarea: props.onChange({target: ta}) updates component state.
-        // We also walk the React fiber tree to dispatch state updates for empty string hooks.
+        // Phase 2 (React): Drive React's state directly.
+        // CONFIRMED: Form is React with __reactFiber$<nonce> / __reactProps$<nonce> on elements.
+        // Strategy:
+        //   1. Set textarea.value via native setter (bypasses React's controlled-input guard)
+        //   2. Call props.onChange → updates component's `information` state
+        //   3. Wait 800ms for React async re-render (batched state update)
+        //   4. Call props.onBlur → triggers validation → enables Finalizar button
+        //   5. Wait 1500ms more for validation re-render
+        //   6. Walk fiber tree → dispatch to ANY string-typed useState hook (not just empty)
+        //   7. Dispatch native input/change events (React 17+ root-delegated listener)
         const vueResult = await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
           const desc = ${JSON.stringify(description)};
@@ -562,90 +568,104 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
 
           const reactInfo = {};
           let reactCalled = false;
+          let blurCalled  = false;
 
-          // 2a. Call React onChange via __reactProps$<nonce> (direct prop call)
-          //     React controlled components: onChange({target:ta}) updates state.
-          //     ta.value is already set to desc above, so React reads the correct value.
           const reactPropsKey = Object.getOwnPropertyNames(ta).find(k => k.startsWith('__reactProps$'));
           const reactFiberKey = Object.getOwnPropertyNames(ta).find(k => k.startsWith('__reactFiber$'));
           reactInfo.propsKey = !!reactPropsKey;
           reactInfo.fiberKey = !!reactFiberKey;
 
+          const changeEvt = {target:ta, currentTarget:ta, type:'change',
+                             nativeEvent:{target:ta, type:'change'},
+                             preventDefault:()=>{}, stopPropagation:()=>{}};
+          const blurEvt   = {target:ta, currentTarget:ta, type:'blur',
+                             nativeEvent:{target:ta, type:'blur'},
+                             preventDefault:()=>{}, stopPropagation:()=>{}};
+
+          // 2a. Call React onChange — updates component state
           if (reactPropsKey) {
             const props = ta[reactPropsKey];
             reactInfo.propKeys = Object.keys(props||{}).filter(k=>k.startsWith('on')).slice(0,10);
-            const fakeEvt = {target:ta, currentTarget:ta, type:'change', nativeEvent:{target:ta},
-                             preventDefault:()=>{}, stopPropagation:()=>{}};
             for (const evName of ['onChange','onInput','onBeforeInput']) {
               if (!reactCalled && typeof props[evName] === 'function') {
-                try { props[evName](fakeEvt); reactCalled = true; reactInfo.calledVia = evName; } catch(e) { reactInfo[evName+'Err']=String(e).slice(0,60); }
+                try { props[evName](changeEvt); reactCalled = true; reactInfo.calledVia = evName; }
+                catch(e) { reactInfo[evName+'Err'] = String(e).slice(0,60); }
               }
             }
           }
 
-          // 2b. Walk React fiber tree: find form component state and dispatch update
-          if (reactFiberKey) {
-            let fiber = ta[reactFiberKey];
-            let depth = 0;
-            const stateUpdates = [];
-            while (fiber && depth < 40) {
-              // Walk memoizedState hooks linked list
-              let hook = fiber.memoizedState;
-              let hi = 0;
-              while (hook && hi < 20) {
-                const ms = hook.memoizedState;
-                const dispatch = hook.queue && hook.queue.dispatch;
-                if (typeof dispatch === 'function') {
-                  // String hooks that are empty/short = likely the information field
-                  if (ms === '' || ms === null || (typeof ms === 'string' && ms.length < 5 && ms.length >= 0)) {
-                    try {
-                      dispatch(desc);
-                      stateUpdates.push('hook['+hi+']@d'+depth+'='+JSON.stringify(ms));
-                    } catch(e) {}
-                  }
-                }
-                hook = hook.next; hi++;
-              }
-              fiber = fiber.return; depth++;
-            }
-            if (stateUpdates.length) { reactInfo.stateUpdates = stateUpdates; reactCalled = true; }
-          }
-
-          // 3. Also call onChange via __reactProps$ on PARENT elements (in case textarea is wrapped)
+          // 2b. Parent element onChange fallback
           if (!reactCalled) {
             let ael = ta.parentElement;
             for (let i = 0; i < 5 && ael; i++) {
-              const propsKey = Object.getOwnPropertyNames(ael).find(k => k.startsWith('__reactProps$'));
-              if (propsKey) {
-                const aProps = ael[propsKey];
-                if (typeof aProps.onChange === 'function') {
-                  try {
-                    aProps.onChange({target:ta, currentTarget:ta, type:'change', nativeEvent:{target:ta},
-                                    preventDefault:()=>{}, stopPropagation:()=>{}});
-                    reactCalled = true; reactInfo.calledVia = 'parent.onChange@'+ael.tagName;
-                  } catch(e) {}
-                  break;
-                }
+              const pk = Object.getOwnPropertyNames(ael).find(k => k.startsWith('__reactProps$'));
+              if (pk && typeof ael[pk].onChange === 'function') {
+                try { ael[pk].onChange(changeEvt); reactCalled = true; reactInfo.calledVia = 'parent@'+ael.tagName; } catch(e) {}
+                break;
               }
               ael = ael.parentElement;
             }
           }
 
-          // 4. Dispatch native events (React's event delegation at document root)
-          ta.dispatchEvent(new InputEvent('input', {bubbles:true,cancelable:true,composed:true,inputType:'insertText',data:desc}));
-          ta.dispatchEvent(new Event('change', {bubbles:true,cancelable:true,composed:true}));
+          // 3. Also dispatch native events for React 17+ root-delegated listener
+          ta.dispatchEvent(new InputEvent('input',  {bubbles:true,cancelable:true,composed:true,inputType:'insertText',data:desc}));
+          ta.dispatchEvent(new Event   ('change',   {bubbles:true,cancelable:true,composed:true}));
 
-          // 5. Wait for React to re-render
+          // 4. Walk fiber tree — dispatch to ALL string-typed useState hooks
+          //    (not just empty: after navigation, some hooks may already have short defaults)
+          const stateUpdates = [];
+          if (reactFiberKey) {
+            let fiber = ta[reactFiberKey];
+            let depth = 0;
+            while (fiber && depth < 60) {
+              let hook = fiber.memoizedState;
+              let hi = 0;
+              while (hook && hi < 30) {
+                const ms  = hook.memoizedState;
+                const dsp = hook.queue && hook.queue.dispatch;
+                if (typeof dsp === 'function' && (ms === '' || ms === null || typeof ms === 'string')) {
+                  try { dsp(desc); stateUpdates.push('h['+hi+']@d'+depth+'='+JSON.stringify((ms||'').slice(0,20))); } catch(e) {}
+                }
+                hook = hook.next; hi++;
+              }
+              fiber = fiber.return; depth++;
+            }
+          }
+          if (stateUpdates.length) reactInfo.stateUpdates = stateUpdates;
+
+          // 5. Wait 800ms for React to process onChange + fiber dispatches, then call onBlur
           return new Promise(resolve => {
             setTimeout(() => {
-              const btn2 = deepFindButton('Finalizar');
-              resolve({
-                reactCalled,
-                reactInfo,
-                taValue: (deepFindTextarea()?.value||'').slice(0,50),
-                finDisabled: btn2 ? btn2.disabled : null,
-              });
-            }, 1000);
+              // Call onBlur — often triggers form validation that enables the submit button
+              if (reactPropsKey) {
+                const props2 = ta[reactPropsKey];
+                if (typeof props2.onBlur === 'function') {
+                  try { props2.onBlur(blurEvt); blurCalled = true; reactInfo.blurCalled = true; } catch(e) { reactInfo.blurErr = String(e).slice(0,60); }
+                }
+              }
+              // Also dispatch native blur
+              ta.dispatchEvent(new FocusEvent('blur',  {bubbles:true,composed:true}));
+              ta.dispatchEvent(new FocusEvent('focus', {bubbles:true,composed:true}));
+              ta.dispatchEvent(new FocusEvent('blur',  {bubbles:true,composed:true}));
+
+              // Wait another 1500ms for React validation re-render
+              setTimeout(() => {
+                const btn2 = deepFindButton('Finalizar');
+                // Also check if FORM has onSubmit we can call directly
+                const form = ta.closest('form');
+                const formPropsKey = form && Object.getOwnPropertyNames(form).find(k => k.startsWith('__reactProps$'));
+                reactInfo.formHasOnSubmit = !!(formPropsKey && form[formPropsKey] && typeof form[formPropsKey].onSubmit === 'function');
+                resolve({
+                  reactCalled,
+                  blurCalled,
+                  reactInfo,
+                  stateUpdatesCount: stateUpdates.length,
+                  taValue: (deepFindTextarea()?.value||'').slice(0,50),
+                  finDisabled: btn2 ? btn2.disabled : null,
+                  finExists: !!btn2,
+                });
+              }, 1500);
+            }, 800);
           });
         `)).catch(e => ({error: String(e).slice(0, 80)}));
 
@@ -667,17 +687,38 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
         log.info(`[${productId}] Wizard step ${step}: clicking Finalizar (enabled)`);
         await page.mouse.click(finPos.x, finPos.y);
       } else {
-        // Button still disabled — force-remove disabled and click
-        log.warn(`[${productId}] Wizard step ${step}: Finalizar disabled — force-click`);
-        await page.evaluate(new Function(`
+        // Button still disabled — try calling form onSubmit first (React form), then force-click
+        log.warn(`[${productId}] Wizard step ${step}: Finalizar disabled — trying form submit then force-click`);
+        const forceResult = await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
+          const ta  = deepFindTextarea();
           const btn = deepFindButton('Finalizar');
+          const form = ta && ta.closest('form');
+          const result = { formSubmit: false, forceClick: false };
+
+          // Try React form onSubmit directly
+          if (form) {
+            const fpk = Object.getOwnPropertyNames(form).find(k => k.startsWith('__reactProps$'));
+            if (fpk && typeof form[fpk].onSubmit === 'function') {
+              try {
+                const fakeSubmit = {target:form, currentTarget:form, type:'submit',
+                                    preventDefault:()=>{}, stopPropagation:()=>{}};
+                form[fpk].onSubmit(fakeSubmit);
+                result.formSubmit = true;
+              } catch(e) { result.formSubmitErr = String(e).slice(0,60); }
+            }
+          }
+
+          // Also remove disabled attr and fire click
           if (btn) {
             btn.removeAttribute('disabled');
             btn.disabled = false;
             btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, composed:true}));
+            result.forceClick = true;
           }
-        `));
+          return result;
+        `)).catch(e => ({error: String(e).slice(0,60)}));
+        log.info(`[${productId}] Wizard step ${step}: force result=${JSON.stringify(forceResult)}`);
       }
 
       // Wait for page to update
