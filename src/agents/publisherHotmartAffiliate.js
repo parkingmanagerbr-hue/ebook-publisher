@@ -422,149 +422,122 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     await sleep(2500);
   }
 
-  // Helper: poll for wizard state change after Continuar click (up to 8s)
-  async function pollWizardStep(label, timeoutMs = 8000) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      await sleep(400);
-      const s = await page.evaluate(new Function(`
-        ${SHADOW_HELPERS};
-        return {
-          hasRadio:     !!deepFindRadio(0),
-          hasInput:     !!deepFindInput(),
-          hasTextarea:  !!deepFindTextarea(),
-          hasContinuar: !!deepFindButton('Continuar'),
-          hasFinalizar: !!deepFindButton('Finalizar'),
-        };
-      `)).catch(() => null);
-      if (!s) continue;
-      // Something new appeared: textarea (desc step), Finalizar, or new radio (email step)
-      if (s.hasTextarea || s.hasFinalizar || (s.hasRadio && !s.hasInput)) {
-        log.info(`[${productId}] ${label}: next step appeared (${JSON.stringify(s)})`);
-        return s;
-      }
-    }
-    // Timeout — return current state anyway
-    const fallback = await page.evaluate(new Function(`
+  // ── Generic wizard loop: handles any number of steps ─────────────────────────
+  // The Hotmart affiliate wizard has variable steps (radio, input, textarea).
+  // We loop up to 8 times, handling each step by type:
+  //   radio      → click first radio → Continuar
+  //   input      → if commission not set yet: type commission; else click Continuar (default)
+  //   textarea   → type description → Finalizar (final step)
+  //   Finalizar  → click (final step)
+  //   Continuar only → click Continuar (informational/toggle step)
+  let commissionSet = false;
+  let wizardDone    = false;
+
+  for (let step = 1; step <= 8 && !wizardDone; step++) {
+    await sleep(3000); // Wait for SPA to render step
+
+    const s = await page.evaluate(new Function(`
       ${SHADOW_HELPERS};
       return {
-        hasRadio:!!deepFindRadio(0), hasInput:!!deepFindInput(),
-        hasTextarea:!!deepFindTextarea(), hasContinuar:!!deepFindButton('Continuar'),
-        hasFinalizar:!!deepFindButton('Finalizar'),
+        hasRadio:     !!deepFindRadio(0),
+        hasInput:     !!deepFindInput(),
+        hasTextarea:  !!deepFindTextarea(),
+        hasContinuar: !!deepFindButton('Continuar'),
+        hasFinalizar: !!deepFindButton('Finalizar'),
+        hasConfigurar: !!deepFindButton('Configurar programa'),
+        hasEditar:    !!deepFindButton('Editar programa'),
       };
     `)).catch(() => ({}));
-    log.warn(`[${productId}] ${label}: step poll timed out, state=${JSON.stringify(fallback)}`);
-    return fallback;
-  }
 
-  // ── STEP 1: Choose affiliation type (look for radio buttons) ─────────────────
-  const step1State = await page.evaluate(new Function(`
-    ${SHADOW_HELPERS};
-    return { hasRadio: !!deepFindRadio(0), hasContinuar: !!deepFindButton('Continuar') };
-  `)).catch(() => ({}));
+    log.info(`[${productId}] Wizard step ${step}: ${JSON.stringify(s)}`);
 
-  let afterStep1 = step1State;
-  if (step1State.hasRadio) {
-    log.info(`[${productId}] Step 1: Selecting 1-click affiliation`);
-    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindRadio(0)?.click();`));
-    await sleep(500);
-    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-    afterStep1 = await pollWizardStep('after-step1');
-  } else if (step1State.hasContinuar) {
-    log.info(`[${productId}] Step 1: Already past radio selection`);
-  }
-
-  // ── STEP 2: Set commission (look for text input) ─────────────────────────────
-  // afterStep1 tells us if commission input is present
-  const step2State = afterStep1.hasInput ? afterStep1 : await page.evaluate(new Function(`
-    ${SHADOW_HELPERS};
-    return { hasInput: !!deepFindInput(), hasContinuar: !!deepFindButton('Continuar') };
-  `)).catch(() => ({}));
-
-  let afterStep2 = null;
-  if (step2State.hasInput) {
-    log.info(`[${productId}] Step 2: Setting commission ${commission}% (typing "${commDigits}")`);
-    await page.evaluate(new Function(`
-      ${SHADOW_HELPERS};
-      const inp = deepFindInput();
-      if (inp) {
-        inp.focus();
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        nativeSetter.call(inp, '');
-        inp.dispatchEvent(new Event('input', {bubbles: true}));
-      }
-    `));
-    await sleep(300);
-
-    for (const digit of commDigits) {
-      await page.keyboard.type(digit, { delay: 80 });
+    if (s.hasEditar) {
+      log.info(`[${productId}] Wizard: "Editar programa" appeared — already configured`);
+      wizardDone = true; break;
     }
-    await sleep(500);
+    if (!s.hasContinuar && !s.hasFinalizar && !s.hasTextarea) {
+      log.warn(`[${productId}] Wizard step ${step}: no actionable element — stopping`);
+      break;
+    }
 
-    const commValue = await page.evaluate(new Function(`
-      ${SHADOW_HELPERS};
-      const inp = deepFindInput();
-      return inp ? inp.value : 'not_found';
-    `));
-    log.info(`[${productId}] Commission field value: "${commValue}"`);
+    if (s.hasTextarea || s.hasFinalizar) {
+      // Final step: description + Finalizar
+      log.info(`[${productId}] Wizard step ${step}: FINAL — entering description`);
+      if (s.hasTextarea) {
+        await page.evaluate(new Function(`
+          ${SHADOW_HELPERS};
+          const ta = deepFindTextarea();
+          if (ta) {
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+            nativeSetter.call(ta, '');
+            ta.dispatchEvent(new Event('input', {bubbles: true}));
+            ta.focus();
+          }
+        `));
+        await page.keyboard.type(description, { delay: 10 });
+        await sleep(500);
+      }
+      log.info(`[${productId}] Wizard step ${step}: clicking Finalizar`);
+      await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Finalizar')?.click();`));
+      await sleep(4000);
+      wizardDone = true; break;
+    }
 
-    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-    afterStep2 = await pollWizardStep('after-step2', 10000);
-  }
+    if (s.hasRadio) {
+      // Radio step: click first option, then Continuar
+      log.info(`[${productId}] Wizard step ${step}: radio — clicking option[0] + Continuar`);
+      await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindRadio(0)?.click();`));
+      await sleep(500);
+      await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
+      continue;
+    }
 
-  // ── STEP 3: Contact email (check for radio + no textarea yet) ────────────────
-  const step3State = afterStep2 || await page.evaluate(new Function(`
-    ${SHADOW_HELPERS};
-    return {
-      hasRadio: !!deepFindRadio(0),
-      hasInput: !!deepFindInput(),
-      hasTextarea: !!deepFindTextarea(),
-      hasContinuar: !!deepFindButton('Continuar'),
-      hasFinalizar: !!deepFindButton('Finalizar'),
-    };
-  `)).catch(() => ({}));
-
-  log.info(`[${productId}] Step 3 state: ${JSON.stringify(step3State)}`);
-  let afterStep3 = step3State;
-  if (step3State.hasRadio && !step3State.hasTextarea && !step3State.hasFinalizar) {
-    log.info(`[${productId}] Step 3: Selecting Hotmart email`);
-    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindRadio(0)?.click();`));
-    await sleep(500);
-    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-    afterStep3 = await pollWizardStep('after-step3', 10000);
-  }
-
-  // ── STEP 4: Benefits description (check for textarea or Finalizar) ───────────
-  const step4State = (afterStep3.hasTextarea || afterStep3.hasFinalizar) ? afterStep3
-    : await page.evaluate(new Function(`
-        ${SHADOW_HELPERS};
-        return { hasTextarea: !!deepFindTextarea(), hasFinalizar: !!deepFindButton('Finalizar') };
-      `)).catch(() => ({}));
-
-  log.info(`[${productId}] Step 4 state: ${JSON.stringify(step4State)}`);
-  if (step4State.hasTextarea || step4State.hasFinalizar) {
-    log.info(`[${productId}] Step 4: Entering description`);
-
-    if (step4State.hasTextarea) {
+    if (s.hasInput && !commissionSet) {
+      // First input step: enter commission
+      log.info(`[${productId}] Wizard step ${step}: commission input — typing "${commDigits}"`);
       await page.evaluate(new Function(`
         ${SHADOW_HELPERS};
-        const ta = deepFindTextarea();
-        if (ta) {
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-          nativeSetter.call(ta, '');
-          ta.dispatchEvent(new Event('input', {bubbles: true}));
-          ta.focus();
+        const inp = deepFindInput();
+        if (inp) {
+          inp.focus();
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          nativeSetter.call(inp, '');
+          inp.dispatchEvent(new Event('input', {bubbles: true}));
         }
       `));
-      await page.keyboard.type(description, { delay: 10 });
+      await sleep(300);
+      for (const digit of commDigits) {
+        await page.keyboard.type(digit, { delay: 80 });
+      }
       await sleep(500);
+      const commValue = await page.evaluate(new Function(`
+        ${SHADOW_HELPERS};
+        const inp = deepFindInput();
+        return inp ? inp.value : 'not_found';
+      `)).catch(() => 'error');
+      log.info(`[${productId}] Wizard step ${step}: commission field = "${commValue}"`);
+      commissionSet = true;
+      await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
+      continue;
     }
 
-    log.info(`[${productId}] Step 4: Clicking Finalizar`);
-    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Finalizar')?.click();`));
-    await sleep(4000);
-  } else {
-    log.warn(`[${productId}] Step 4 not reached — no textarea or Finalizar button found`);
+    if (s.hasInput && commissionSet) {
+      // Subsequent input step (e.g., max affiliates, other setting): accept default
+      log.info(`[${productId}] Wizard step ${step}: extra input — clicking Continuar (default)`);
+      await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
+      continue;
+    }
+
+    if (s.hasContinuar) {
+      // No input, no radio, just Continuar: informational step
+      log.info(`[${productId}] Wizard step ${step}: Continuar only — clicking`);
+      await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
+      continue;
+    }
+  }
+
+  if (!wizardDone) {
+    log.warn(`[${productId}] Wizard loop ended without reaching Finalizar`);
   }
 
   // ── Verify result ───────────────────────────────────────────────────────────
