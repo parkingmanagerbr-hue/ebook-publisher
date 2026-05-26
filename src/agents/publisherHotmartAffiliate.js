@@ -74,11 +74,13 @@ async function refreshJWT(browser, session) {
   }
 
   try {
-    await lp.goto(oauth2Service + '&ticket=' + st.body, { waitUntil: 'networkidle2', timeout: 30000 });
+    // Use 'load' (not 'networkidle2') — OAuth callback fires multiple redirects
+    // and never reaches network-idle within 30s, causing JWT refresh to fail.
+    await lp.goto(oauth2Service + '&ticket=' + st.body, { waitUntil: 'load', timeout: 20000 });
   } catch (e) {
     log.warn('OAuth callback error: ' + e.message.slice(0, 60));
   }
-  await sleep(5000);
+  await sleep(3000);
 
   const tok = await lp.evaluate(() => localStorage.getItem('token')).catch(() => null);
   await lp.close();
