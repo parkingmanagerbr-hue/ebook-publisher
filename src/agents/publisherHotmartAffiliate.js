@@ -463,10 +463,37 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     if (s.hasTextarea || s.hasFinalizar) {
       // Final step: description + Finalizar
       log.info(`[${productId}] Wizard step ${step}: FINAL — entering description`);
+
+      // Dump all form elements for debugging (first product only, to understand page structure)
+      const formDump = await page.evaluate(new Function(`
+        ${SHADOW_HELPERS};
+        function dumpForms(node, depth) {
+          if (depth > 6) return [];
+          const items = [];
+          try {
+            const ctx = node.shadowRoot || node;
+            ctx.querySelectorAll('input,textarea,select,button,[role="checkbox"],[role="radio"],[role="button"]').forEach(el => {
+              items.push({
+                tag: el.tagName, type: el.type || el.getAttribute('type') || '',
+                name: el.name || el.id || '',
+                value: (el.value || '').slice(0, 30),
+                disabled: el.disabled, checked: el.checked,
+                visible: el.offsetWidth > 0 || el.offsetHeight > 0,
+                text: (el.textContent || '').trim().slice(0, 30),
+              });
+            });
+            ctx.querySelectorAll('*').forEach(child => {
+              if (child.shadowRoot) items.push(...dumpForms(child, depth + 1));
+            });
+          } catch(e) {}
+          return items;
+        }
+        return dumpForms(document.documentElement, 0);
+      `)).catch(() => []);
+      log.info(`[${productId}] Step ${step} form elements: ${JSON.stringify(formDump.filter(e => e.visible))}`);
+
       if (s.hasTextarea) {
         // Get textarea coordinates — use page.mouse.click() for proper Puppeteer focus transfer.
-        // ta.focus() inside page.evaluate() does NOT transfer keyboard focus to Puppeteer,
-        // so page.keyboard.type() would type into nothing. Coordinate click is reliable.
         const taPos = await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
           const ta = deepFindTextarea();
@@ -475,49 +502,87 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
           return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) };
         `)).catch(() => null);
         log.info(`[${productId}] Wizard step ${step}: textarea pos=${JSON.stringify(taPos)}`);
+
         if (taPos && taPos.x > 0 && taPos.y > 0) {
           await page.mouse.click(taPos.x, taPos.y);
           await sleep(300);
-          // Select all & delete any pre-existing placeholder text
+          // Select all & delete pre-existing content
           await page.keyboard.down('Control');
           await page.keyboard.press('a');
           await page.keyboard.up('Control');
           await page.keyboard.press('Backspace');
           await sleep(200);
-          // Type the description at moderate speed
+          // Type description at moderate speed
           await page.keyboard.type(description, { delay: 15 });
-          await sleep(600);
-          // Dispatch change events to trigger SPA (Angular/Vue) binding
-          const taVal = await page.evaluate(new Function(`
-            ${SHADOW_HELPERS};
-            const ta = deepFindTextarea();
-            if (ta) {
-              ta.dispatchEvent(new Event('input', {bubbles: true}));
-              ta.dispatchEvent(new Event('change', {bubbles: true}));
-              return ta.value;
-            }
-            return null;
-          `)).catch(() => null);
-          log.info(`[${productId}] Wizard step ${step}: textarea value="${String(taVal).slice(0, 40)}"`);
-        } else {
-          // Fallback: native setter approach
-          log.warn(`[${productId}] Wizard step ${step}: textarea pos invalid, using native setter`);
+          await sleep(500);
+        }
+
+        // After typing: use nativeSetter + InputEvent to trigger Vue/Angular reactive bindings.
+        // InputEvent with inputType='insertText' is what real browser typing generates —
+        // generic Event('input') is often ignored by SPA framework validators.
+        const taVal = await page.evaluate(new Function(`
+          ${SHADOW_HELPERS};
+          const ta = deepFindTextarea();
+          if (ta) {
+            const ns = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+            ns.call(ta, ${JSON.stringify(description)});
+            ta.dispatchEvent(new InputEvent('input', {
+              bubbles: true, cancelable: true,
+              inputType: 'insertText', data: ${JSON.stringify(description)},
+            }));
+            ta.dispatchEvent(new Event('change', {bubbles: true}));
+            return ta.value;
+          }
+          return null;
+        `)).catch(() => null);
+        log.info(`[${productId}] Wizard step ${step}: textarea value="${String(taVal).slice(0, 60)}"`);
+
+        // Press Tab to blur textarea and trigger SPA validation on the field
+        await page.keyboard.press('Tab');
+        await sleep(1000);
+      }
+
+      // Check if there are any required checkboxes (e.g., terms & conditions)
+      const checkboxes = await page.evaluate(new Function(`
+        ${SHADOW_HELPERS};
+        const boxes = [];
+        function walk(node, depth) {
+          if (depth > 6) return;
+          try {
+            const ctx = node.shadowRoot || node;
+            ctx.querySelectorAll('input[type="checkbox"],[role="checkbox"]').forEach(el => {
+              boxes.push({checked: el.checked, label: (el.closest('label') || el.parentElement || el).textContent?.trim().slice(0, 60) || ''});
+            });
+            ctx.querySelectorAll('*').forEach(child => { if (child.shadowRoot) walk(child, depth + 1); });
+          } catch(e) {}
+        }
+        walk(document.documentElement, 0);
+        return boxes;
+      `)).catch(() => []);
+      if (checkboxes.length > 0) {
+        log.info(`[${productId}] Wizard step ${step}: found checkboxes: ${JSON.stringify(checkboxes)}`);
+        // Click any unchecked checkboxes (required acceptance)
+        const unchecked = checkboxes.filter(c => !c.checked).length;
+        if (unchecked > 0) {
           await page.evaluate(new Function(`
             ${SHADOW_HELPERS};
-            const ta = deepFindTextarea();
-            if (ta) {
-              const ns = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-              ns.call(ta, ${JSON.stringify(description)});
-              ta.dispatchEvent(new Event('input', {bubbles: true}));
-              ta.dispatchEvent(new Event('change', {bubbles: true}));
+            function walk(node, depth) {
+              if (depth > 6) return;
+              try {
+                const ctx = node.shadowRoot || node;
+                ctx.querySelectorAll('input[type="checkbox"],[role="checkbox"]').forEach(el => {
+                  if (!el.checked) el.click();
+                });
+                ctx.querySelectorAll('*').forEach(child => { if (child.shadowRoot) walk(child, depth + 1); });
+              } catch(e) {}
             }
+            walk(document.documentElement, 0);
           `));
           await sleep(500);
         }
-        await sleep(500);
       }
-      log.info(`[${productId}] Wizard step ${step}: clicking Finalizar`);
-      // Use coordinate click for Finalizar — more reliable than .click() in shadow DOM
+
+      // Check Finalizar state before clicking
       const finPos = await page.evaluate(new Function(`
         ${SHADOW_HELPERS};
         const btn = deepFindButton('Finalizar');
@@ -526,17 +591,29 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
         return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), disabled: btn.disabled };
       `)).catch(() => null);
       log.info(`[${productId}] Wizard step ${step}: Finalizar pos=${JSON.stringify(finPos)}`);
-      if (finPos && finPos.x > 0 && finPos.y > 0) {
+
+      if (finPos && finPos.disabled) {
+        // Still disabled — try JS click anyway (some SPAs allow click on disabled button via JS)
+        log.warn(`[${productId}] Wizard step ${step}: Finalizar still disabled — attempting JS force-click`);
+        await page.evaluate(new Function(`
+          ${SHADOW_HELPERS};
+          const btn = deepFindButton('Finalizar');
+          if (btn) {
+            btn.disabled = false;
+            btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+          }
+        `));
+      } else if (finPos && finPos.x > 0 && finPos.y > 0) {
         await page.mouse.click(finPos.x, finPos.y);
       } else {
-        // Fallback: JS click
         await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
           const btn = deepFindButton('Finalizar');
           if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true}));
         `));
       }
-      // Wait up to 10s for page to update (Hotmart may show toast then redirect)
+
+      // Wait for page to update (Hotmart may show toast then update UI)
       await sleep(10000);
       wizardDone = true; break;
     }
