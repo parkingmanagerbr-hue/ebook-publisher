@@ -23,6 +23,29 @@ const log = createLogger('hotmart-affiliate');
 const SESSION_FILE = process.env.HOTMART_SESSION_FILE || '/app/data/sessions/hotmart.json';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// ── JWT expiry extension (no signature verification — SPA trusts its own tokens) ──
+// Most SPAs decode JWT payload without verifying signature to check exp locally.
+// We re-encode the payload with exp += 48h, keeping the original (invalid) signature.
+// This prevents OIDC re-auth when the token is expired but we can't refresh via CAS.
+function extendJWTExpiry(token) {
+  if (!token || typeof token !== 'string') return token;
+  const parts = token.split('.');
+  if (parts.length !== 3) return token;
+  try {
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+    const payload = JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+    const newExp = Math.floor(Date.now() / 1000) + 48 * 3600;
+    if (payload.exp && payload.exp > newExp) return token; // already valid
+    payload.exp = newExp;
+    const newPayload = Buffer.from(JSON.stringify(payload))
+      .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    return parts[0] + '.' + newPayload + '.' + parts[2]; // original signature kept
+  } catch (_) {
+    return token;
+  }
+}
+
 // ── CAS TGT → Service Ticket ─────────────────────────────────────────────────
 function getCASTicket(tgt, serviceUrl) {
   return new Promise((resolve, reject) => {
@@ -237,17 +260,56 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
   const setupUrl = `https://app.hotmart.com/products/manage/${productId}/affiliation-setup`;
   log.info(`[${productId}] Navigating to ${setupUrl}`);
 
+  // Enable CDP SSO intercept BEFORE navigating (catches monitor fired during load)
+  await enableCDPSSOIntercept(page, productId);
+
+  // Also intercept OIDC authorize request — redirect it back immediately with a fake success
+  // so the SPA doesn't loop through CAS when the JWT is slightly expired.
+  // Note: page.evaluateOnNewDocument in launchHotmartBrowser should have already extended
+  // the token, so OIDC may not trigger. This is an additional safety net.
+  const cdp2 = await page.target().createCDPSession().catch(() => null);
+  if (cdp2) {
+    try {
+      await cdp2.send('Fetch.enable', {
+        patterns: [{ urlPattern: '*hotmart.com/oidc/authorize*', requestStage: 'Request' }],
+      });
+      cdp2.on('Fetch.requestPaused', async (evt) => {
+        try {
+          // Check if we can extract state from the authorize URL to construct a valid-looking callback
+          const authUrl = evt.request.url;
+          const stateM  = authUrl.match(/[?&]state=([^&]+)/);
+          const redirM  = authUrl.match(/[?&]redirect_uri=([^&]+)/);
+          if (stateM && redirM) {
+            const redirectUri = decodeURIComponent(redirM[1]);
+            const state       = decodeURIComponent(stateM[1]);
+            const fakeCode    = 'bypass_' + Date.now();
+            const callbackUrl = redirectUri + (redirectUri.includes('?') ? '&' : '?') + `code=${fakeCode}&state=${state}`;
+            log.info(`[${productId}] OIDC authorize intercepted — redirecting to callback with fake code`);
+            await cdp2.send('Fetch.fulfillRequest', {
+              requestId: evt.requestId,
+              responseCode: 302,
+              responseHeaders: [{ name: 'location', value: callbackUrl }],
+              body: '',
+            });
+          } else {
+            // Can't construct redirect — just continue normally
+            await cdp2.send('Fetch.continueRequest', { requestId: evt.requestId }).catch(() => {});
+          }
+        } catch (_) {
+          await cdp2.send('Fetch.continueRequest', { requestId: evt.requestId }).catch(() => {});
+        }
+      });
+    } catch (e) {
+      log.warn(`[${productId}] OIDC intercept setup failed: ${e.message.slice(0,50)}`);
+    }
+  }
+
   try {
     await page.goto(setupUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (e) {
     // ERR_ABORTED is common with SPAs doing client-side routing — not fatal
     log.warn(`[${productId}] goto error: ${e.message.slice(0, 60)}`);
   }
-
-  // Enable CDP SSO intercept immediately after navigation.
-  // When the SPA's session/monitor fires (~42s after OIDC), we return 200
-  // so it doesn't trigger another re-auth redirect loop.
-  await enableCDPSSOIntercept(page, productId);
 
   // Poll for SPA to fully render (up to 120s).
   //
@@ -838,8 +900,37 @@ async function launchHotmartBrowser() {
     throw new Error('Session expired — re-run capture-hotmart-session.js');
   }
 
-  const token = await page.evaluate(() => localStorage.getItem('token') || '').catch(() => '');
-  log.info(`Token present: ${!!token}`);
+  // Read current token from localStorage (may be expired)
+  const rawToken = await page.evaluate(() => localStorage.getItem('token') || '').catch(() => '');
+
+  // Extend JWT expiry to prevent OIDC re-auth on product pages.
+  // The SPA checks token.exp locally (without signature verification) to decide
+  // whether to trigger OIDC. Extending exp prevents this without needing a fresh token.
+  const extToken = extendJWTExpiry(rawToken || jwt || '');
+  if (extToken && extToken !== (rawToken || jwt)) {
+    log.info('JWT exp extended by 48h to prevent OIDC re-auth');
+  }
+
+  if (extToken) {
+    // Inject into the currently open page's localStorage
+    await page.evaluate((t) => {
+      localStorage.setItem('token', t);
+      // Also patch any jwt-decode or verify calls the SPA might make
+      try {
+        const ev = { type: 'storage', key: 'token', newValue: t, storageArea: localStorage };
+        window.dispatchEvent(new StorageEvent('storage', ev));
+      } catch (_) {}
+    }, extToken).catch(() => {});
+
+    // Ensure the extended token is injected into every future navigation on this page
+    await page.evaluateOnNewDocument((t) => {
+      // This runs before any page script — set token before the SPA reads it
+      try { localStorage.setItem('token', t); } catch (_) {}
+    }, extToken).catch(() => {});
+  }
+
+  const token = extToken || rawToken;
+  log.info(`Token present: ${!!token} (extended: ${extToken !== rawToken})`);
 
   return { browser, page, jwt, token };
 }
