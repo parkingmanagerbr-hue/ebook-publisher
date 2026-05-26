@@ -11,11 +11,39 @@ on:
         description: 'Since (e.g. 10m, 1h)'
         required: false
         default: '15m'
+      redeploy:
+        description: 'Force redeploy before fetching logs (true/false)'
+        required: false
+        default: 'false'
 
 jobs:
   logs:
     runs-on: ubuntu-latest
     steps:
+      - name: Login to GHCR (for pull)
+        if: ${{ inputs.redeploy == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Redeploy on VPS
+        if: ${{ inputs.redeploy == 'true' }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "=== PULLING LATEST IMAGE ==="
+            docker pull ghcr.io/parkingmanagerbr-hue/ebook-publisher:latest
+            echo "=== FORCE RECREATE ==="
+            cd /home/deploy/ebook-publisher-work
+            docker compose -f docker-compose.production.yml up -d --force-recreate ebook-publisher
+            echo "=== WAITING 10s FOR STARTUP ==="
+            sleep 10
+
       - name: Fetch logs from VPS
         uses: appleboy/ssh-action@v1
         with:
@@ -26,9 +54,14 @@ jobs:
             echo "=== CONTAINER STATUS ==="
             docker ps --filter name=ebook-publisher --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
             echo ""
-            echo "=== IMAGE DIGEST ==="
-            docker inspect platform-ebook-publisher-1 --format '{{.Image}}' 2>/dev/null | cut -c1-20
-            docker inspect platform-ebook-publisher-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true
+            echo "=== IMAGE INFO ==="
+            IMG=$(docker inspect platform-ebook-publisher-1 --format '{{.Image}}' 2>/dev/null)
+            echo "Image SHA: $IMG"
+            docker inspect $IMG --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || echo "(no revision label)"
+            docker inspect $IMG --format '{{index .Config.Labels "org.opencontainers.image.created"}}' 2>/dev/null || echo "(no created label)"
+            echo ""
+            echo "=== VERIFY CODE VERSION ==="
+            docker exec platform-ebook-publisher-1 grep -m1 "up to 120s\|up to 30s\|proceeding anyway\|Still loading after" /app/src/agents/publisherHotmartAffiliate.js 2>/dev/null || echo "grep failed"
             echo ""
             echo "=== LOGS (last ${{ inputs.lines }} lines, since ${{ inputs.since }}) ==="
             docker logs platform-ebook-publisher-1 --tail ${{ inputs.lines }} --since ${{ inputs.since }} 2>&1
