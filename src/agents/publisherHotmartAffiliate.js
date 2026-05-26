@@ -951,7 +951,34 @@ async function launchHotmartBrowser() {
   const page = await browser.newPage();
   await setupPage(page, session, jwt);
 
-  // Warm up session
+  // Compute extended token from session file JWT BEFORE warmup so the intercept
+  // and evaluateOnNewDocument are in place when the browser first navigates.
+  // Without this, the warmup itself can redirect to sso.hotmart.com/login.
+  const preExtToken = extendJWTExpiry(jwt || (session.localStorage && session.localStorage.token) || '');
+  if (preExtToken) {
+    log.info(preExtToken !== jwt ? 'JWT exp extended by 48h (pre-warmup)' : 'JWT not yet extended (pre-warmup)');
+    // evaluateOnNewDocument fires BEFORE SPA scripts on every new document —
+    // this is the primary defense against client-side JWT expiry checks.
+    await page.evaluateOnNewDocument((t) => {
+      try {
+        localStorage.setItem('token', t);
+        localStorage.setItem('access_token', t);
+        localStorage.setItem('id_token', t);
+        // Override getItem for auth keys so SPA always sees a non-expired token
+        const AUTH_KEYS = new Set(['token', 'access_token', 'id_token']);
+        const origGet   = Storage.prototype.getItem;
+        Storage.prototype.getItem = function(key) {
+          if (this === localStorage && AUTH_KEYS.has(key)) return t;
+          return origGet.call(this, key);
+        };
+      } catch (_) {}
+    }, preExtToken).catch(() => {});
+
+    // Enable master CDP intercept (catches CAS login + session/monitor + token endpoints)
+    await enableMasterCDPIntercept(page, preExtToken, 'browser');
+  }
+
+  // Warm up session — with intercepts in place, CAS redirects are blocked
   log.info('Warming up Hotmart session...');
   await page.goto('https://app.hotmart.com/', { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
   try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }); } catch (_) {}
@@ -960,58 +987,37 @@ async function launchHotmartBrowser() {
   const landedUrl = page.url();
   log.info(`Warmed up at: ${landedUrl.slice(0, 80)}`);
 
-  if (landedUrl.includes('sso.hotmart.com') || landedUrl.includes('/login')) {
-    await browser.close();
-    throw new Error('Session expired — re-run capture-hotmart-session.js');
+  // If warmup still landed at CAS login, the session cookie is fully invalid —
+  // the intercept redirected back to app.hotmart.com but it looped 4+ times.
+  // Warn but continue; some product pages may still work if interceptors catch OIDC.
+  if (landedUrl.includes('sso.hotmart.com') || landedUrl.includes('/cas/login')) {
+    log.warn('Warmup landed at CAS login — session cookie expired, intercept will handle product pages');
   }
 
-  // Read current token from localStorage (may be expired)
-  const rawToken = await page.evaluate(() => localStorage.getItem('token') || '').catch(() => '');
+  // Re-read token after warmup (intercept HTML injection may have updated localStorage)
+  const rawToken = await page.evaluate(() => {
+    // Return whichever token key is populated
+    return localStorage.getItem('token') || localStorage.getItem('access_token') || '';
+  }).catch(() => '');
 
-  // Extend JWT expiry to prevent OIDC re-auth on product pages.
-  // Many SPAs decode JWT payload without verifying signature to check exp locally.
-  // We also intercept the OIDC token endpoint to return this extended token so the
-  // SPA's OIDC callback receives a "fresh" token and stops the auth loop.
-  const extToken = extendJWTExpiry(rawToken || jwt || '');
-  if (extToken && extToken !== (rawToken || jwt)) {
-    log.info('JWT exp extended by 48h to prevent OIDC re-auth');
-  }
-
-  if (extToken) {
-    // Inject extended token into the current page's localStorage
+  // Use the better of the two (preExtToken already extended, rawToken might be fresher)
+  const extToken = extendJWTExpiry(rawToken || preExtToken || '');
+  if (extToken && extToken !== rawToken) {
+    log.info('JWT exp extended by 48h (post-warmup)');
+    // Push fresh extended token into current page localStorage
     await page.evaluate((t) => {
-      localStorage.setItem('token', t);
-      try {
-        window.dispatchEvent(new StorageEvent('storage', { key: 'token', newValue: t, storageArea: localStorage }));
-      } catch (_) {}
-    }, extToken).catch(() => {});
-
-    // Inject extended token into every future page navigation BEFORE SPA scripts run.
-    // Also override localStorage.getItem so the SPA always gets a non-expired token
-    // even if it re-checks after our CAS-redirect intercept brings it back to the product URL.
-    await page.evaluateOnNewDocument((t) => {
       try {
         localStorage.setItem('token', t);
         localStorage.setItem('access_token', t);
-        localStorage.setItem('id_token', t);
-        // Override getItem: for auth keys return our extended token so the SPA's
-        // client-side JWT expiry check never triggers OIDC re-auth
-        const AUTH_KEYS = new Set(['token', 'access_token', 'id_token']);
-        const origGet   = Storage.prototype.getItem;
-        Storage.prototype.getItem = function(key) {
-          if (this === localStorage && AUTH_KEYS.has(key)) return t;
-          return origGet.call(this, key);
-        };
+        window.dispatchEvent(new StorageEvent('storage', { key: 'token', newValue: t, storageArea: localStorage }));
       } catch (_) {}
     }, extToken).catch(() => {});
+    // Update master CDP intercept with the fresh token (refreshes tokenB64 body)
+    await enableMasterCDPIntercept(page, extToken, 'browser');
   }
 
-  // Enable single master CDP intercept covering all SSO/OIDC endpoints.
-  // Do this ONCE in launchHotmartBrowser; don't create additional sessions per-product.
-  await enableMasterCDPIntercept(page, extToken || rawToken, 'browser');
-
-  const token = extToken || rawToken;
-  log.info(`Token present: ${!!token} (extended: ${extToken !== rawToken})`);
+  const token = extToken || preExtToken;
+  log.info(`Token present: ${!!token}`);
 
   return { browser, page, jwt, token, extToken };
 }
