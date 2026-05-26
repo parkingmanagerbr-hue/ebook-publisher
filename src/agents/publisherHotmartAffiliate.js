@@ -542,154 +542,105 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
           await sleep(800);
         }
 
-        // Phase 2: Programmatic state update if button is still disabled.
-        //
-        // Root cause v2 (from logs: hostCount=0, vueInfo=[]):
-        //   Previous fix used `instanceof ShadowRoot` which fails when the ShadowRoot
-        //   comes from a different JavaScript realm (HOT-LOADING custom element).
-        //   Fix: use `nodeType === 11` (always reliable) for shadow root detection.
-        //   Also: search ALL elements in ALL shadow roots for Vue components,
-        //   and call Vue's _vei (event listener) handler directly on the textarea.
+        // Phase 2 (React): Call React's onChange/onInput prop directly.
+        // CONFIRMED: The form is built with React (logs show __reactFiber$, __reactProps$ on elements).
+        // React controlled textarea: props.onChange({target: ta}) updates component state.
+        // We also walk the React fiber tree to dispatch state updates for empty string hooks.
         const vueResult = await page.evaluate(new Function(`
           ${SHADOW_HELPERS};
           const desc = ${JSON.stringify(description)};
           const ta = deepFindTextarea();
-          const btn0 = deepFindButton('Finalizar');
           if (!ta) return {error: 'no ta'};
 
-          // 1. Set textarea DOM value via native prototype setter
+          // 1. Set textarea value via native setter (React no-op bypass trick)
           Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, desc);
 
-          // 2. Collect shadow host chain — use nodeType===11 (avoids instanceof realm bug)
-          const hosts = [];
-          let el = ta;
-          for (let i = 0; i < 12; i++) {
-            const r = el.getRootNode ? el.getRootNode() : null;
-            if (r && r.nodeType === 11) { el = r.host; hosts.push(el); }
-            else { el = el.parentElement; if (!el) break; }
-          }
+          const reactInfo = {};
+          let reactCalled = false;
 
-          // 3. Search ALL elements across ALL shadow roots for Vue 3 component instances.
-          //    This is necessary because the component containing 'information' state
-          //    may not be a direct ancestor of the textarea in the DOM tree.
-          const vueInfo = [];
-          const CANDIDATES = ['information','description','affiliateDescription','programDescription',
-                              'text','content','programInfo','details','affiliateInfo'];
+          // 2a. Call React onChange via __reactProps$<nonce> (direct prop call)
+          //     React controlled components: onChange({target:ta}) updates state.
+          //     ta.value is already set to desc above, so React reads the correct value.
+          const reactPropsKey = Object.getOwnPropertyNames(ta).find(k => k.startsWith('__reactProps$'));
+          const reactFiberKey = Object.getOwnPropertyNames(ta).find(k => k.startsWith('__reactFiber$'));
+          reactInfo.propsKey = !!reactPropsKey;
+          reactInfo.fiberKey = !!reactFiberKey;
 
-          function setVueState(comp, tag) {
-            const info = {tag};
-            try {
-              const ss = comp.setupState;
-              const data = comp.data ? comp.data() : null;
-              const allSources = [ss, data].filter(Boolean);
-              for (const src of allSources) {
-                if (!src) continue;
-                const raw = (src.__v_raw !== undefined ? src.__v_raw : src);
-                const keys = Object.keys(raw).filter(k => !k.startsWith('_') && !k.startsWith('$')).slice(0,30);
-                info.keys = keys;
-                // Direct key
-                for (const k of CANDIDATES) {
-                  if (k in raw) {
-                    try { src[k] = desc; raw[k] = desc; info.set = k; } catch(e) {}
-                    break;
-                  }
-                }
-                // Nested object (formData.information, form.description, etc.)
-                for (const k of keys) {
-                  if (info.set) break;
-                  const v = raw[k];
-                  if (v && typeof v === 'object' && !Array.isArray(v)) {
-                    for (const sub of CANDIDATES) {
-                      if (sub in v) {
-                        try { v[sub] = desc; info.set = k+'.'+sub; } catch(e) {}
-                        break;
-                      }
-                    }
-                  }
-                }
-                if (info.set) break;
-              }
-              try { comp.update && comp.update(); } catch(e) {}
-            } catch(e) { info.err = String(e).slice(0,60); }
-            return info;
-          }
-
-          function searchVue(root, depth) {
-            if (depth > 8 || vueInfo.length >= 6) return;
-            const ctx = (root && root.nodeType === 11) ? root : (root.shadowRoot || root);
-            try {
-              for (const elem of ctx.querySelectorAll('*')) {
-                const comp = elem.__vueParentComponent;
-                if (comp) vueInfo.push(setVueState(comp, elem.tagName));
-                if (vueInfo.length >= 6) return;
-              }
-            } catch(e) {}
-            try {
-              for (const elem of ctx.querySelectorAll('*')) {
-                if (elem.shadowRoot) searchVue(elem.shadowRoot, depth+1);
-                if (vueInfo.length >= 6) return;
-              }
-            } catch(e) {}
-          }
-          searchVue(document, 0);
-
-          // 4. Direct call to Vue's _vei input handler (bypasses event retargeting entirely)
-          //    Vue 3 stores bound event listeners in el._vei = { input: fn, ... }
-          let veiCalled = false;
-          try {
-            const vei = ta._vei;
-            if (vei) {
-              const handler = vei.onInput || vei.input;
-              const fn = handler && (handler.attached || handler.value || handler);
-              if (typeof fn === 'function') {
-                fn({type:'input', target:ta, currentTarget:ta, data:desc});
-                veiCalled = true;
+          if (reactPropsKey) {
+            const props = ta[reactPropsKey];
+            reactInfo.propKeys = Object.keys(props||{}).filter(k=>k.startsWith('on')).slice(0,10);
+            const fakeEvt = {target:ta, currentTarget:ta, type:'change', nativeEvent:{target:ta},
+                             preventDefault:()=>{}, stopPropagation:()=>{}};
+            for (const evName of ['onChange','onInput','onBeforeInput']) {
+              if (!reactCalled && typeof props[evName] === 'function') {
+                try { props[evName](fakeEvt); reactCalled = true; reactInfo.calledVia = evName; } catch(e) { reactInfo[evName+'Err']=String(e).slice(0,60); }
               }
             }
-          } catch(e) {}
+          }
 
-          // 5. Dispatch events from textarea AND each shadow host
-          const fire = (node) => {
-            try {
-              node.dispatchEvent(new InputEvent('input', {bubbles:true,cancelable:true,composed:true,inputType:'insertText',data:desc}));
-              node.dispatchEvent(new Event('change',{bubbles:true,composed:true}));
-            } catch(e) {}
-          };
-          fire(ta);
-          for (const h of hosts) fire(h);
+          // 2b. Walk React fiber tree: find form component state and dispatch update
+          if (reactFiberKey) {
+            let fiber = ta[reactFiberKey];
+            let depth = 0;
+            const stateUpdates = [];
+            while (fiber && depth < 40) {
+              // Walk memoizedState hooks linked list
+              let hook = fiber.memoizedState;
+              let hi = 0;
+              while (hook && hi < 20) {
+                const ms = hook.memoizedState;
+                const dispatch = hook.queue && hook.queue.dispatch;
+                if (typeof dispatch === 'function') {
+                  // String hooks that are empty/short = likely the information field
+                  if (ms === '' || ms === null || (typeof ms === 'string' && ms.length < 5 && ms.length >= 0)) {
+                    try {
+                      dispatch(desc);
+                      stateUpdates.push('hook['+hi+']@d'+depth+'='+JSON.stringify(ms));
+                    } catch(e) {}
+                  }
+                }
+                hook = hook.next; hi++;
+              }
+              fiber = fiber.return; depth++;
+            }
+            if (stateUpdates.length) { reactInfo.stateUpdates = stateUpdates; reactCalled = true; }
+          }
 
-          // 6. Dump button ancestor props + iframes for deep diagnostics
-          const diagBtnAncestors = [];
-          const diagBtn = deepFindButton('Finalizar');
-          if (diagBtn) {
-            let ael = diagBtn;
-            for (let i = 0; i < 8; i++) {
-              if (!ael) break;
-              const fwKeys = Object.getOwnPropertyNames(ael)
-                .filter(k => k.startsWith('_') || k.startsWith('__') || k === 'stencil' || k === '$')
-                .slice(0,8);
-              diagBtnAncestors.push({tag: ael.tagName, fwKeys});
+          // 3. Also call onChange via __reactProps$ on PARENT elements (in case textarea is wrapped)
+          if (!reactCalled) {
+            let ael = ta.parentElement;
+            for (let i = 0; i < 5 && ael; i++) {
+              const propsKey = Object.getOwnPropertyNames(ael).find(k => k.startsWith('__reactProps$'));
+              if (propsKey) {
+                const aProps = ael[propsKey];
+                if (typeof aProps.onChange === 'function') {
+                  try {
+                    aProps.onChange({target:ta, currentTarget:ta, type:'change', nativeEvent:{target:ta},
+                                    preventDefault:()=>{}, stopPropagation:()=>{}});
+                    reactCalled = true; reactInfo.calledVia = 'parent.onChange@'+ael.tagName;
+                  } catch(e) {}
+                  break;
+                }
+              }
               ael = ael.parentElement;
             }
           }
-          // Check iframes
-          const iframes = Array.from(document.querySelectorAll('iframe')).map(f => ({src: (f.src||'').slice(0,60)}));
 
-          // 7. Wait for Vue to re-render (setTimeout > microtask to catch full cycle)
+          // 4. Dispatch native events (React's event delegation at document root)
+          ta.dispatchEvent(new InputEvent('input', {bubbles:true,cancelable:true,composed:true,inputType:'insertText',data:desc}));
+          ta.dispatchEvent(new Event('change', {bubbles:true,cancelable:true,composed:true}));
+
+          // 5. Wait for React to re-render
           return new Promise(resolve => {
             setTimeout(() => {
               const btn2 = deepFindButton('Finalizar');
               resolve({
-                taRootType: (ta.getRootNode()||{}).nodeType,
-                hostCount: hosts.length,
-                vueInfo: vueInfo.slice(0,3),
-                veiCalled,
-                taValue: (deepFindTextarea()?.value || '').slice(0,50),
+                reactCalled,
+                reactInfo,
+                taValue: (deepFindTextarea()?.value||'').slice(0,50),
                 finDisabled: btn2 ? btn2.disabled : null,
-                diagBtnAncestors: diagBtnAncestors.slice(0,5),
-                iframes: iframes.slice(0,3),
               });
-            }, 800);
+            }, 1000);
           });
         `)).catch(e => ({error: String(e).slice(0, 80)}));
 
