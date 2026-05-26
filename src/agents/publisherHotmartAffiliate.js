@@ -201,154 +201,176 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
   try {
     await page.goto(setupUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (e) {
+    // ERR_ABORTED is common with SPAs doing client-side routing — not fatal
     log.warn(`[${productId}] goto error: ${e.message.slice(0, 60)}`);
   }
-  await sleep(4000);
+  await sleep(5000); // Wait longer for SPA to render shadow DOM
 
   // Check if we're on the right page (not redirected to login)
   const landedUrl = page.url();
   if (landedUrl.includes('sso.hotmart.com') || landedUrl.includes('/login')) {
     return { ok: false, reason: 'session_expired' };
   }
+  if (landedUrl.includes('not-found') || landedUrl.includes('/404')) {
+    log.warn(`[${productId}] Redirected to not-found: ${landedUrl.slice(-50)}`);
+    return { ok: false, reason: 'product_not_found', url: landedUrl };
+  }
 
-  // Check page state
-  const pageText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
+  // Use shadow DOM button detection (document.body.innerText misses shadow DOM content)
+  const btnState = await page.evaluate(new Function(`
+    ${SHADOW_HELPERS};
+    return {
+      hasConfigurar: !!deepFindButton('Configurar programa'),
+      hasEditar: !!deepFindButton('Editar programa'),
+      hasContinuar: !!deepFindButton('Continuar'),
+      hasFinalizar: !!deepFindButton('Finalizar'),
+      hasRadio: !!deepFindRadio(0),
+      hasInput: !!deepFindInput(),
+      url: location.href,
+    };
+  `)).catch(e => ({ error: e.message }));
 
-  // If already configured (has commission info showing), skip
-  if (pageText.includes('Editar programa') || pageText.includes('Programa ativo') || pageText.includes('editar')) {
-    log.info(`[${productId}] Affiliate already configured, skipping`);
+  log.info(`[${productId}] Page state: ${JSON.stringify(btnState)}`);
+
+  // If already configured
+  if (btnState.hasEditar) {
+    log.info(`[${productId}] Affiliate already configured (Editar found), skipping`);
     return { ok: true, skipped: true, reason: 'already_configured' };
   }
 
-  // Check if "Configurar programa" is present
-  if (!pageText.includes('Configurar programa')) {
-    // Maybe the page shows an error or the product can't have affiliates
-    log.warn(`[${productId}] "Configurar programa" not found. Page preview: ${pageText.substring(0, 100)}`);
-    return { ok: false, reason: 'configurar_not_found', preview: pageText.substring(0, 100) };
+  // If "Configurar programa" not found and no wizard buttons either → can't configure
+  if (!btnState.hasConfigurar && !btnState.hasContinuar && !btnState.hasFinalizar) {
+    log.warn(`[${productId}] No wizard buttons found. URL: ${landedUrl.slice(-60)}`);
+    return { ok: false, reason: 'no_wizard_buttons', url: landedUrl };
   }
 
-  // ── STEP 0: Click "Configurar programa" ────────────────────────────────────
-  log.info(`[${productId}] Step 0: Clicking "Configurar programa"`);
-  await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Configurar programa')?.click();`));
-  await sleep(2000);
-
-  // ── STEP 1: Choose affiliation type ────────────────────────────────────────
-  const step1Text = await page.evaluate(() => document.body?.innerText || '');
-  if (!step1Text.includes('Como o seu Programa de Afiliados funcionará')) {
-    log.warn(`[${productId}] Step 1 not reached. Text: ${step1Text.substring(0, 80)}`);
-    return { ok: false, reason: 'step1_not_reached' };
+  // ── STEP 0: Click "Configurar programa" (if present — otherwise wizard may already be open) ──
+  if (btnState.hasConfigurar) {
+    log.info(`[${productId}] Step 0: Clicking "Configurar programa"`);
+    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Configurar programa')?.click();`));
+    await sleep(2500);
   }
 
-  log.info(`[${productId}] Step 1: Selecting 1-click affiliation`);
-  // Select first radio (1-click / auto-approve)
-  await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindRadio(0)?.click();`));
-  await sleep(500);
-
-  // Click Continuar
-  await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-  await sleep(2000);
-
-  // ── STEP 2: Set commission ──────────────────────────────────────────────────
-  const step2Text = await page.evaluate(() => document.body?.innerText || '');
-  if (!step2Text.includes('comissão dos afiliados')) {
-    log.warn(`[${productId}] Step 2 not reached. Text: ${step2Text.substring(0, 80)}`);
-    return { ok: false, reason: 'step2_not_reached' };
-  }
-
-  log.info(`[${productId}] Step 2: Setting commission ${commission}% (typing "${commDigits}")`);
-  // Find input and clear it, then type digits
-  await page.evaluate(new Function(`
+  // ── STEP 1: Choose affiliation type (look for radio buttons) ─────────────────
+  const step1State = await page.evaluate(new Function(`
     ${SHADOW_HELPERS};
-    const inp = deepFindInput();
-    if (inp) {
-      inp.focus();
-      // Clear by selecting all and deleting
-      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      nativeSetter.call(inp, '');
-      inp.dispatchEvent(new Event('input', {bubbles: true}));
-    }
-  `));
-  await sleep(300);
+    return { hasRadio: !!deepFindRadio(0), hasContinuar: !!deepFindButton('Continuar') };
+  `)).catch(() => ({}));
 
-  // Type each digit to engage the mask
-  for (const digit of commDigits) {
-    await page.keyboard.type(digit, { delay: 80 });
-  }
-  await sleep(500);
-
-  // Verify value
-  const commValue = await page.evaluate(new Function(`
-    ${SHADOW_HELPERS};
-    const inp = deepFindInput();
-    return inp ? inp.value : 'not_found';
-  `));
-  log.info(`[${productId}] Commission field value: "${commValue}"`);
-
-  await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-  await sleep(2000);
-
-  // ── STEP 3: Contact email ───────────────────────────────────────────────────
-  const step3Text = await page.evaluate(() => document.body?.innerText || '');
-  if (step3Text.includes('entrar em contato')) {
-    log.info(`[${productId}] Step 3: Selecting Hotmart email`);
-    // Select first radio (use hotmart account email)
+  if (step1State.hasRadio) {
+    log.info(`[${productId}] Step 1: Selecting 1-click affiliation`);
     await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindRadio(0)?.click();`));
     await sleep(500);
     await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
-    await sleep(2000);
+    await sleep(2500);
+  } else if (step1State.hasContinuar) {
+    // Already past step 1
+    log.info(`[${productId}] Step 1: Already past radio selection`);
   }
 
-  // ── STEP 4: Benefits description ───────────────────────────────────────────
-  const step4Text = await page.evaluate(() => document.body?.innerText || '');
-  if (step4Text.includes('benefícios') || step4Text.includes('Finalizar')) {
+  // ── STEP 2: Set commission (look for text input) ─────────────────────────────
+  const step2State = await page.evaluate(new Function(`
+    ${SHADOW_HELPERS};
+    return { hasInput: !!deepFindInput(), hasContinuar: !!deepFindButton('Continuar') };
+  `)).catch(() => ({}));
+
+  if (step2State.hasInput) {
+    log.info(`[${productId}] Step 2: Setting commission ${commission}% (typing "${commDigits}")`);
+    await page.evaluate(new Function(`
+      ${SHADOW_HELPERS};
+      const inp = deepFindInput();
+      if (inp) {
+        inp.focus();
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(inp, '');
+        inp.dispatchEvent(new Event('input', {bubbles: true}));
+      }
+    `));
+    await sleep(300);
+
+    for (const digit of commDigits) {
+      await page.keyboard.type(digit, { delay: 80 });
+    }
+    await sleep(500);
+
+    const commValue = await page.evaluate(new Function(`
+      ${SHADOW_HELPERS};
+      const inp = deepFindInput();
+      return inp ? inp.value : 'not_found';
+    `));
+    log.info(`[${productId}] Commission field value: "${commValue}"`);
+
+    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
+    await sleep(2500);
+  }
+
+  // ── STEP 3: Contact email (check for radio + Continuar, no textarea yet) ────
+  const step3State = await page.evaluate(new Function(`
+    ${SHADOW_HELPERS};
+    return {
+      hasRadio: !!deepFindRadio(0),
+      hasInput: !!deepFindInput(),
+      hasTextarea: !!deepFindTextarea(),
+      hasContinuar: !!deepFindButton('Continuar'),
+    };
+  `)).catch(() => ({}));
+
+  if (step3State.hasRadio && !step3State.hasTextarea) {
+    log.info(`[${productId}] Step 3: Selecting Hotmart email`);
+    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindRadio(0)?.click();`));
+    await sleep(500);
+    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Continuar')?.click();`));
+    await sleep(2500);
+  }
+
+  // ── STEP 4: Benefits description (check for textarea) ─────────────────────
+  const step4State = await page.evaluate(new Function(`
+    ${SHADOW_HELPERS};
+    return { hasTextarea: !!deepFindTextarea(), hasFinalizar: !!deepFindButton('Finalizar') };
+  `)).catch(() => ({}));
+
+  if (step4State.hasTextarea || step4State.hasFinalizar) {
     log.info(`[${productId}] Step 4: Entering description`);
 
-    const hasTextarea = await page.evaluate(new Function(`
-      ${SHADOW_HELPERS};
-      const ta = deepFindTextarea();
-      if (ta) {
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-        nativeSetter.call(ta, '');
-        ta.dispatchEvent(new Event('input', {bubbles: true}));
-        ta.focus();
-        return true;
-      }
-      return false;
-    `));
-
-    if (hasTextarea) {
+    if (step4State.hasTextarea) {
+      await page.evaluate(new Function(`
+        ${SHADOW_HELPERS};
+        const ta = deepFindTextarea();
+        if (ta) {
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+          nativeSetter.call(ta, '');
+          ta.dispatchEvent(new Event('input', {bubbles: true}));
+          ta.focus();
+        }
+      `));
       await page.keyboard.type(description, { delay: 10 });
       await sleep(500);
     }
 
     log.info(`[${productId}] Step 4: Clicking Finalizar`);
     await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Finalizar')?.click();`));
-    await sleep(3000);
+    await sleep(4000);
   } else {
-    // Maybe the wizard went straight to Finalizar
-    log.info(`[${productId}] Trying Finalizar directly`);
-    await page.evaluate(new Function(`${SHADOW_HELPERS}; deepFindButton('Finalizar')?.click();`));
-    await sleep(3000);
+    log.warn(`[${productId}] Step 4 not reached — no textarea or Finalizar button found`);
   }
 
   // ── Verify result ───────────────────────────────────────────────────────────
-  const finalText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
-  const finalUrl  = page.url();
+  const finalUrl = page.url();
+  const finalState = await page.evaluate(new Function(`
+    ${SHADOW_HELPERS};
+    return {
+      hasEditar: !!deepFindButton('Editar programa'),
+      hasFinalizar: !!deepFindButton('Finalizar'),
+      hasConfigurar: !!deepFindButton('Configurar programa'),
+    };
+  `)).catch(() => ({}));
 
-  // Success indicators
-  const isSuccess =
-    finalText.includes('Programa criado') ||
-    finalText.includes('sucesso') ||
-    finalText.includes('Editar programa') ||
-    finalText.includes('Programa ativo') ||
-    !finalText.includes('Finalizar'); // wizard gone
+  // Success: wizard gone (no Finalizar), or "Editar programa" appeared
+  const isSuccess = finalState.hasEditar || (!finalState.hasFinalizar && !finalState.hasConfigurar);
 
-  log.info(`[${productId}] Final URL: ${finalUrl.slice(-50)}, success: ${isSuccess}`);
-  if (!isSuccess) {
-    log.warn(`[${productId}] Final page preview: ${finalText.substring(0, 150)}`);
-  }
+  log.info(`[${productId}] Final: url=${finalUrl.slice(-50)} editar=${finalState.hasEditar} finalizar=${finalState.hasFinalizar} success=${isSuccess}`);
 
-  return { ok: isSuccess, finalUrl, commValue, preview: finalText.substring(0, 100) };
+  return { ok: isSuccess, finalUrl };
 }
 
 // ── Launch authenticated Hotmart browser ─────────────────────────────────────
