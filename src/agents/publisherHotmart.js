@@ -965,6 +965,7 @@ async function createProduct(page, session, ebook) {
       const t = (b.textContent||'').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
       return t.includes('salvar') || t.includes('criar') || t.includes('proximo') ||
              t.includes('avanc') || t.includes('publicar') || t.includes('finaliz') ||
+             t.includes('continuar') ||
              t === 'next' || t === 'save';
     });
     if (b) {
