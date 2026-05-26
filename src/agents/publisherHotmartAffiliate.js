@@ -95,19 +95,11 @@ async function setupPage(page, session, jwt) {
   page.setDefaultTimeout(15000);
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
-  // Intercept SSO session monitor — return 200 so SPA doesn't trigger infinite re-auth loop.
-  // The Hotmart SPA checks sso.hotmart.com/rest/v1/session/monitor; if it returns non-200,
-  // it triggers OIDC re-auth which redirects and loses the page context repeatedly.
-  await page.setRequestInterception(true);
-  page.on('request', req => {
-    const url = req.url();
-    if (url.includes('sso.hotmart.com/rest/v1/session/monitor')) {
-      // Return 200 to make SPA think session is active → skips re-auth → loads micro-frontend
-      req.respond({ status: 200, contentType: 'application/json', body: '{"active":true}' });
-    } else {
-      req.continue();
-    }
-  });
+  // NOTE: We intentionally do NOT use setRequestInterception here.
+  // setRequestInterception causes net::ERR_ABORTED on Hotmart SPA navigations because
+  // Hotmart's server sends server-side 302 redirects that conflict with Puppeteer's
+  // interception layer. Instead, the poll loop below handles the OIDC redirect gracefully
+  // by waiting for the page to complete its OIDC flow and return to the product URL.
 
   await page.evaluateOnNewDocument(() => {
     const orig = String.prototype.replace;
@@ -221,9 +213,21 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     log.warn(`[${productId}] goto error: ${e.message.slice(0, 60)}`);
   }
 
-  // Poll for HOT-LOADING to clear (up to 60s; SSO monitor intercepted so no more re-auth loops)
-  log.info(`[${productId}] Waiting for SPA to render...`);
-  for (let i = 0; i < 60; i++) {
+  // Poll for SPA to fully render (up to 120s).
+  //
+  // The Hotmart SPA OIDC flow:
+  //   1. Navigate to affiliation-setup → SPA loads with HOT-LOADING spinner
+  //   2. ~42s: SPA fires sso.hotmart.com/session/monitor → server returns non-200
+  //   3. SPA triggers OIDC re-auth → page navigates to /oidc/authorize → /login → /callback
+  //   4. After OIDC completes (~20s), page returns to affiliation-setup URL
+  //   5. SPA continues loading → HOT-LOADING eventually clears → page ready
+  //
+  // Total expected time: ~60-90s for first product (full OIDC), ~20-30s for subsequent.
+  // During OIDC redirect phases, page.evaluate() throws "execution context was destroyed"
+  // or eval_timeout — we catch these and keep waiting.
+  log.info(`[${productId}] Waiting for SPA to render (up to 120s, handling OIDC redirect)...`);
+  let oauthSeen = false;
+  for (let i = 0; i < 120; i++) {
     await sleep(1000);
     const state = await Promise.race([
       page.evaluate(() => ({
@@ -233,21 +237,42 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
       })),
       new Promise((_, rej) => setTimeout(() => rej(new Error('eval_timeout')), 8000)),
     ]).catch(e => {
-      log.warn(`[${productId}] Poll eval error (${i}): ${e.message.slice(0, 40)}`);
-      return { url: page.url(), hotLoading: true, bodyLen: 0 };
+      // "execution context was destroyed" = page is navigating (OIDC redirect in progress)
+      // "eval_timeout" = page is loading or frame is in a broken state
+      return { url: page.url(), hotLoading: true, bodyLen: 0, navigating: true };
     });
 
-    // If HOT-LOADING cleared, we're done
+    const currentUrl = state.url || page.url();
+
+    // Detect OIDC redirect phase (page navigated away from product URL)
+    const atProductUrl = currentUrl.includes('affiliation-setup');
+    const atOAuth = currentUrl.includes('sso.hotmart.com') || currentUrl.includes('/auth/login') ||
+                    currentUrl.includes('oidc/authorize') || currentUrl.includes('callbackAuthorize');
+
+    if (atOAuth && !oauthSeen) {
+      oauthSeen = true;
+      log.info(`[${productId}] OIDC auth redirect detected at ${i+1}s — waiting for return...`);
+    }
+
+    if (!atProductUrl) {
+      // Still in OIDC flow or at login page — keep waiting
+      if (i % 10 === 9) {
+        log.info(`[${productId}] Waiting for OIDC to complete... ${i+1}s url=${currentUrl.slice(-60)}`);
+      }
+      continue;
+    }
+
+    // We're at the product URL
     if (!state.hotLoading && state.bodyLen > 2000) {
-      log.info(`[${productId}] Page ready after ${i + 1}s (body: ${state.bodyLen}b)`);
+      log.info(`[${productId}] Page ready after ${i + 1}s (body: ${state.bodyLen}b${oauthSeen ? ', after OIDC' : ''})`);
       break;
     }
 
     if (i % 5 === 4) {
-      log.info(`[${productId}] Still loading... ${i + 1}s url=${state.url.slice(-50)} hotLoading=${state.hotLoading} bodyLen=${state.bodyLen}`);
+      log.info(`[${productId}] Loading... ${i + 1}s hotLoading=${state.hotLoading} body=${state.bodyLen}`);
     }
-    if (i === 29) {
-      log.warn(`[${productId}] Page still loading after 30s — proceeding anyway`);
+    if (i === 119) {
+      log.warn(`[${productId}] Still loading after 120s — proceeding anyway`);
     }
   }
 
