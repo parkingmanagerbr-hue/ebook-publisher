@@ -95,11 +95,30 @@ async function setupPage(page, session, jwt) {
   page.setDefaultTimeout(15000);
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
-  // NOTE: We intentionally do NOT use setRequestInterception here.
-  // setRequestInterception causes net::ERR_ABORTED on Hotmart SPA navigations because
-  // Hotmart's server sends server-side 302 redirects that conflict with Puppeteer's
-  // interception layer. Instead, the poll loop below handles the OIDC redirect gracefully
-  // by waiting for the page to complete its OIDC flow and return to the product URL.
+  // Use CDP Fetch.enable to intercept the SSO session monitor request.
+  // The Hotmart SPA fires sso.hotmart.com/rest/v1/session/monitor every ~45s;
+  // if the server returns non-200, the SPA triggers OIDC re-auth in an infinite loop.
+  // CDP Fetch.enable only patches XHR/fetch requests (not document navigations),
+  // so it doesn't cause the net::ERR_ABORTED that setRequestInterception caused.
+  try {
+    const cdp = await page.target().createCDPSession();
+    await cdp.send('Fetch.enable', {
+      patterns: [{ urlPattern: '*sso.hotmart.com/rest/v1/session/monitor*' }]
+    });
+    cdp.on('Fetch.requestPaused', async (evt) => {
+      try {
+        await cdp.send('Fetch.fulfillRequest', {
+          requestId: evt.requestId,
+          responseCode: 200,
+          responseHeaders: [{ name: 'content-type', value: 'application/json' }],
+          body: Buffer.from('{"active":true,"cdp_intercepted":true}').toString('base64'),
+        });
+      } catch (_) {}
+    });
+    log.info('CDP SSO monitor intercept enabled');
+  } catch (e) {
+    log.warn('CDP Fetch setup failed (continuing without intercept): ' + e.message.slice(0, 60));
+  }
 
   await page.evaluateOnNewDocument(() => {
     const orig = String.prototype.replace;
