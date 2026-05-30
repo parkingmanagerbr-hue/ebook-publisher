@@ -1,14 +1,14 @@
 /**
  * CoverAgent — Capa profissional de e-book
  *
- * Estratégia: AI gera fundo visual (sem texto) → Canvas compõe título/subtítulo/preço por cima
+ * Estratégia: AI gera fundo visual (sem texto) → Canvas compõe título/subtítulo por cima.
  * Isso garante texto 100% correto independente do modelo de imagem.
  *
- * Ordem de background:
- *   1. Google Imagen 3  → melhor qualidade
- *   2. HuggingFace FLUX.1-dev → alta qualidade artística
- *   3. Pollinations.ai  → grátis sem chave
- *   4. Canvas puro      → fallback garantido (sem AI)
+ * Cadeia de providers (sem Anthropic/Claude):
+ *   0. Gemini Image (5 chaves, grátis) — PRIMARY
+ *   1. HTML template via Puppeteer     — fallback
+ *   2. imageGenAgent (Higgsfield/Pollinations/DALL-E) — fallback
+ *   3. Canvas puro                     — garantido, sem AI
  */
 const path = require('path');
 const fs   = require('fs');
@@ -18,16 +18,16 @@ const { ensureQualityCover } = require('./qualityAgent');
 const { createLogger }  = require('../core/logger');
 const logger = createLogger('coverAgent');
 
+// Gemini Image — Provider 0 (sem Claude, sem custo adicional)
+let geminiImage = null;
+try {
+  geminiImage = require('./geminiImageAgent');
+} catch (_) {}
+
 // Carrega coverAgentHTML com graceful fallback se puppeteer não estiver disponível
 let generateHTMLCover = null;
 try {
   generateHTMLCover = require('./coverAgentHTML').generateHTMLCover;
-} catch (_) {}
-
-// Claude Design — melhor qualidade, prioridade máxima
-let claudeDesign = null;
-try {
-  claudeDesign = require('./claudeDesignAgent');
 } catch (_) {}
 
 const COVERS_DIR = path.join(__dirname, '../../data/covers');
@@ -293,21 +293,23 @@ async function _generateCoverOnce(title, subtitle, topic) {
   fs.mkdirSync(COVERS_DIR, { recursive: true });
   const cat = detectCategory(topic);
 
-  // ── Provider 0: Claude Design — capa completa HTML/CSS gerada por Claude AI ──
-  if (claudeDesign?.isAvailable()) {
+  // ── Provider 0: Gemini Image — fundo AI + Canvas sobrepõe texto ──
+  if (geminiImage?.isAvailable()) {
     try {
-      logger.info('🤖 Claude Design — gerando capa HTML/CSS criativa...');
-      const claudePath = await claudeDesign.generateEbookCover({
-        title, subtitle, topic,
-        author: process.env.AUTHOR_NAME || 'GENIA Editorial',
-        outputDir: COVERS_DIR,
-      });
-      if (claudePath && fs.existsSync(claudePath)) {
-        logger.info(`✅ Capa Claude Design gerada: ${path.basename(claudePath)}`);
-        return claudePath;
-      }
+      logger.info('🌟 Gemini Image — gerando fundo para capa...');
+      const bgPrompt = buildBackgroundPrompt(title, topic, cat);
+      const tmpPath  = path.join(COVERS_DIR, `gemini_bg_${Date.now()}.tmp.png`);
+      await geminiImage.generateImage(bgPrompt, tmpPath);
+      const bgBuffer = fs.readFileSync(tmpPath);
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+      const filename = `cover_${Date.now()}.png`;
+      const outPath  = path.join(COVERS_DIR, filename);
+      const finalBuf = await compositeTextOnImage(bgBuffer, title, subtitle, topic, cat);
+      fs.writeFileSync(outPath, finalBuf);
+      logger.info(`✅ Capa Gemini Image gerada: ${filename} (${Math.round(finalBuf.length/1024)}KB)`);
+      return outPath;
     } catch (e) {
-      logger.warn(`⚠️ Claude Design falhou: ${e.message} — tentando próximo provider`);
+      logger.warn(`⚠️ Gemini Image falhou: ${e.message} — tentando próximo provider`);
     }
   }
 
@@ -325,7 +327,7 @@ async function _generateCoverOnce(title, subtitle, topic) {
     }
   }
 
-  // ── Provider 2+: AI Image Generation + canvas text overlay ──
+  // ── Provider 2+: imageGenAgent (Higgsfield/Pollinations/DALL-E) + canvas text overlay ──
   const filename = `cover_${Date.now()}.png`;
   const outPath  = path.join(COVERS_DIR, filename);
   const bgPrompt = buildBackgroundPrompt(title, topic, cat);
@@ -355,20 +357,24 @@ async function generateCover(title, subtitle, topic, category = null) {
   return ensureQualityCover(_generateCoverOnce, title, subtitle, topic);
 }
 
-// ─── ILUSTRAÇÃO DE CAPÍTULO via Claude Design ────────────────────────────────
+// ─── ILUSTRAÇÃO DE CAPÍTULO via Gemini Image ─────────────────────────────────
 async function generateChapterIllustration(chapterTitle, topic, outputDir) {
-  // Claude Design primeiro (qualidade superior)
-  if (claudeDesign?.isAvailable()) {
+  const prompt  = buildIllustrationPrompt(chapterTitle, topic);
+  const outPath = path.join(outputDir, `illustration_${Date.now()}.png`);
+
+  // Provider 0: Gemini Image
+  if (geminiImage?.isAvailable()) {
     try {
-      return await claudeDesign.generateChapterIllustration({ chapterTitle, topic, outputDir });
+      await geminiImage.generateImage(prompt, outPath);
+      logger.info(`✅ Ilustração Gemini Image: ${path.basename(outPath)}`);
+      return outPath;
     } catch (e) {
-      logger.warn(`⚠️ Claude Design ilustração falhou: ${e.message} — usando imageGenAgent`);
+      logger.warn(`⚠️ Gemini Image ilustração falhou: ${e.message} — usando imageGenAgent`);
     }
   }
-  // Fallback: imageGenAgent com prompt de ilustração
+
+  // Fallback: imageGenAgent (HuggingFace / Canvas)
   const { generateImage } = require('./imageGenAgent');
-  const prompt = buildIllustrationPrompt(chapterTitle, topic);
-  const outPath = path.join(outputDir, `illustration_${Date.now()}.png`);
   await generateImage({ prompt, width: 1200, height: 400, outputPath: outPath });
   return outPath;
 }

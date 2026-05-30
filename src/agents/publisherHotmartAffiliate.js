@@ -445,7 +445,13 @@ async function configureProductAffiliateUI(page, productId, opts = {}) {
     }
 
     if (!atProductUrl) {
-      // Still in OIDC flow or at login page — keep waiting
+      // Fast-fail: if OIDC was detected and still hasn't resolved after 25s,
+      // the session is fully expired (all 4 CDP intercept attempts exhausted + CAS
+      // login stuck). Don't wait the full 120s — skip immediately.
+      if (oauthSeen && i >= 24) {
+        log.warn(`[${productId}] OIDC not resolved after ${i+1}s — session expired, skipping`);
+        return { ok: false, reason: 'session_expired' };
+      }
       if (i % 10 === 9) {
         log.info(`[${productId}] Waiting for OIDC to complete... ${i+1}s url=${currentUrl.slice(-60)}`);
       }
@@ -1062,16 +1068,32 @@ async function setupAllAffiliates(opts = {}) {
   const results = [];
   let done = 0, skipped = 0, failed = 0;
 
+  let sessionExpired = false;
+
   try {
     for (const product of products) {
       const numericId = String(product.hotmart_product_id);
+
+      // If session was confirmed expired, fast-fail remaining products immediately
+      if (sessionExpired) {
+        results.push({ id: numericId, title: product.title, ok: false, reason: 'session_expired' });
+        failed++;
+        continue;
+      }
+
       try {
         const r = await configureProductAffiliateUI(page, numericId, { commission });
         results.push({ id: numericId, title: product.title, ...r });
         if (r.ok && r.skipped) skipped++;
         else if (r.ok) done++;
-        else failed++;
-        await sleep(2000);
+        else {
+          failed++;
+          if (r.reason === 'session_expired') {
+            sessionExpired = true;
+            log.warn('Session confirmed expired — marking remaining products without browser attempt');
+          }
+        }
+        if (!sessionExpired) await sleep(2000);
       } catch (e) {
         log.error(`Error on ${numericId}: ${e.message}`);
         results.push({ id: numericId, title: product.title, ok: false, error: e.message });
