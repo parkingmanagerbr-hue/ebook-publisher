@@ -293,10 +293,26 @@ async function _generateCoverOnce(title, subtitle, topic) {
   fs.mkdirSync(COVERS_DIR, { recursive: true });
   const cat = detectCategory(topic);
 
-  // ── Provider 0: Gemini Image — fundo AI + Canvas sobrepõe texto ──
+  // ── Provider 0: HTML/CSS viral via Puppeteer (PRIMÁRIO — melhor qualidade) ──
+  // Usa Gemini Text para gerar HTML com design viral, renderizado pelo browser
+  // Resultado: tipografia profissional, Google Fonts, layouts criativos por categoria
+  if (generateHTMLCover) {
+    try {
+      logger.info('🎨 Provider 0: Capa HTML viral (Gemini Text → Puppeteer)...');
+      const htmlPath = await generateHTMLCover(title, subtitle, topic, cat);
+      if (htmlPath && fs.existsSync(htmlPath)) {
+        logger.info(`✅ Capa HTML viral gerada: ${path.basename(htmlPath)}`);
+        return htmlPath;
+      }
+    } catch (e) {
+      logger.warn(`⚠️ Capa HTML viral falhou: ${e.message} — tentando Gemini Image`);
+    }
+  }
+
+  // ── Provider 1: Gemini Image — fundo AI + Canvas sobrepõe texto ──
   if (geminiImage?.isAvailable()) {
     try {
-      logger.info('🌟 Gemini Image — gerando fundo para capa...');
+      logger.info('🌟 Provider 1: Gemini Image — gerando fundo para capa...');
       const bgPrompt = buildBackgroundPrompt(title, topic, cat);
       const tmpPath  = path.join(COVERS_DIR, `gemini_bg_${Date.now()}.tmp.png`);
       await geminiImage.generateImage(bgPrompt, tmpPath);
@@ -309,21 +325,7 @@ async function _generateCoverOnce(title, subtitle, topic) {
       logger.info(`✅ Capa Gemini Image gerada: ${filename} (${Math.round(finalBuf.length/1024)}KB)`);
       return outPath;
     } catch (e) {
-      logger.warn(`⚠️ Gemini Image falhou: ${e.message} — tentando próximo provider`);
-    }
-  }
-
-  // ── Provider 1: HTML/CSS renderizado via Puppeteer (template) ──
-  if (generateHTMLCover) {
-    try {
-      logger.info('🎨 Tentando capa HTML template (Puppeteer)...');
-      const htmlPath = await generateHTMLCover(title, subtitle, topic, cat);
-      if (htmlPath && fs.existsSync(htmlPath)) {
-        logger.info(`✅ Capa HTML gerada: ${path.basename(htmlPath)}`);
-        return htmlPath;
-      }
-    } catch (e) {
-      logger.warn(`⚠️ Capa HTML falhou: ${e.message} — tentando AI de imagem`);
+      logger.warn(`⚠️ Gemini Image falhou: ${e.message} — tentando imageGenAgent`);
     }
   }
 

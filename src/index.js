@@ -12,6 +12,7 @@ const { generatePDF } = require('./agents/pdfAgent');
 const { publishToCakto } = require('./agents/publisherCakto');
 const { publishToHotmart } = require('./agents/publisherHotmart');
 const { runLearningCycle } = require('./agents/learningAgent');
+const { generateAudiobook, isAvailable: audiobookAvailable } = require('./agents/audiobookAgent');
 const db = require('./core/database');
 
 const logger = createLogger('orchestrator');
@@ -66,6 +67,18 @@ async function runPipeline(topicOverride = null, language = null) {
       status: 'ready'
     });
 
+    // ===== 4.5 AUDIOBOOK =====
+    let audiobookPath = null;
+    if (audiobookAvailable()) {
+      logger.info('\n🎙️ ETAPA 4.5: Gerando audiobook...');
+      try {
+        audiobookPath = await generateAudiobook(ebook, ebookId);
+        if (audiobookPath) logger.info(`✅ Audiobook gerado: ${audiobookPath}`);
+      } catch (err) {
+        logger.warn(`⚠️ Audiobook falhou (não crítico): ${err.message}`);
+      }
+    }
+
     // ===== 5. PUBLICAR =====
     if (process.env.AUTO_PUBLISH !== 'false') {
       logger.info('\n🚀 ETAPA 4: Publicando nas plataformas...');
@@ -119,6 +132,7 @@ async function runPipeline(topicOverride = null, language = null) {
     logger.info(`   📚 E-book: "${ebook.title}"`);
     logger.info(`   📄 PDF: ${pdfPath}`);
     logger.info(`   🖼️  Capa: ${coverPath}`);
+    logger.info(`   🎙️  Audiobook: ${audiobookPath || 'não gerado'}`);
     logger.info(`   💰 Preço: R$ 4,99`);
     logger.info('='.repeat(60));
 

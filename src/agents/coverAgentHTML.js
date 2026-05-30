@@ -1,17 +1,19 @@
 /**
- * coverAgentHTML — Capa profissional via HTML/CSS + Puppeteer
+ * coverAgentHTML — Capa viral via HTML/CSS + Puppeteer (v2 - Viral Designs)
  *
  * Fluxo:
- *   1. AI (Gemini/Groq/etc.) gera HTML completo com design de capa
- *   2. Puppeteer renderiza o HTML em 1600×2560px
+ *   1. Gemini gera HTML completo com design viral específico por categoria
+ *   2. Puppeteer renderiza o HTML em 1600×2560px (alta resolução KDP-ready)
  *   3. Screenshot PNG salvo como capa final
  *
- * Vantagens:
- *   - Texto 100% correto (renderizado pelo browser, não por difusão)
- *   - Design profissional via CSS/SVG/gradientes
- *   - Gratuito (usa modelos de texto já disponíveis)
- *   - Rápido (~3-5s total)
+ * Diferencial v2:
+ *   - Designs virais por categoria (não genéricos)
+ *   - Múltiplos estilos rotacionados (evita repetição)
+ *   - Google Fonts via @import (Puppeteer tem acesso à rede)
+ *   - Layouts dinâmicos: split, bold-type, magazine, cinematic
  */
+'use strict';
+
 const fs   = require('fs');
 const path = require('path');
 const { generate: generateText } = require('../core/aiClient');
@@ -20,54 +22,365 @@ const logger = createLogger('coverAgentHTML');
 
 const COVERS_DIR = path.join(__dirname, '../../data/covers');
 
-// ─── Paletas por categoria ────────────────────────────────────────────────────
-const THEMES = {
-  financas:        { bg1: '#0D1B2A', bg2: '#1B3A5C', accent: '#FFD700', badge: 'rgba(255,215,0,0.15)' },
-  tecnologia:      { bg1: '#070B1A', bg2: '#0A1628', accent: '#00D4FF', badge: 'rgba(0,212,255,0.12)' },
-  saude:           { bg1: '#052E1C', bg2: '#0A4A2E', accent: '#00E676', badge: 'rgba(0,230,118,0.12)' },
-  negocios:        { bg1: '#1A0A0A', bg2: '#2D1515', accent: '#FF5252', badge: 'rgba(255,82,82,0.12)' },
-  comportamento:   { bg1: '#1A0A2E', bg2: '#2D1045', accent: '#CE93D8', badge: 'rgba(206,147,216,0.12)' },
-  espiritualidade: { bg1: '#12001E', bg2: '#1E0030', accent: '#E040FB', badge: 'rgba(224,64,251,0.12)' },
-  relacionamentos: { bg1: '#1A0010', bg2: '#2D0018', accent: '#FF4081', badge: 'rgba(255,64,129,0.12)' },
-  culinaria:       { bg1: '#1A0A00', bg2: '#2D1800', accent: '#FFA726', badge: 'rgba(255,167,38,0.12)' },
-  educacao:        { bg1: '#001830', bg2: '#002845', accent: '#40C4FF', badge: 'rgba(64,196,255,0.12)' },
-  familia:         { bg1: '#1A0015', bg2: '#2D0025', accent: '#F48FB1', badge: 'rgba(244,143,177,0.12)' },
-  carreira:        { bg1: '#001520', bg2: '#002030', accent: '#80CBC4', badge: 'rgba(128,203,196,0.12)' },
-  default:         { bg1: '#0D1117', bg2: '#1A1A2E', accent: '#E94560', badge: 'rgba(233,69,96,0.12)'  },
+// ─── Estilos virais por categoria ────────────────────────────────────────────
+// Cada categoria tem 3 estilos possíveis, rotacionados aleatoriamente
+const VIRAL_STYLES = {
+
+  financas: [
+    // Estilo 1: Minimalista black/gold (Wall Street Journal style)
+    {
+      bg: 'linear-gradient(135deg, #0A0A0A 0%, #1A1A1A 50%, #0D0D0D 100%)',
+      accent: '#C9A84C',
+      textColor: '#FFFFFF',
+      secondaryColor: '#C9A84C',
+      style: 'minimalist-gold',
+      description: 'Elegante preto e ouro, estilo Wall Street — transmite autoridade financeira',
+      elements: 'diagonal gold lines, subtle money symbols, clean typography, BESTSELLER badge top-right',
+    },
+    // Estilo 2: Vibrant green (growth/money)
+    {
+      bg: 'linear-gradient(180deg, #001A0A 0%, #003D1A 40%, #001A0A 100%)',
+      accent: '#00FF88',
+      textColor: '#FFFFFF',
+      secondaryColor: '#00CC6A',
+      style: 'growth-green',
+      description: 'Verde crescimento com contraste forte — transmite prosperidade',
+      elements: 'upward arrow graphics, stock chart line decoration, bold uppercase typography',
+    },
+    // Estilo 3: Red urgency (debt/problem solving)
+    {
+      bg: 'linear-gradient(160deg, #1A0000 0%, #3D0000 50%, #1A0000 100%)',
+      accent: '#FF3333',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FF6666',
+      style: 'urgency-red',
+      description: 'Vermelho urgência — para tópicos de sair de dívidas, emergências financeiras',
+      elements: 'warning symbols, bold impact typography, breaking news style layout',
+    },
+  ],
+
+  tecnologia: [
+    // Estilo 1: Cyberpunk neon
+    {
+      bg: 'linear-gradient(135deg, #050010 0%, #0A0025 50%, #000518 100%)',
+      accent: '#00FFFF',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FF00FF',
+      style: 'cyberpunk-neon',
+      description: 'Cyberpunk com neon cyan e magenta — viral no nicho de IA e tecnologia',
+      elements: 'circuit board SVG patterns, glowing neon borders, HUD-style text labels, matrix dots',
+    },
+    // Estilo 2: Clean tech (Apple-style)
+    {
+      bg: 'linear-gradient(180deg, #FFFFFF 0%, #F0F0F5 100%)',
+      accent: '#0071E3',
+      textColor: '#1D1D1F',
+      secondaryColor: '#0071E3',
+      style: 'clean-tech',
+      description: 'Clean branco estilo Apple — premium e confiável para guias de tecnologia',
+      elements: 'clean geometric shapes, minimal shadows, San Francisco-style typography',
+    },
+    // Estilo 3: Dark futuristic
+    {
+      bg: 'linear-gradient(180deg, #050505 0%, #0D0D1A 60%, #050510 100%)',
+      accent: '#7B2FFF',
+      textColor: '#FFFFFF',
+      secondaryColor: '#00D4FF',
+      style: 'dark-future',
+      description: 'Escuro futurista roxo/azul — transmite inovação e futuro',
+      elements: 'abstract tech shapes, gradient glow effects, bold modern sans-serif',
+    },
+  ],
+
+  saude: [
+    // Estilo 1: Fresh green (health/wellness)
+    {
+      bg: 'linear-gradient(160deg, #003320 0%, #005C38 50%, #003320 100%)',
+      accent: '#00E676',
+      textColor: '#FFFFFF',
+      secondaryColor: '#A5D6A7',
+      style: 'fresh-wellness',
+      description: 'Verde fresco wellness — transmite saúde, natureza, transformação',
+      elements: 'leaf/nature SVG decorations, clean circular badges, before/after potential',
+    },
+    // Estilo 2: Energy orange/yellow (fitness)
+    {
+      bg: 'linear-gradient(135deg, #1A0500 0%, #3D1000 50%, #1A0500 100%)',
+      accent: '#FF6D00',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FFD600',
+      style: 'energy-fitness',
+      description: 'Laranja energia fitness — ideal para emagrecimento e exercícios',
+      elements: 'energy bolt symbols, dynamic diagonal lines, bold italic typography',
+    },
+    // Estilo 3: Medical white/blue (credibility)
+    {
+      bg: 'linear-gradient(180deg, #F8FEFF 0%, #E8F4FF 100%)',
+      accent: '#0077B6',
+      textColor: '#023047',
+      secondaryColor: '#0096C7',
+      style: 'medical-trust',
+      description: 'Azul médico confiável — para guias de saúde baseados em ciência',
+      elements: 'clean blue design, medical cross symbol, professional badge',
+    },
+  ],
+
+  negocios: [
+    // Estilo 1: Bold corporate (authority)
+    {
+      bg: 'linear-gradient(160deg, #050505 0%, #1A1A1A 100%)',
+      accent: '#E63946',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FF6B6B',
+      style: 'bold-authority',
+      description: 'Preto e vermelho autoridade corporativa — estilo Harvard Business Review',
+      elements: 'bold geometric shapes, strong red accents, business chart decoration',
+    },
+    // Estilo 2: Blue ocean strategy
+    {
+      bg: 'linear-gradient(180deg, #002A4E 0%, #00529B 50%, #002A4E 100%)',
+      accent: '#00B4D8',
+      textColor: '#FFFFFF',
+      secondaryColor: '#90E0EF',
+      style: 'blue-ocean',
+      description: 'Azul oceano confiável — para estratégia, liderança, gestão',
+      elements: 'wave pattern, horizon line, professional badge layout',
+    },
+    // Estilo 3: Digital gold (online business)
+    {
+      bg: 'linear-gradient(135deg, #0D0D0D 0%, #1A1500 50%, #0D0D0D 100%)',
+      accent: '#FFD700',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FFA500',
+      style: 'digital-gold',
+      description: 'Ouro digital — para renda online, dropshipping, negócios digitais',
+      elements: 'digital/money symbols, gold gradient typography, success badges',
+    },
+  ],
+
+  comportamento: [
+    {
+      bg: 'linear-gradient(160deg, #1A0030 0%, #35006B 50%, #1A0030 100%)',
+      accent: '#E040FB',
+      textColor: '#FFFFFF',
+      secondaryColor: '#CE93D8',
+      style: 'mindset-purple',
+      description: 'Roxo mindset — para hábitos, desenvolvimento pessoal, psicologia',
+      elements: 'brain/mind SVG shapes, neuron pattern decoration, inspirational layout',
+    },
+    {
+      bg: 'linear-gradient(180deg, #0A1628 0%, #1A2C4E 50%, #0A1628 100%)',
+      accent: '#FFC300',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FFE066',
+      style: 'achievement-navy',
+      description: 'Azul marinho + ouro conquista — estilo James Clear, Atomic Habits',
+      elements: 'minimal geometric, strong typography hierarchy, bold numbers/stats',
+    },
+    {
+      bg: 'linear-gradient(135deg, #F5F5F5 0%, #EBEBEB 100%)',
+      accent: '#FF5722',
+      textColor: '#1A1A1A',
+      secondaryColor: '#FF8A65',
+      style: 'modern-minimal',
+      description: 'Branco moderno minimalista — para autoajuda clean e contemporânea',
+      elements: 'clean white with orange accent, minimal decoration, impact typography',
+    },
+  ],
+
+  espiritualidade: [
+    {
+      bg: 'linear-gradient(180deg, #0A0015 0%, #1A0030 40%, #0D0020 100%)',
+      accent: '#FFD700',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FFF3B0',
+      style: 'divine-gold',
+      description: 'Divino roxo e ouro — para livros cristãos, espiritualidade, devocionais',
+      elements: 'cross/dove SVG, golden rays of light, sacred geometry decoration',
+    },
+    {
+      bg: 'radial-gradient(ellipse at center, #1A0030 0%, #05000F 70%)',
+      accent: '#9B59B6',
+      textColor: '#FFFFFF',
+      secondaryColor: '#DDA0DD',
+      style: 'mystical-cosmos',
+      description: 'Cosmos místico — para espiritualidade new age, meditação, universo',
+      elements: 'star patterns, celestial circles, ethereal glow effects',
+    },
+    {
+      bg: 'linear-gradient(180deg, #FEFCE8 0%, #FEF9C3 100%)',
+      accent: '#B45309',
+      textColor: '#1C1917',
+      secondaryColor: '#D97706',
+      style: 'warm-faith',
+      description: 'Quente e acolhedor — para livros de fé, esperança, família cristã',
+      elements: 'warm light rays, simple cross, scripture-like typography',
+    },
+  ],
+
+  relacionamentos: [
+    {
+      bg: 'linear-gradient(160deg, #1A0010 0%, #3D0025 50%, #1A0010 100%)',
+      accent: '#FF4081',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FF80AB',
+      style: 'passion-rose',
+      description: 'Rosa paixão — para relacionamentos, amor, sedução',
+      elements: 'rose/heart SVG decoration, flowing curves, romantic typography',
+    },
+    {
+      bg: 'linear-gradient(180deg, #1A1A2E 0%, #2D2D4E 50%, #1A1A2E 100%)',
+      accent: '#FF6B9D',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FFB3CC',
+      style: 'couple-blue',
+      description: 'Azul noite + rosa — para comunicação, terapia de casal, divórcio',
+      elements: 'two interlocking circles (Venn), communication symbols',
+    },
+  ],
+
+  culinaria: [
+    {
+      bg: 'linear-gradient(135deg, #1A0800 0%, #3D1500 50%, #1A0800 100%)',
+      accent: '#FF8C00',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FFC04D',
+      style: 'gourmet-orange',
+      description: 'Laranja gourmet quente — para receitas, culinária, gastronomia',
+      elements: 'food/spice SVG icons, warm bokeh circles, chef typography',
+    },
+    {
+      bg: 'linear-gradient(180deg, #FAFAF7 0%, #F0EFE7 100%)',
+      accent: '#2D6A4F',
+      textColor: '#1B1B1B',
+      secondaryColor: '#40916C',
+      style: 'clean-healthy-food',
+      description: 'Branco natural verde — para alimentação saudável, vegano, light',
+      elements: 'leaf decoration, clean minimal layout, fresh food aesthetic',
+    },
+  ],
+
+  educacao: [
+    {
+      bg: 'linear-gradient(160deg, #001830 0%, #003060 50%, #001830 100%)',
+      accent: '#40C4FF',
+      textColor: '#FFFFFF',
+      secondaryColor: '#B3E5FC',
+      style: 'knowledge-blue',
+      description: 'Azul conhecimento — para educação, estudo, concursos',
+      elements: 'book/knowledge symbols, star/rating elements, achievement badges',
+    },
+    {
+      bg: 'linear-gradient(135deg, #1A0A00 0%, #3D2000 100%)',
+      accent: '#FF8F00',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FFD54F',
+      style: 'smart-amber',
+      description: 'Âmbar inteligência — para métodos de estudo, produtividade',
+      elements: 'brain/lightbulb SVG, speed lines, bold achievement typography',
+    },
+  ],
+
+  carreira: [
+    {
+      bg: 'linear-gradient(160deg, #001520 0%, #003040 50%, #001520 100%)',
+      accent: '#00BCD4',
+      textColor: '#FFFFFF',
+      secondaryColor: '#80DEEA',
+      style: 'career-teal',
+      description: 'Azul teal profissional — para carreira, emprego, freelance',
+      elements: 'upward career ladder, professional badge, clean corporate aesthetic',
+    },
+    {
+      bg: 'linear-gradient(135deg, #F8F9FA 0%, #E9ECEF 100%)',
+      accent: '#212529',
+      textColor: '#212529',
+      secondaryColor: '#495057',
+      style: 'linkedin-white',
+      description: 'Branco LinkedIn profissional — para vagas, currículo, entrevistas',
+      elements: 'clean white, dark typography, professional minimal layout',
+    },
+  ],
+
+  default: [
+    {
+      bg: 'linear-gradient(160deg, #0D0D1A 0%, #1A1A35 50%, #0D0D1A 100%)',
+      accent: '#E94560',
+      textColor: '#FFFFFF',
+      secondaryColor: '#FF6B8A',
+      style: 'signature-red',
+      description: 'Azul escuro e vermelho — design padrão impactante',
+      elements: 'geometric shapes, bold typography, accent line decorations',
+    },
+  ],
 };
 
-// ─── Prompt para o LLM gerar o HTML da capa ──────────────────────────────────
-function buildHTMLPrompt(title, subtitle, topic, category) {
-  const theme = THEMES[category] || THEMES.default;
-  return `You are a professional book cover designer. Create a stunning HTML ebook cover page.
+// ─── Escolher estilo aleatório para a categoria ───────────────────────────────
+let _styleCounter = 0;
+function pickStyle(category) {
+  const styles = VIRAL_STYLES[category] || VIRAL_STYLES.default;
+  const style = styles[_styleCounter % styles.length];
+  _styleCounter++;
+  return style;
+}
 
-REQUIREMENTS:
-- Canvas: exactly 1600x2560px (portrait)
-- Background: dark gradient from ${theme.bg1} to ${theme.bg2}, plus 2-3 decorative geometric shapes (circles, lines, diagonal strips) in accent color ${theme.accent} with 8-15% opacity
-- Top badge "VELOXIS EDITORIAL" in accent color ${theme.accent} with small capsule border
-- Large centered title: "${title}" — use white text, bold, 90-110px, wrapped if needed (max 3 lines)
-- Accent horizontal separator bar (color ${theme.accent}, 400px wide, 5px tall)
-- Subtitle: "${subtitle || ''}" — accent color ${theme.accent}, 48px, italic, below separator
-- 3 benefit badges at bottom: "✓ Guia Completo", "✓ Linguagem Clara", "✓ Resultados Reais" — small capsule style with ${theme.badge} background and ${theme.accent} border
-- Author line "Veloxis Editorial" in light gray at very bottom
-- Accent gradient stripe (3px) at very top and very bottom of page
+// ─── PROMPT VIRAL para geração de HTML ───────────────────────────────────────
+function buildViralHTMLPrompt(title, subtitle, topic, category) {
+  const style = pickStyle(category);
+
+  return `You are a world-class book cover designer for bestselling books on Amazon KDP and Hotmart. Your covers go viral and drive massive sales.
+
+Create a VIRAL, HIGH-QUALITY HTML/CSS e-book cover that will stand out in a crowded marketplace.
+
+DESIGN STYLE: "${style.style}" — ${style.description}
+BACKGROUND: ${style.bg}
+ACCENT COLOR: ${style.accent}
+TEXT COLOR: ${style.textColor}
+SECONDARY COLOR: ${style.secondaryColor}
+
+BOOK DETAILS:
+- Title: "${title}"
+- Subtitle: "${subtitle || ''}"
+- Topic/Niche: "${topic}"
+- Target audience: Brazilian digital market (Hotmart, Amazon KDP)
+- Price point: $4.99 — needs to look PREMIUM
+
+DESIGN REQUIREMENTS (make it VIRAL not generic):
+1. Canvas: exactly 1600px × 2560px, no scroll, overflow:hidden
+2. Use Google Fonts: @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&family=Playfair+Display:wght@700;900&family=Oswald:wght@700&family=Inter:wght@300;400;700;900&display=swap')
+3. VISUAL ELEMENTS (${style.elements}) — use CSS shapes, gradients, SVG inline
+4. Strong visual hierarchy: The title must be the HERO element, largest and most impactful
+5. Include a "BESTSELLER" or category badge in top-right corner
+6. Include author "Veloxis Editorial" at bottom
+7. 3 benefit bullets near bottom (short, impactful — translate to Portuguese if needed)
+8. Use TEXT-SHADOW and GLOW effects for dramatic impact
+9. Use TRANSFORMS and CLIP-PATH for dynamic, non-boring layouts
+10. Make it feel like a book that costs R$200, not a free PDF
+
+LAYOUT IDEAS (choose the best for this style):
+- SPLIT: Color block on left, title on right
+- FULL-BLEED: Title as hero over full background with visual texture
+- MAGAZINE: Editorial layout with strong grid
+- BOLD-TYPE: Typography IS the design (huge letters as background pattern)
+- CINEMATIC: Wide color stripe at top/bottom, content in center
 
 CRITICAL RULES:
-- Output ONLY raw HTML starting with <!DOCTYPE html> — NO markdown, NO explanation, NO code blocks
-- Use only CSS (no JS, no external fonts needed — use system fonts: 'Georgia', serif for title, sans-serif for rest)
-- Everything must be position:absolute or position:fixed within a 1600x2560 container
-- The design must look like a premium ebook/book cover, dark and elegant
+- Output ONLY raw HTML from <!DOCTYPE html> to </html> — NO markdown, NO code blocks, NO explanation
+- All CSS inline in <style> tag in <head>
+- NO JavaScript
+- NO external images (use CSS gradients, SVG inline, CSS shapes)
+- body: margin:0; padding:0; overflow:hidden; width:1600px; height:2560px
+- ALL elements inside a div with width:1600px; height:2560px; position:relative; overflow:hidden
+- NEVER repeat designs — be creative and unique
 
-Topic context: "${topic}"`;
+Create a cover so stunning it makes people click "Buy Now" immediately.`;
 }
 
 // ─── Gerar HTML da capa via AI ────────────────────────────────────────────────
 async function generateCoverHTML(title, subtitle, topic, category) {
-  const prompt = buildHTMLPrompt(title, subtitle, topic, category);
-  logger.info('🤖 Gerando HTML da capa via AI...');
-  const result = await generateText(prompt, '', { maxTokens: 4000 });
-  // generate() retorna { text, provider, elapsed } — extrair o texto
-  // Usar String() para garantir que sempre seja string independente do tipo retornado
+  const prompt = buildViralHTMLPrompt(title, subtitle, topic, category);
+  logger.info(`🎨 Gerando HTML viral para capa "${title}" [estilo: ${(VIRAL_STYLES[category] || VIRAL_STYLES.default)[0].style}]`);
+  const result = await generateText(prompt, '', { maxTokens: 6000 });
   const raw = typeof result === 'string' ? result : (result?.text ?? '');
   const html = typeof raw === 'string' ? raw : String(raw || '');
 
@@ -75,7 +388,7 @@ async function generateCoverHTML(title, subtitle, topic, category) {
   return html
     .replace(/^```html\n?/i, '')
     .replace(/^```\n?/, '')
-    .replace(/\n?```$/, '')
+    .replace(/\n?```$/m, '')
     .trim();
 }
 
@@ -85,16 +398,24 @@ async function renderHTMLtoPNG(html, outputPath) {
 
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--font-render-hinting=none',
+    ],
   });
 
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1600, height: 2560, deviceScaleFactor: 1 });
-    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 15000 });
 
-    // Aguardar renderização completa
-    await new Promise(r => setTimeout(r, 500));
+    // Carregar HTML — waitUntil networkidle2 para aguardar Google Fonts
+    await page.setContent(html, { waitUntil: 'networkidle2', timeout: 20000 });
+
+    // Aguardar renderização completa das fontes
+    await new Promise(r => setTimeout(r, 1200));
 
     const buf = await page.screenshot({
       type: 'png',
@@ -112,7 +433,7 @@ async function renderHTMLtoPNG(html, outputPath) {
 
 // ─── FUNÇÃO PRINCIPAL ─────────────────────────────────────────────────────────
 async function generateHTMLCover(title, subtitle, topic, category) {
-  logger.info(`🎨 coverAgentHTML: Gerando capa HTML para "${title}"`);
+  logger.info(`🚀 coverAgentHTML v2 VIRAL: "${title}" [cat=${category}]`);
   const t0 = Date.now();
 
   const filename = `cover_html_${Date.now()}.png`;
@@ -121,14 +442,16 @@ async function generateHTMLCover(title, subtitle, topic, category) {
 
   const html = await generateCoverHTML(title, subtitle, topic, category);
 
-  if (!html || !html.includes('<html') && !html.includes('<!DOCTYPE')) {
+  if (!html || (!html.includes('<html') && !html.includes('<!DOCTYPE'))) {
     throw new Error('AI não gerou HTML válido para a capa');
   }
 
   const buf = await renderHTMLtoPNG(html, outPath);
-  logger.info(`✅ coverAgentHTML: Capa gerada em ${Date.now() - t0}ms (${Math.round(buf.length / 1024)}KB)`);
+  const elapsed = Date.now() - t0;
+  const sizeKb = Math.round(buf.length / 1024);
+  logger.info(`✅ Capa viral gerada em ${elapsed}ms — ${sizeKb}KB`);
 
   return outPath;
 }
 
-module.exports = { generateHTMLCover };
+module.exports = { generateHTMLCover, pickStyle, VIRAL_STYLES };
