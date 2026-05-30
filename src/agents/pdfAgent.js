@@ -12,12 +12,12 @@ const { detectCategory, buildIllustrationPrompt, generateChapterIllustration: co
 const { ensureQualityIllustration, validateEbook, validatePDF } = require('./qualityAgent');
 const logger = createLogger('pdfAgent');
 
-// Gerar ilustração para um capítulo — usa coverAgent (claudeDesign primeiro, depois imageGenAgent)
+// Gerar ilustração para um capítulo — usa coverAgent (Gemini Image primeiro, depois imageGenAgent)
 async function generateChapterIllustration(chapterTitle, topic, category) {
   const outputDir = os.tmpdir();
   try {
-    // coverAgent.generateChapterIllustration usa claudeDesignAgent primeiro (rápido, alta qualidade)
-    // e cai em imageGenAgent (Pollinations) como fallback
+    // coverAgent.generateChapterIllustration usa geminiImageAgent (grátis, 5 chaves)
+    // e cai em imageGenAgent como fallback
     const result = await coverAgentIllustration(chapterTitle, topic, outputDir);
     if (result && fs.existsSync(result)) return result;
   } catch (e) {

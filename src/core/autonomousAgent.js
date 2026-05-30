@@ -172,7 +172,7 @@ async function publishReadyEbooks() {
 async function runOneCycle(topicOverride = null) {
   // Hot-reload generation agents so patched files take effect immediately
   ['../index','../agents/pdfAgent','../agents/coverAgent','../agents/imageGenAgent',
-   '../agents/writerAgent','../agents/claudeDesignAgent'].forEach(m => {
+   '../agents/writerAgent','../agents/geminiImageAgent'].forEach(m => {
     try { delete require.cache[require.resolve(m)]; } catch {}
   });
   const { runPipeline } = require('../index');
