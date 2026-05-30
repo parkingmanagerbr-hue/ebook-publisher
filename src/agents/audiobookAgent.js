@@ -26,6 +26,7 @@ const ELEVENLABS_KEYS = [
   process.env.ELEVENLABS_API_KEY,
   process.env.ELEVENLABS_API_KEY_2,
   process.env.ELEVENLABS_API_KEY_3,
+  process.env.ELEVENLABS_API_KEY_4,
 ].filter(Boolean);
 
 const VOICE_ID  = process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB'; // Adam
