@@ -30,6 +30,67 @@ const AUTHOR_NAME     = process.env.KDP_AUTHOR_NAME || process.env.AUTHOR_NAME |
 const KDP_EMAIL       = process.env.KDP_EMAIL    || '';
 const KDP_PASSWORD    = process.env.KDP_PASSWORD || '';
 const DEFAULT_PRICE   = parseFloat(process.env.EBOOK_PRICE || '4.99');
+const OTP_FILE        = '/app/data/amazon_otp.txt';
+
+// ── Amazon auth-challenge URL detection ───────────────────────────────────────
+function isAuthUrl(url) {
+  const authPatterns = [
+    'signin', 'ap/signin', '/ap/cvf', 'ap/mfa', 'ap/oa',
+    'forgotpassword', 'reverification', 'ap/challenge',
+    'signin/identifier', 'account/login',
+  ];
+  return authPatterns.some(p => url.includes(p));
+}
+
+// ── OTP wait (polls OTP_FILE for up to maxMs) ─────────────────────────────────
+async function waitForOtp(page, maxMs = 300_000) {
+  // Write WAITING flag
+  try {
+    fs.mkdirSync(path.dirname(OTP_FILE), { recursive: true });
+    fs.writeFileSync(OTP_FILE, 'WAITING');
+  } catch {}
+  log.info(`⏳ Amazon pedindo código OTP — aguardando até ${maxMs/60000} min`);
+  log.info(`   Envie o código via: curl -X POST http://localhost:3100/api/amazon-otp -H "Content-Type: application/json" -d '{"code":"XXXXXX"}'`);
+  log.info(`   Ou escreva no arquivo: echo XXXXXX > /app/data/amazon_otp.txt`);
+
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    await sleep(3000);
+    try {
+      const txt = fs.readFileSync(OTP_FILE, 'utf8').trim();
+      if (/^\d{4,8}$/.test(txt)) {
+        log.info('✅ Código OTP recebido: ' + txt);
+        fs.writeFileSync(OTP_FILE, 'USED:' + txt); // mark used
+
+        // Find OTP/CVF input on current page and type code
+        const otpInput = await page.$(
+          'input[name="otpCode"], input[id*="otp" i], input[id*="cvf" i], input[id*="code" i], input[name="code"], input[type="number"]'
+        ).catch(() => null);
+        if (otpInput) {
+          await otpInput.click({ clickCount: 3 });
+          await sleep(200);
+          await otpInput.type(txt, { delay: 50 });
+          await sleep(500);
+          await screenshot(page, 'otp_filled');
+          // Submit
+          await page.evaluate(() => {
+            const btn = document.querySelector('input[type="submit"], button[type="submit"], .a-button-primary input');
+            if (btn) btn.click();
+          });
+          await sleep(6000);
+          await screenshot(page, 'otp_submitted');
+          return txt;
+        } else {
+          log.warn('OTP input não encontrado na página após receber código');
+          await screenshot(page, 'otp_no_input');
+        }
+        return txt;
+      }
+    } catch {}
+  }
+  log.warn('Timeout aguardando OTP (5 min)');
+  return null;
+}
 
 // ── Session ──────────────────────────────────────────────────────────────────
 function loadSession() {
@@ -224,21 +285,35 @@ async function doSignin(page) {
 
   await screenshot(page, 'signin_after_password');
 
-  // Check for OTP / MFA
-  const otp = await page.$('input[name="otpCode"],input[id*="otp" i],input[id*="mfa" i]').catch(() => null);
-  if (otp) {
-    log.warn('Amazon pedindo OTP/MFA — não é possível continuar automaticamente');
-    return false;
+  // Check for OTP / MFA / CVF challenge
+  const postPasswordUrl = page.url();
+  const hasChallengeInput = await page.$(
+    'input[name="otpCode"], input[id*="otp" i], input[id*="mfa" i], input[id*="cvf" i], input[id*="code" i], input[name="code"]'
+  ).catch(() => null);
+
+  if (hasChallengeInput || isAuthUrl(postPasswordUrl)) {
+    log.info('Amazon OTP/CVF challenge — aguardando código. URL: ' + postPasswordUrl.slice(0, 80));
+    await screenshot(page, 'otp_challenge');
+    const code = await waitForOtp(page);
+    if (!code) {
+      log.warn('OTP não recebido em tempo hábil');
+      return false;
+    }
+    // After OTP, wait for navigation to non-auth page
+    await sleep(3000);
+    const postOtpUrl = page.url();
+    if (isAuthUrl(postOtpUrl)) {
+      log.warn('Ainda em auth após OTP: ' + postOtpUrl.slice(0, 80));
+      return false;
+    }
+    log.info('OTP aceito! URL: ' + postOtpUrl.slice(0, 80));
+    await saveSession(page);
+    return true;
   }
 
   // Check if we're now logged in
   const finalUrl = page.url();
-  // CVF (/ap/cvf/) = Amazon verification challenge (OTP sent by email) — not signed in yet
-  const isCvf    = finalUrl.includes('/ap/cvf');
-  const isSignedIn = !finalUrl.includes('signin') && !finalUrl.includes('ap/signin') && !isCvf;
-  if (isCvf) {
-    log.warn('Amazon CVF challenge (verificação por email) — não é possível continuar automaticamente. URL: ' + finalUrl.slice(0, 80));
-  }
+  const isSignedIn = !isAuthUrl(finalUrl);
   log.info('Signin resultado: ' + (isSignedIn ? 'OK' : 'FALHOU') + ' url=' + finalUrl.slice(0, 80));
 
   if (isSignedIn) {
@@ -459,24 +534,49 @@ async function publishToAmazon(ebook) {
     await sleep(4000);
     currentUrl = page.url();
 
-    // Handle step-up auth if redirected to signin or CVF
-    if (currentUrl.includes('signin') || currentUrl.includes('ap/signin') || currentUrl.includes('/ap/cvf')) {
-      log.info('Step-up auth necessário para criar título — fazendo login...');
-      const ok = await doSignin(page);
-      if (!ok) {
-        await screenshot(page, 'signin_failed');
-        await browser.close();
-        return { success: false, error: 'Step-up auth falhou (CVF/OTP — requer verificação manual)', platform: 'amazon' };
+    // Handle step-up auth if redirected to signin, CVF, OTP, or reverification
+    if (isAuthUrl(currentUrl)) {
+      log.info('Step-up auth necessário para criar título. URL: ' + currentUrl.slice(0, 80));
+      // Check for OTP/CVF input immediately
+      const hasCvfInput = await page.$(
+        'input[name="otpCode"], input[id*="otp" i], input[id*="cvf" i], input[id*="code" i], input[name="code"]'
+      ).catch(() => null);
+      if (hasCvfInput || currentUrl.includes('/ap/cvf') || currentUrl.includes('reverification')) {
+        log.info('CVF/OTP challenge direto — aguardando código do usuário...');
+        await screenshot(page, 'stepup_cvf');
+        const code = await waitForOtp(page);
+        if (!code) {
+          await browser.close();
+          return { success: false, error: 'CVF/OTP timeout — envie código via /api/amazon-otp', platform: 'amazon' };
+        }
+        await sleep(4000);
+        currentUrl = page.url();
+        if (isAuthUrl(currentUrl)) {
+          // Try full signin
+          const ok = await doSignin(page);
+          if (!ok) {
+            await browser.close();
+            return { success: false, error: 'Step-up auth falhou após OTP', platform: 'amazon' };
+          }
+        }
+      } else {
+        // Normal signin page
+        const ok = await doSignin(page);
+        if (!ok) {
+          await screenshot(page, 'signin_failed');
+          await browser.close();
+          return { success: false, error: 'Step-up auth falhou (CVF/OTP — envie código via /api/amazon-otp)', platform: 'amazon' };
+        }
       }
       // Navigate back to new title after signin
       await page.goto(NEW_TITLE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
       await sleep(4000);
       currentUrl = page.url();
-      if (currentUrl.includes('signin') || currentUrl.includes('/ap/cvf')) {
-        log.warn('Ainda redirecionando após login (CVF challenge persistente)');
+      if (isAuthUrl(currentUrl)) {
+        log.warn('Ainda em auth após signin: ' + currentUrl.slice(0, 80));
         await screenshot(page, 'still_signin');
         await browser.close();
-        return { success: false, error: 'Amazon CVF challenge persistente — VPS IP não verificado', platform: 'amazon' };
+        return { success: false, error: 'Amazon auth persistente — envie código via /api/amazon-otp', platform: 'amazon' };
       }
     }
     log.info('Etapa 1 URL: ' + currentUrl.slice(0, 80));

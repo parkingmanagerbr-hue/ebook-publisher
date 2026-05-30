@@ -14,6 +14,8 @@
  *   AUTO_PUBLISH_HOTMART       — idem
  *   AUTO_PUBLISH_AMAZON        — idem
  *   AGENT_PAUSED               — 'true' para iniciar em modo pausado
+ *   EBOOK_LANGUAGES            — idiomas separados por vírgula (default: pt-BR)
+ *                                 ex: pt-BR,en,es,fr,de,it,pl,nl,ja,zh
  */
 const path = require('path');
 const { createLogger } = require('./logger');
@@ -37,6 +39,15 @@ const state = {
 
 let _loopTimer = null;
 let _running   = false;
+
+// ─── Language rotation ────────────────────────────────────────────────────────
+const ALL_LANGUAGES = (process.env.EBOOK_LANGUAGES || 'pt-BR').split(',').map(l => l.trim()).filter(Boolean);
+let _langIndex = 0;
+function getNextLanguage() {
+  const lang = ALL_LANGUAGES[_langIndex % ALL_LANGUAGES.length];
+  _langIndex++;
+  return lang;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function getIntervalMs() {
@@ -196,13 +207,16 @@ async function runOneCycle(topicOverride = null) {
     }
   }
 
-  setState({ currentTopic: topic, currentStep: 'writing' });
+  // ── Selecionar idioma ──
+  const language = getNextLanguage();
+
+  setState({ currentTopic: topic, currentStep: 'writing', currentLanguage: language });
   logger.info(`\n${'═'.repeat(60)}`);
-  logger.info(`🚀 NOVO CICLO — Tópico: "${topic}"`);
+  logger.info(`🚀 NOVO CICLO — Tópico: "${topic}" [idioma=${language}]`);
   logger.info(`${'═'.repeat(60)}`);
 
   // ── Pipeline de geração ──
-  const result = await runPipeline(topic);
+  const result = await runPipeline(topic, language);
 
   if (!result.success) {
     setState({ lastError: result.error, currentStep: null });
@@ -308,6 +322,7 @@ async function loop() {
   logger.info('🤖 Agente autônomo iniciado — modo 24/7');
   logger.info(`   Intervalo: ${getIntervalMs() / 60000} minutos entre gerações`);
   logger.info(`   Publicação automática: Cakto=${shouldPublishTo('CAKTO')} | Hotmart=${shouldPublishTo('HOTMART')} | Amazon=${shouldPublishTo('AMAZON')}`);
+  logger.info(`   Idiomas: ${ALL_LANGUAGES.join(' | ')} (${ALL_LANGUAGES.length} idiomas, rotação sequencial)`);
 
   // Aguardar 15s antes do primeiro ciclo (servidor terminar de inicializar)
   await sleep(15_000);

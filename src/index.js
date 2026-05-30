@@ -19,12 +19,13 @@ const logger = createLogger('orchestrator');
 // =============================================
 // PIPELINE COMPLETO
 // =============================================
-async function runPipeline(topicOverride = null) {
+async function runPipeline(topicOverride = null, language = null) {
   logger.info('\n' + '='.repeat(60));
   logger.info('🚀 GENIA EbookPublisher — Iniciando pipeline');
   logger.info('='.repeat(60));
 
   const ebookId = uuidv4();
+  const lang = language || process.env.EBOOK_LANGUAGE || 'pt-BR';
 
   try {
     // ===== 1. SELECIONAR TÓPICO =====
@@ -41,9 +42,9 @@ async function runPipeline(topicOverride = null) {
     db.markTopicUsed(topic.topic);
 
     // ===== 2. ESCREVER E-BOOK =====
-    logger.info('\n📝 ETAPA 1: Gerando conteúdo do e-book...');
-    const ebook = await generateFullEbook(topic.topic);
-    logger.info(`✅ Conteúdo gerado: "${ebook.title}" (${ebook.wordCount} palavras)`);
+    logger.info(`\n📝 ETAPA 1: Gerando conteúdo do e-book [idioma=${lang}]...`);
+    const ebook = await generateFullEbook(topic.topic, lang);
+    logger.info(`✅ Conteúdo gerado: "${ebook.title}" (${ebook.wordCount} palavras) [${lang}]`);
 
     // ===== 3. GERAR CAPA =====
     logger.info('\n🎨 ETAPA 2: Gerando capa...');

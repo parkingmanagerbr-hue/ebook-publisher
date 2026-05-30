@@ -103,6 +103,34 @@ app.use('/api/v2/publish', requireAuth, publishRoutes(orchestrator));
 app.use('/api/v2/stores',  requireAuth, storesRoutes(SessionManager, orchestrator));
 app.use('/api/v2/stats',   requireAuth, statsRoutes(repo));
 
+// ── Amazon OTP endpoint (no auth required — called by user from phone/terminal) ──
+app.post('/api/amazon-otp', (req, res) => {
+  const code = String(req.body?.code || '').trim();
+  if (!/^\d{4,8}$/.test(code)) {
+    return res.status(400).json({ error: 'code must be 4-8 digits', example: '{"code":"679751"}' });
+  }
+  const otpFile = '/app/data/amazon_otp.txt';
+  try {
+    fs.mkdirSync(require('path').dirname(otpFile), { recursive: true });
+    fs.writeFileSync(otpFile, code);
+    logger.info('[amazon-otp] Código recebido via API: ' + code);
+    res.json({ ok: true, code, message: 'Código enviado ao publisher Amazon' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET to check if OTP is being waited
+app.get('/api/amazon-otp', (req, res) => {
+  try {
+    const otpFile = '/app/data/amazon_otp.txt';
+    const txt = fs.existsSync(otpFile) ? fs.readFileSync(otpFile, 'utf8').trim() : '';
+    res.json({ status: txt || 'none', waiting: txt === 'WAITING' });
+  } catch (e) {
+    res.json({ status: 'none', waiting: false });
+  }
+});
+
 // SPA routes
 ['dashboard', 'ebooks', 'settings', 'publish'].forEach(p => {
   app.get('/' + p, (req, res) => {
