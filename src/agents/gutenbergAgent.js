@@ -212,7 +212,33 @@ function parseChapters(rawText, bookTitle) {
 
   // Dividir pelo padrão encontrado
   const { matches } = bestSplit;
-  for (let i = 0; i < matches.length && i < MAX_CHAPTERS; i++) {
+
+  // Detectar se as primeiras matches são um índice/ToC (conteúdo muito curto entre elas)
+  // Estratégia: se a média do conteúdo entre as primeiras 5 matches for < 100 chars,
+  // procurar a primeira match que realmente tenha conteúdo substancial
+  let startIdx = 0;
+  const sampleLen = Math.min(5, matches.length - 1);
+  let avgContent = 0;
+  for (let i = 0; i < sampleLen; i++) {
+    avgContent += matches[i + 1].index - (matches[i].index + matches[i][0].length);
+  }
+  avgContent /= sampleLen;
+
+  if (avgContent < 150) {
+    // Provavelmente um ToC — encontrar a primeira match com conteúdo real
+    for (let i = 0; i < matches.length - 1; i++) {
+      const gap = matches[i + 1].index - (matches[i].index + matches[i][0].length);
+      if (gap > 500) { startIdx = i; break; }
+    }
+    if (startIdx === 0 && avgContent < 150) {
+      logger.warn(`⚠️ Suspeita de ToC detectada (avg gap=${Math.round(avgContent)}chars) — usando texto único`);
+      const trimmed = rawText.trim().slice(0, MAX_CHARS);
+      chapters.push({ number: 1, title: bookTitle, content: trimmed });
+      return chapters;
+    }
+  }
+
+  for (let i = startIdx; i < matches.length && chapters.length < MAX_CHAPTERS; i++) {
     const match = matches[i];
     const chNum = match[1] || String(i + 1);
     const chTitle = (match[2] || '').trim() || `Chapter ${chNum}`;
@@ -223,11 +249,18 @@ function parseChapters(rawText, bookTitle) {
     if (content.length < 50) continue; // Capítulo vazio — pular
 
     // Limitar tamanho de cada capítulo
+    const maxPerChapter = Math.floor(MAX_CHARS / Math.min(matches.length - startIdx, MAX_CHAPTERS));
     chapters.push({
-      number: i + 1,
+      number: chapters.length + 1,
       title: chTitle.replace(/\s+/g, ' ').slice(0, 100),
-      content: content.slice(0, Math.floor(MAX_CHARS / Math.min(matches.length, MAX_CHAPTERS))),
+      content: content.slice(0, maxPerChapter),
     });
+  }
+
+  // Fallback final: se ainda vazio, usar texto completo
+  if (!chapters.length) {
+    logger.warn(`⚠️ Nenhum capítulo com conteúdo — usando texto único`);
+    chapters.push({ number: 1, title: bookTitle, content: rawText.trim().slice(0, MAX_CHARS) });
   }
 
   logger.info(`📚 Capítulos parseados: ${chapters.length}`);
