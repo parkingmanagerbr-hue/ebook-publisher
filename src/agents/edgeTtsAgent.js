@@ -16,10 +16,11 @@ const { createLogger } = require('../core/logger');
 
 const logger = createLogger('edgeTtsAgent');
 
-const EDGE_TTS_URL  = 'wss://speech.platform.bing.com/consumer/speech/synthesize/realtimeTTS/for/edge/v1';
-const TRUSTED_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
-const TIMEOUT_MS    = 45_000;
+const EDGE_TTS_URL      = 'wss://speech.platform.bing.com/consumer/speech/synthesize/realtimeTTS/for/edge/v1';
+const TRUSTED_TOKEN     = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+const SEC_MS_GEC_VER    = '1-130.0.2849.68';
+const OUTPUT_FORMAT     = 'audio-24khz-48kbitrate-mono-mp3';
+const TIMEOUT_MS        = 45_000;
 
 // ─── Vozes neurais por idioma ─────────────────────────────────────────────────
 const VOICE_MAP = {
@@ -82,24 +83,21 @@ function buildSSML(text, voice) {
 }
 
 /**
- * Gerar o token de segurança sec-ms-gec exigido pelo endpoint Edge TTS.
- * Algoritmo: SHA256("MSEdge" + rounded_ticks).toUpperCase()
- * onde rounded_ticks é o timestamp Windows em intervals de 10ms, arredondado para 8s.
+ * Gerar o token sec-ms-gec exigido pelo Edge TTS v7+.
+ * Fórmula (igual ao Python edge-tts v7):
+ *   ticks = (Date.now() - windowsEpoch_ms) * 10000  [100ns desde 1601-01-01]
+ *   rounded = ticks - (ticks % 3_000_000_000)       [arredonda para janelas de 5 min]
+ *   token = SHA256("MSEdgeTTS" + rounded).toUpperCase()
  */
-function generateSecMsGecToken() {
-  // Windows FILETIME: ticks de 100ns desde 1601-01-01
-  // Diferença Unix epoch → Windows epoch: 11644473600 segundos
-  const WIN_EPOCH_OFFSET = 11_644_473_600n;
-  const nowMs    = BigInt(Date.now());
-  const ticks    = (nowMs / 1000n + WIN_EPOCH_OFFSET) * 10_000_000n;
-  const interval = 8_000_000_000n; // 800 segundos em ticks
-  const rounded  = ticks + interval - (ticks % interval);
-  const token    = crypto
+function generateSecMsGec() {
+  const WIN_EPOCH_MS = new Date('1601-01-01T00:00:00Z').getTime(); // número negativo
+  const ticks   = Math.floor((Date.now() - WIN_EPOCH_MS) * 10_000);
+  const rounded = ticks - (ticks % 3_000_000_000);
+  return crypto
     .createHash('sha256')
-    .update(`MSEdge${rounded}`)
+    .update(`MSEdgeTTS${rounded}`)
     .digest('hex')
     .toUpperCase();
-  return token;
 }
 
 // ─── Síntese de um chunk de texto via Edge TTS ────────────────────────────────
@@ -107,15 +105,8 @@ async function synthesizeChunk(text, language = 'en', retries = 3) {
   const voice  = getVoice(language);
   const connId = uuidv4().replace(/-/g, '');
   const reqId  = uuidv4().replace(/-/g, '');
-  const gecToken = generateSecMsGecToken();
-
-  const url = (
-    `${EDGE_TTS_URL}` +
-    `?TrustedClientToken=${TRUSTED_TOKEN}` +
-    `&ConnectionId=${connId}` +
-    `&Sec-MS-GEC=${gecToken}` +
-    `&Sec-MS-GEC-Version=1-${gecToken}`
-  );
+  const gecToken = generateSecMsGec();
+  const url = `${EDGE_TTS_URL}?TrustedClientToken=${TRUSTED_TOKEN}&ConnectionId=${connId}`;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -135,12 +126,14 @@ async function synthesizeChunk(text, language = 'en', retries = 3) {
 
         const ws = new WebSocket(url, {
           headers: {
-            'Pragma':          'no-cache',
-            'Cache-Control':   'no-cache',
-            'Origin':          'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+            'Pragma':            'no-cache',
+            'Cache-Control':     'no-cache',
+            'Origin':            'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+            'Accept-Encoding':   'gzip, deflate, br',
+            'Accept-Language':   'en-US,en;q=0.9',
+            'User-Agent':        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+            'Sec-MS-GEC':        gecToken,
+            'Sec-MS-GEC-Version': SEC_MS_GEC_VER,
           },
         });
 
