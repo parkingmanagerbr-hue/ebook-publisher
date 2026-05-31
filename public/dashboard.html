@@ -379,7 +379,7 @@ tr:hover td{background:rgba(99,102,241,.03)}
                 <div style="font-size:10px;color:var(--text3)">Kindle Direct</div>
               </div>
             </div>
-            <span class="badge badge-yellow" id="badge-az">Pausado</span>
+            <span class="badge badge-yellow" id="badge-az">Verificando...</span>
           </div>
           <div class="store-count" id="count-az" style="color:var(--blue)">—</div>
           <div class="store-sub">e-books publicados</div>
@@ -895,6 +895,18 @@ function loadAgentStatus() {
     var pt = s.publishTo || {};
     setText('auto-az', pt.amazon ? 'ON' : 'OFF');
     if($('auto-az')) $('auto-az').style.color = pt.amazon ? 'var(--green)' : 'var(--yellow)';
+    // Atualizar badge Amazon dinamicamente
+    var azCircuit = s.amazonCircuit;
+    var badgeAz = $('badge-az');
+    if(badgeAz) {
+      if(azCircuit) {
+        badgeAz.textContent = 'OTP Block'; badgeAz.className = 'badge badge-yellow';
+      } else if(pt.amazon) {
+        badgeAz.textContent = 'Ativo'; badgeAz.className = 'badge badge-green';
+      } else {
+        badgeAz.textContent = 'Pausado'; badgeAz.className = 'badge badge-yellow';
+      }
+    }
 
     // Pause button
     var btnPause = $('btn-pause-agent');

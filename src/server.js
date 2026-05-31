@@ -114,7 +114,9 @@ app.post('/api/amazon-otp', (req, res) => {
     fs.mkdirSync(require('path').dirname(otpFile), { recursive: true });
     fs.writeFileSync(otpFile, code);
     logger.info('[amazon-otp] Código recebido via API: ' + code);
-    res.json({ ok: true, code, message: 'Código enviado ao publisher Amazon' });
+    // Resetar circuit breaker — Amazon pode tentar publicar novamente
+    try { const a = require('./core/autonomousAgent'); if (a.amazonCircuitReset) a.amazonCircuitReset(); } catch (_) {}
+    res.json({ ok: true, code, message: 'Código enviado ao publisher Amazon — circuit breaker resetado' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

@@ -56,10 +56,43 @@ function getIntervalMs() {
   return Math.max(5, mins) * 60 * 1000; // mínimo 5 minutos
 }
 
+// ─── Amazon OTP circuit breaker ──────────────────────────────────────────────
+// Após falha por OTP, pausa Amazon automaticamente por 2h para não travar pipeline
+const _amazonCircuit = { failCount: 0, pausedUntil: 0 };
+
+function amazonCircuitOpen() {
+  return _amazonCircuit.pausedUntil > Date.now();
+}
+
+function amazonCircuitTrip(reason) {
+  _amazonCircuit.failCount++;
+  const pauseMs = 2 * 60 * 60 * 1000; // 2 horas
+  _amazonCircuit.pausedUntil = Date.now() + pauseMs;
+  logger.warn(`⚡ Amazon circuit breaker ABERTO (${reason}) — pausando por 2h. Hotmart/Cakto continuam normalmente.`);
+}
+
+function amazonCircuitReset() {
+  _amazonCircuit.failCount = 0;
+  _amazonCircuit.pausedUntil = 0;
+  logger.info('✅ Amazon circuit breaker RESETADO — publicação retomada');
+}
+
+function getAmazonCircuitStatus() {
+  if (!amazonCircuitOpen()) return null;
+  const remainMin = Math.ceil((_amazonCircuit.pausedUntil - Date.now()) / 60000);
+  return `OTP_BLOCK (${remainMin}min restantes)`;
+}
+
 function shouldPublishTo(platform) {
   const envKey = `AUTO_PUBLISH_${platform.toUpperCase()}`;
   // Se explicitamente desativado, não publica
   if (process.env[envKey] === 'false') return false;
+
+  // Amazon: verificar circuit breaker antes
+  if (platform.toUpperCase() === 'AMAZON' && amazonCircuitOpen()) {
+    return false; // circuit aberto — Hotmart/Cakto continuam sem esperar
+  }
+
   // Se explicitamente ativado, publica (ensureSession cuida da renovação)
   if (process.env[envKey] === 'true') return true;
   // Fallback: publica se tiver credenciais de email/senha
@@ -154,8 +187,16 @@ async function publishReadyEbooks() {
       } else if (shouldPublishTo('AMAZON') && await ensureSession('amazon')) {
         setState({ currentStep: 'publishing:amazon' });
         results.amazon = await publishToAmazon(ebookData);
-        if (results.amazon?.success) logger.info('[publish-ready] Amazon OK: ' + (results.amazon.url || ''));
-        else logger.warn('[publish-ready] Amazon falhou: ' + (results.amazon?.error || 'desconhecido'));
+        if (results.amazon?.success) {
+          amazonCircuitReset();
+          logger.info('[publish-ready] Amazon OK: ' + (results.amazon.url || ''));
+        } else {
+          const err = results.amazon?.error || 'desconhecido';
+          logger.warn('[publish-ready] Amazon falhou: ' + err);
+          if (err.includes('OTP') || err.includes('CVF') || err.includes('timeout') || err.includes('verificação')) {
+            amazonCircuitTrip(err);
+          }
+        }
       }
     } catch (e) {
       logger.error('[publish-ready] Erro: ' + e.message.slice(0, 100));
@@ -400,8 +441,9 @@ function getStatus() {
     publishTo: {
       cakto:   shouldPublishTo('CAKTO'),
       hotmart: shouldPublishTo('HOTMART'),
-      amazon:  shouldPublishTo('AMAZON'),
+      amazon:  process.env.AUTO_PUBLISH_AMAZON === 'true', // mostra intenção, não circuit
     },
+    amazonCircuit: getAmazonCircuitStatus(), // null = ok, string = motivo do bloqueio
   };
 }
 
@@ -421,4 +463,4 @@ function triggerNow(topic = null) {
   runOneCycle(topic).catch(e => logger.error('Ciclo forçado falhou:', e.message));
 }
 
-module.exports = { loop, getStatus, pause, resume, stop, triggerNow };
+module.exports = { loop, getStatus, pause, resume, stop, triggerNow, amazonCircuitReset, amazonCircuitOpen, getAmazonCircuitStatus };
