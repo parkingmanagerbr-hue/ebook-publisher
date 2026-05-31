@@ -81,7 +81,7 @@ const FAMOUS_BOOKS = [
 
   // ── Espanhol ──────────────────────────────────────────────────────────────
   { id: 'don-quijote',            title: 'Don Quijote de la Mancha',             author: 'Miguel de Cervantes',      language: 'es', gutenbergId: 2000  },
-  { id: 'lazarillo-tormes',       title: 'Lazarillo de Tormes',                  author: 'Anónimo',                  language: 'es', gutenbergId: 9520  },
+  { id: 'lazarillo-tormes',       title: 'Lazarillo de Tormes',                  author: 'Anónimo',                  language: 'es', gutenbergId: 320   },
 
   // ── Francês ───────────────────────────────────────────────────────────────
   { id: 'les-miserables',         title: 'Les Misérables',                       author: 'Victor Hugo',              language: 'fr', gutenbergId: 17489 },
