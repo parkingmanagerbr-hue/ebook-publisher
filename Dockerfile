@@ -13,8 +13,12 @@ RUN apt-get update && apt-get install -y \
     librsvg2-dev \
     build-essential \
     python3 \
+    python3-pip \
+    python3-venv \
+    ffmpeg \
     --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    pip3 install --break-system-packages edge-tts 2>/dev/null || pip3 install edge-tts
 
 # Dizer ao Puppeteer para usar o Chromium instalado pelo sistema
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
