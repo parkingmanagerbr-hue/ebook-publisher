@@ -19,9 +19,9 @@ const logger = createLogger('gutenbergAgent');
 
 const AUDIOBOOKS_DIR  = path.join(__dirname, '../../data/audiobooks');
 const STATE_FILE      = path.join(__dirname, '../../data/gutenberg_state.json');
-const MAX_CHARS       = 120_000;   // ~60-70 min de áudio por livro
-const MAX_CHAPTERS    = 30;        // limitar capítulos longos
-const DELAY_BETWEEN   = 5_000;    // ms entre livros
+const MAX_CHARS       = 30_000;   // ~15-18 min de áudio por livro (controle de cota ElevenLabs)
+const MAX_CHAPTERS    = 15;        // limitar capítulos
+const DELAY_BETWEEN   = 10_000;   // ms entre livros
 
 // ─── Catálogo: Livros mais famosos do mundo em domínio público ────────────────
 // formato: { id, title, author, language, gutenbergId, url? }

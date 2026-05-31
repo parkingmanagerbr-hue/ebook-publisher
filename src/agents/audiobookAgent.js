@@ -33,17 +33,42 @@ const VOICE_ID  = process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB'; // 
 const EL_MODEL  = process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2';
 const CHUNK_MAX = 2400; // chars por request (limite seguro ElevenLabs)
 
-// Chave exausta por 1h
-const _exhausted = new Set();
-setInterval(() => _exhausted.clear(), 3_600_000).unref();
+// Chave exausta por 15 min (rate-limit ElevenLabs é por minuto, não por dia)
+const _exhausted = new Map(); // key → timestamp de exaustão
+const EXHAUSTED_TTL = 15 * 60 * 1000; // 15 min
+
+function isExhausted(key) {
+  const ts = _exhausted.get(key);
+  if (!ts) return false;
+  if (Date.now() - ts > EXHAUSTED_TTL) { _exhausted.delete(key); return false; }
+  return true;
+}
 
 let _keyIdx = 0;
 function getNextKey() {
-  const available = ELEVENLABS_KEYS.filter(k => !_exhausted.has(k));
-  if (!available.length) throw new Error('Todas as chaves ElevenLabs esgotadas por agora');
+  const available = ELEVENLABS_KEYS.filter(k => !isExhausted(k));
+  if (!available.length) {
+    // Calcular quanto tempo falta para a chave mais antiga se recuperar
+    const oldest = Math.min(...[...ELEVENLABS_KEYS].map(k => _exhausted.get(k) || 0).filter(Boolean));
+    const waitMs = Math.max(0, EXHAUSTED_TTL - (Date.now() - oldest));
+    const waitMin = Math.ceil(waitMs / 60_000);
+    throw Object.assign(new Error(`Todas as chaves ElevenLabs esgotadas — aguardar ~${waitMin} min`), { waitMs });
+  }
   const key = available[_keyIdx % available.length];
   _keyIdx++;
   return key;
+}
+
+// Quando todas as chaves esgotam, aguardar automaticamente ao invés de falhar
+async function waitForAvailableKey(maxWaitMs = 20 * 60 * 1000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const available = ELEVENLABS_KEYS.filter(k => !isExhausted(k));
+    if (available.length > 0) return true;
+    logger.warn(`⏳ Todas as chaves ElevenLabs esgotadas — aguardando 2 min para retry...`);
+    await new Promise(r => setTimeout(r, 120_000)); // espera 2 min
+  }
+  return false; // timeout
 }
 
 // ─── Gerar áudio de um chunk de texto ────────────────────────────────────────
@@ -56,6 +81,10 @@ async function generateAudioChunk(text, retries = 3) {
     .trim();
 
   if (!cleanText || cleanText.length < 5) return null;
+
+  // Aguardar chave disponível se todas esgotadas
+  const hasKey = await waitForAvailableKey(20 * 60 * 1000);
+  if (!hasKey) throw new Error('ElevenLabs: timeout aguardando chave disponível (20 min)');
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     let apiKey;
@@ -86,9 +115,11 @@ async function generateAudioChunk(text, retries = 3) {
     } catch (err) {
       const status = err?.response?.status;
       if (status === 429 || status === 401 || status === 403) {
-        if (apiKey) _exhausted.add(apiKey);
+        if (apiKey) _exhausted.set(apiKey, Date.now());
         logger.warn(`ElevenLabs key esgotada (status ${status}), tentando próxima...`);
-        if (attempt === retries) throw new Error(`ElevenLabs: todas as tentativas falharam (${status})`);
+        // Aguardar chave disponível antes de próxima tentativa
+        const ok = await waitForAvailableKey(20 * 60 * 1000);
+        if (!ok) throw new Error(`ElevenLabs: todas as tentativas falharam (${status})`);
         continue;
       }
       if (attempt === retries) throw err;
@@ -221,8 +252,8 @@ async function generateAudiobook(ebook, ebookId) {
         if (doneChunks % 5 === 0) {
           logger.info(`   ⏳ Progresso: ${doneChunks}/${totalChunks} chunks (${Math.round(doneChunks/totalChunks*100)}%)`);
         }
-        // Pequeno delay entre chunks para não throttling
-        await new Promise(r => setTimeout(r, 300));
+        // Delay entre chunks para não throttling ElevenLabs
+        await new Promise(r => setTimeout(r, 800));
       } catch (err) {
         logger.warn(`⚠️ Chunk ${ci+1} da seção "${sectionLabel}" falhou: ${err.message}`);
         // Continua — não para o audiobook todo por um chunk
