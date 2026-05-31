@@ -3,22 +3,23 @@
  *
  * Usa o mesmo serviço de voz neural do Microsoft Edge/Azure TTS.
  * Qualidade equivalente ao Azure Neural TTS — 300+ vozes, 100+ idiomas.
- * Protocolo: WebSocket para speech.platform.bing.com
+ * Protocolo: WebSocket para speech.platform.bing.com com sec-ms-gec token.
  *
  * Fallback gratuito para quando ElevenLabs está esgotado.
  */
 'use strict';
 
-const WebSocket = require('ws');
+const WebSocket  = require('ws');
+const crypto     = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { createLogger } = require('../core/logger');
 
 const logger = createLogger('edgeTtsAgent');
 
-const EDGE_TTS_URL   = 'wss://speech.platform.bing.com/consumer/speech/synthesize/realtimeTTS/for/edge/v1';
-const TRUSTED_TOKEN  = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-const OUTPUT_FORMAT  = 'audio-24khz-48kbitrate-mono-mp3';
-const TIMEOUT_MS     = 45_000;
+const EDGE_TTS_URL  = 'wss://speech.platform.bing.com/consumer/speech/synthesize/realtimeTTS/for/edge/v1';
+const TRUSTED_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3';
+const TIMEOUT_MS    = 45_000;
 
 // ─── Vozes neurais por idioma ─────────────────────────────────────────────────
 const VOICE_MAP = {
@@ -80,12 +81,41 @@ function buildSSML(text, voice) {
   );
 }
 
+/**
+ * Gerar o token de segurança sec-ms-gec exigido pelo endpoint Edge TTS.
+ * Algoritmo: SHA256("MSEdge" + rounded_ticks).toUpperCase()
+ * onde rounded_ticks é o timestamp Windows em intervals de 10ms, arredondado para 8s.
+ */
+function generateSecMsGecToken() {
+  // Windows FILETIME: ticks de 100ns desde 1601-01-01
+  // Diferença Unix epoch → Windows epoch: 11644473600 segundos
+  const WIN_EPOCH_OFFSET = 11_644_473_600n;
+  const nowMs    = BigInt(Date.now());
+  const ticks    = (nowMs / 1000n + WIN_EPOCH_OFFSET) * 10_000_000n;
+  const interval = 8_000_000_000n; // 800 segundos em ticks
+  const rounded  = ticks + interval - (ticks % interval);
+  const token    = crypto
+    .createHash('sha256')
+    .update(`MSEdge${rounded}`)
+    .digest('hex')
+    .toUpperCase();
+  return token;
+}
+
 // ─── Síntese de um chunk de texto via Edge TTS ────────────────────────────────
 async function synthesizeChunk(text, language = 'en', retries = 3) {
   const voice  = getVoice(language);
   const connId = uuidv4().replace(/-/g, '');
   const reqId  = uuidv4().replace(/-/g, '');
-  const url    = `${EDGE_TTS_URL}?TrustedClientToken=${TRUSTED_TOKEN}&ConnectionId=${connId}`;
+  const gecToken = generateSecMsGecToken();
+
+  const url = (
+    `${EDGE_TTS_URL}` +
+    `?TrustedClientToken=${TRUSTED_TOKEN}` +
+    `&ConnectionId=${connId}` +
+    `&Sec-MS-GEC=${gecToken}` +
+    `&Sec-MS-GEC-Version=1-${gecToken}`
+  );
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -105,8 +135,12 @@ async function synthesizeChunk(text, language = 'en', retries = 3) {
 
         const ws = new WebSocket(url, {
           headers: {
-            'Origin':     'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+            'Pragma':          'no-cache',
+            'Cache-Control':   'no-cache',
+            'Origin':          'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
           },
         });
 
@@ -140,7 +174,6 @@ async function synthesizeChunk(text, language = 'en', retries = 3) {
 
         ws.on('message', (data, isBinary) => {
           if (isBinary) {
-            // Localizar separador de headers no buffer binário
             const SEP = Buffer.from('\r\n\r\n');
             const idx = data.indexOf(SEP);
             if (idx !== -1) {
@@ -152,7 +185,7 @@ async function synthesizeChunk(text, language = 'en', retries = 3) {
             if (msg.includes('Path:turn.end')) {
               ws.close();
               if (!chunks.length) {
-                done(new Error('Edge TTS: nenhum dado de áudio recebido'));
+                done(new Error('Edge TTS: nenhum áudio recebido'));
               } else {
                 done(null, Buffer.concat(chunks));
               }
@@ -162,8 +195,7 @@ async function synthesizeChunk(text, language = 'en', retries = 3) {
 
         ws.on('error', err => done(err));
         ws.on('close', () => {
-          if (chunks.length) done(null, Buffer.concat(chunks));
-          // Se já settled, ignorar
+          if (chunks.length && !settled) done(null, Buffer.concat(chunks));
         });
       });
 
@@ -182,13 +214,11 @@ let _available = null;
 async function isAvailable() {
   if (_available !== null) return _available;
   try {
-    // Teste rápido com texto curto
     const buf = await synthesizeChunk('Test.', 'en', 1);
     _available = buf && buf.length > 100;
   } catch {
     _available = false;
   }
-  // Reset após 1h para re-verificar
   setTimeout(() => { _available = null; }, 3_600_000).unref();
   return _available;
 }
