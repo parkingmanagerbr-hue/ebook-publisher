@@ -160,6 +160,8 @@ async function publishReadyEbooks() {
     const alreadyOnHotmart = ebook.hotmart_url && ebook.hotmart_url.includes('hotmart.com/product/');
     const alreadyOnCakto   = ebook.cakto_url   && ebook.cakto_url.includes('pay.cakto.com.br/');
     const alreadyOnAmazon  = ebook.amazon_url   && ebook.amazon_url.includes('amazon.com.br/');
+
+    // ── Hotmart ── (isolado: falha não impede Cakto/Amazon)
     try {
       if (alreadyOnHotmart) {
         results.hotmart = { success: true, url: ebook.hotmart_url, skipped: true };
@@ -170,7 +172,15 @@ async function publishReadyEbooks() {
         if (results.hotmart?.success) logger.info('[publish-ready] Hotmart OK: ' + (results.hotmart.url || results.hotmart.productId));
         else logger.warn('[publish-ready] Hotmart falhou: ' + (results.hotmart?.error || 'desconhecido'));
       }
-      await new Promise(r => setTimeout(r, 3000));
+    } catch (e) {
+      logger.error('[publish-ready] Hotmart erro: ' + e.message.slice(0, 120));
+      results.hotmart = { success: false, error: e.message };
+    }
+
+    await new Promise(r => setTimeout(r, 3000));
+
+    // ── Cakto ── (isolado: falha não impede Amazon)
+    try {
       if (alreadyOnCakto) {
         results.cakto = { success: true, url: ebook.cakto_url, skipped: true };
         logger.info('[publish-ready] Cakto já publicado: ' + ebook.cakto_url);
@@ -180,7 +190,15 @@ async function publishReadyEbooks() {
         if (results.cakto?.success) logger.info('[publish-ready] Cakto OK: ' + (results.cakto.url || ''));
         else logger.warn('[publish-ready] Cakto falhou: ' + (results.cakto?.error || 'desconhecido'));
       }
-      await new Promise(r => setTimeout(r, 3000));
+    } catch (e) {
+      logger.error('[publish-ready] Cakto erro: ' + e.message.slice(0, 120));
+      results.cakto = { success: false, error: e.message };
+    }
+
+    await new Promise(r => setTimeout(r, 3000));
+
+    // ── Amazon ── (isolado: sempre tenta independente de Hotmart/Cakto)
+    try {
       if (alreadyOnAmazon) {
         results.amazon = { success: true, url: ebook.amazon_url, skipped: true };
         logger.info('[publish-ready] Amazon já publicado: ' + ebook.amazon_url);
@@ -199,7 +217,8 @@ async function publishReadyEbooks() {
         }
       }
     } catch (e) {
-      logger.error('[publish-ready] Erro: ' + e.message.slice(0, 100));
+      logger.error('[publish-ready] Amazon erro: ' + e.message.slice(0, 120));
+      results.amazon = { success: false, error: e.message };
     }
     const anyOk = Object.values(results).some(r => r?.success);
     // Preserve existing URLs — only pass non-null values to avoid overwriting valid data
