@@ -27,10 +27,11 @@ const { PublishingOrchestrator } = require('./application/orchestrator/Publishin
 const { PriorityScorer }         = require('./application/ml/PriorityScorer');
 
 // ── Presentation Routes ────────────────────────────────────────────────────────
-const ebooksRoutes  = require('./presentation/api/routes/ebooks');
-const publishRoutes = require('./presentation/api/routes/publish');
-const storesRoutes  = require('./presentation/api/routes/stores');
-const statsRoutes   = require('./presentation/api/routes/stats');
+const ebooksRoutes    = require('./presentation/api/routes/ebooks');
+const publishRoutes   = require('./presentation/api/routes/publish');
+const storesRoutes    = require('./presentation/api/routes/stores');
+const statsRoutes     = require('./presentation/api/routes/stats');
+const gutenbergRoutes = require('./presentation/api/routes/gutenberg');
 
 const logger = createLogger('server');
 const app    = express();
@@ -73,7 +74,8 @@ if (io) {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use('/covers', express.static(path.join(__dirname, '../data/covers')));
+app.use('/covers',     express.static(path.join(__dirname, '../data/covers')));
+app.use('/audiobooks', express.static(path.join(__dirname, '../data/audiobooks')));
 app.use('/pdfs', (req, res, next) => {
   const token = req.query.token || (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Token required' });
@@ -98,10 +100,11 @@ app.use('/auth', authRoutes);
 app.use('/api', legacyApiRoutes);
 
 // New DDD API routes (mounted under /api/v2 to avoid conflict)
-app.use('/api/v2/ebooks',  requireAuth, ebooksRoutes(repo, PriorityScorer));
-app.use('/api/v2/publish', requireAuth, publishRoutes(orchestrator));
-app.use('/api/v2/stores',  requireAuth, storesRoutes(SessionManager, orchestrator));
-app.use('/api/v2/stats',   requireAuth, statsRoutes(repo));
+app.use('/api/v2/ebooks',     requireAuth, ebooksRoutes(repo, PriorityScorer));
+app.use('/api/v2/publish',    requireAuth, publishRoutes(orchestrator));
+app.use('/api/v2/stores',     requireAuth, storesRoutes(SessionManager, orchestrator));
+app.use('/api/v2/stats',      requireAuth, statsRoutes(repo));
+app.use('/api/v2/gutenberg',  requireAuth, gutenbergRoutes());
 
 // ── Amazon OTP endpoint (no auth required — called by user from phone/terminal) ──
 app.post('/api/amazon-otp', (req, res) => {
