@@ -1,14 +1,16 @@
 /**
- * audiobookAgent.js — Geração de audiobooks completos via ElevenLabs
+ * audiobookAgent.js — Geração de audiobooks com fallback automático
  *
- * Pipeline:
+ * Pipeline TTS (em ordem de prioridade):
+ *   1. ElevenLabs (alta qualidade, 4 chaves rotativas) — quando disponível
+ *   2. Microsoft Edge TTS (qualidade neural, gratuito, sem limite) — fallback
+ *
+ * Fluxo:
  *   1. Extrai texto de cada seção do ebook (intro + capítulos + conclusão)
- *   2. Quebra em chunks de ~2500 chars (limite ElevenLabs por request)
- *   3. Gera áudio para cada chunk via ElevenLabs API (rotação de 3 chaves)
+ *   2. Quebra em chunks de ~2400 chars
+ *   3. Tenta ElevenLabs; se esgotado/401, usa Edge TTS automaticamente
  *   4. Concatena todos os buffers em um único MP3
  *   5. Salva em /app/data/audiobooks/<ebookId>.mp3
- *
- * Suporte multi-idioma: eleven_multilingual_v2 model
  */
 'use strict';
 
@@ -18,6 +20,10 @@ const axios = require('axios');
 const { createLogger } = require('../core/logger');
 
 const logger = createLogger('audiobookAgent');
+
+// ─── Edge TTS fallback ────────────────────────────────────────────────────────
+let edgeTts = null;
+try { edgeTts = require('./edgeTtsAgent'); } catch { /* opcional */ }
 
 const AUDIOBOOKS_DIR = path.join(__dirname, '../../data/audiobooks');
 
@@ -194,10 +200,39 @@ function prepareEbookText(ebook) {
   return sections;
 }
 
+// ─── Gerar chunk com fallback automático (ElevenLabs → Edge TTS) ─────────────
+async function generateChunkWithFallback(chunk, language) {
+  // Tentar ElevenLabs primeiro (se chaves disponíveis)
+  const elAvailable = ELEVENLABS_KEYS.filter(k => !isExhausted(k));
+  if (elAvailable.length > 0) {
+    try {
+      const buf = await generateAudioChunk(chunk);
+      if (buf) return { buf, engine: 'elevenlabs' };
+    } catch (err) {
+      logger.warn(`ElevenLabs falhou (${err.message}) — tentando Edge TTS...`);
+    }
+  }
+
+  // Fallback: Edge TTS (gratuito, sem limite)
+  if (edgeTts) {
+    try {
+      const buf = await edgeTts.synthesizeChunk(chunk, language || 'en');
+      if (buf) return { buf, engine: 'edge-tts' };
+    } catch (err) {
+      logger.warn(`Edge TTS também falhou: ${err.message}`);
+    }
+  }
+
+  return { buf: null, engine: 'none' };
+}
+
 // ─── GERAÇÃO COMPLETA DO AUDIOBOOK ───────────────────────────────────────────
 async function generateAudiobook(ebook, ebookId) {
-  if (!ELEVENLABS_KEYS.length) {
-    logger.warn('⚠️ Nenhuma chave ElevenLabs configurada — audiobook não gerado');
+  const elHasKeys = ELEVENLABS_KEYS.length > 0;
+  const edgeAvail = edgeTts != null;
+
+  if (!elHasKeys && !edgeAvail) {
+    logger.warn('⚠️ Nenhum TTS disponível (ElevenLabs sem chaves, Edge TTS não instalado)');
     return null;
   }
 
@@ -243,17 +278,20 @@ async function generateAudiobook(ebook, ebookId) {
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci];
       try {
-        const buf = await generateAudioChunk(chunk);
+        const { buf, engine } = await generateChunkWithFallback(chunk, ebook.language);
         if (buf) {
           audioBuffers.push(buf);
           doneChunks++;
+          if (engine !== 'elevenlabs') {
+            logger.info(`   🔄 [${engine}] chunk ${ci+1}`);
+          }
         }
         // Log progresso a cada 5 chunks
-        if (doneChunks % 5 === 0) {
+        if (doneChunks % 5 === 0 && doneChunks > 0) {
           logger.info(`   ⏳ Progresso: ${doneChunks}/${totalChunks} chunks (${Math.round(doneChunks/totalChunks*100)}%)`);
         }
-        // Delay entre chunks para não throttling ElevenLabs
-        await new Promise(r => setTimeout(r, 800));
+        // Delay entre chunks
+        await new Promise(r => setTimeout(r, 500));
       } catch (err) {
         logger.warn(`⚠️ Chunk ${ci+1} da seção "${sectionLabel}" falhou: ${err.message}`);
         // Continua — não para o audiobook todo por um chunk
@@ -262,7 +300,7 @@ async function generateAudiobook(ebook, ebookId) {
   }
 
   if (!audioBuffers.length) {
-    throw new Error('Nenhum áudio gerado — todas as chamadas ElevenLabs falharam');
+    throw new Error('Nenhum áudio gerado — ElevenLabs e Edge TTS falharam');
   }
 
   // Concatenar todos os MP3 buffers
@@ -279,7 +317,8 @@ async function generateAudiobook(ebook, ebookId) {
 
 // ─── Verificar disponibilidade ────────────────────────────────────────────────
 function isAvailable() {
-  return ELEVENLABS_KEYS.length > 0;
+  // Disponível se tem ElevenLabs OU Edge TTS
+  return ELEVENLABS_KEYS.length > 0 || edgeTts != null;
 }
 
 module.exports = { generateAudiobook, isAvailable, splitIntoChunks, prepareEbookText };
