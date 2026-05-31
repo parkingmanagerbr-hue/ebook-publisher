@@ -88,9 +88,11 @@ async function generateAudioChunk(text, retries = 3) {
 
   if (!cleanText || cleanText.length < 5) return null;
 
-  // Aguardar chave disponível se todas esgotadas
-  const hasKey = await waitForAvailableKey(20 * 60 * 1000);
-  if (!hasKey) throw new Error('ElevenLabs: timeout aguardando chave disponível (20 min)');
+  // Verificar se há alguma chave disponível — sem esperar
+  const availableNow = ELEVENLABS_KEYS.filter(k => !isExhausted(k));
+  if (!availableNow.length) {
+    throw new Error('ElevenLabs: todas as chaves esgotadas — usar fallback');
+  }
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     let apiKey;
@@ -122,10 +124,12 @@ async function generateAudioChunk(text, retries = 3) {
       const status = err?.response?.status;
       if (status === 429 || status === 401 || status === 403) {
         if (apiKey) _exhausted.set(apiKey, Date.now());
+        // Verificar se ainda há chaves — se não, lançar imediatamente para o fallback
+        const remaining = ELEVENLABS_KEYS.filter(k => !isExhausted(k));
+        if (!remaining.length) {
+          throw new Error(`ElevenLabs: quota esgotada em todas as chaves (${status}) — usar fallback`);
+        }
         logger.warn(`ElevenLabs key esgotada (status ${status}), tentando próxima...`);
-        // Aguardar chave disponível antes de próxima tentativa
-        const ok = await waitForAvailableKey(20 * 60 * 1000);
-        if (!ok) throw new Error(`ElevenLabs: todas as tentativas falharam (${status})`);
         continue;
       }
       if (attempt === retries) throw err;
@@ -202,24 +206,29 @@ function prepareEbookText(ebook) {
 
 // ─── Gerar chunk com fallback automático (ElevenLabs → Edge TTS) ─────────────
 async function generateChunkWithFallback(chunk, language) {
-  // Tentar ElevenLabs primeiro (se chaves disponíveis)
+  // Tentar ElevenLabs primeiro (apenas se há chaves não-esgotadas)
   const elAvailable = ELEVENLABS_KEYS.filter(k => !isExhausted(k));
   if (elAvailable.length > 0) {
     try {
       const buf = await generateAudioChunk(chunk);
       if (buf) return { buf, engine: 'elevenlabs' };
     } catch (err) {
-      logger.warn(`ElevenLabs falhou (${err.message}) — tentando Edge TTS...`);
+      // Falha ElevenLabs — cair imediatamente para Edge TTS sem esperar
+      if (err.message.includes('fallback') || err.message.includes('esgotada')) {
+        // Silencioso — esperado quando quota zerada
+      } else {
+        logger.warn(`ElevenLabs falhou (${err.message}) — tentando Edge TTS...`);
+      }
     }
   }
 
-  // Fallback: Edge TTS (gratuito, sem limite)
+  // Fallback: Edge TTS (gratuito, sem limite de quota)
   if (edgeTts) {
     try {
       const buf = await edgeTts.synthesizeChunk(chunk, language || 'en');
       if (buf) return { buf, engine: 'edge-tts' };
     } catch (err) {
-      logger.warn(`Edge TTS também falhou: ${err.message}`);
+      logger.warn(`Edge TTS falhou: ${err.message}`);
     }
   }
 
