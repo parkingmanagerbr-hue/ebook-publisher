@@ -315,76 +315,101 @@ async function createProduct(page, session, ebook) {
   log.info('Category debug screenshot saved: /app/category_before.png');
 
   // Click category — Step 1: open the dropdown by clicking the category trigger
-  const catOpened = await page.evaluate(() => {
-    // Look for the dropdown trigger (not yet showing options)
+  // CRITICAL: use TRUSTED page.mouse.click() — hot-select web components check event.isTrusted
+  // and ignore untrusted evaluate().click() calls. Return bounding rect from evaluate, then click outside.
+  const catTriggerRect = await page.evaluate(() => {
+    function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
+    // Priority 1: hot-select element with category placeholder
+    const hotSel = Array.from(document.querySelectorAll('hot-select')).find(el => {
+      const ph = (el.getAttribute('placeholder')||'').toLowerCase();
+      return ph.includes('categori') || ph.includes('category');
+    });
+    if (hotSel) {
+      const r = hotSel.getBoundingClientRect();
+      if (r.width > 0) { hotSel.scrollIntoView({behavior:'instant',block:'center'}); return {x:r.left+r.width/2, y:r.top+r.height/2, src:'hot-select'}; }
+    }
+    // Priority 2: look for category trigger button by class
     const trigger = document.querySelector(
       '[class*="categor"] button, [class*="category"] button, button[id*="categor"], ' +
-      '[class*="select"][class*="categor"], [class*="categor"][class*="select"], ' +
       'select[name*="categor"], [aria-label*="ategori"], [placeholder*="ategori"]'
     );
     if (trigger && trigger.getBoundingClientRect().width > 0) {
       trigger.scrollIntoView({behavior:'instant',block:'center'});
-      trigger.click();
-      return 'trigger:' + trigger.tagName;
+      const r = trigger.getBoundingClientRect();
+      return {x:r.left+r.width/2, y:r.top+r.height/2, src:'trigger:'+trigger.tagName};
     }
-    // Fallback: find any element with "categoria" text and click it to open
-    const label = Array.from(document.querySelectorAll('label, span, div, p')).find(el => {
-      const t = (el.textContent||'').toLowerCase().trim();
+    // Priority 3: find any element with "Categoria" label text and click nearby input
+    const labels = Array.from(document.querySelectorAll('label, span, div, p, h3, h4'));
+    const catLabel = labels.find(el => {
+      const t = norm(el.textContent||'').trim();
       return (t === 'categoria' || t === 'category') && el.getBoundingClientRect().width > 0;
     });
-    if (label) { label.click(); return 'label:' + (label.textContent||'').trim().slice(0,20); }
-    return null;
+    if (catLabel) {
+      catLabel.scrollIntoView({behavior:'instant',block:'center'});
+      const r = catLabel.getBoundingClientRect();
+      return {x:r.left+r.width/2, y:r.top+r.height/2, src:'label:'+catLabel.tagName};
+    }
+    // Priority 4: all visible buttons — is the category panel already open?
+    const visibleBtns = Array.from(document.querySelectorAll('button, li, [role="option"]'))
+      .filter(el => el.getBoundingClientRect().width > 0)
+      .map(el => norm(el.textContent||'').slice(0,30)).filter(t=>t.length>2).slice(0,20);
+    return {alreadyOpen: true, visibleBtns};
   }).catch(()=>null);
-  log.info('Category dropdown open attempt: ' + catOpened);
-  if (catOpened) await sleep(1000); // wait for dropdown to render
 
-  // Step 2: find and click the correct category option
-  const catClicked = await page.evaluate((cat) => {
+  if (catTriggerRect && catTriggerRect.x) {
+    await page.mouse.click(catTriggerRect.x, catTriggerRect.y);
+    log.info('Category trigger clicked (trusted): ' + catTriggerRect.src);
+    await sleep(1200); // wait for dropdown to render
+  } else if (catTriggerRect && catTriggerRect.alreadyOpen) {
+    log.info('Category panel already open: ' + JSON.stringify(catTriggerRect.visibleBtns).slice(0,120));
+  } else {
+    log.warn('Category trigger not found');
+  }
+
+  // Step 2: find and click the correct category option — TRUSTED page.mouse.click()
+  // Get bounding rect from evaluate, click from outside (bypasses isTrusted check)
+  const catRect = await page.evaluate((cat) => {
     function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
     const catNorm = norm(cat);
     const catFirst = catNorm.split(' ')[0]; // e.g. "negocios" from "Negocios e Carreira"
 
-    // Debug: log all visible text-bearing elements
-    const debug = Array.from(document.querySelectorAll('button, li, [role="option"], [class*="option"], [class*="categor"]'))
-      .filter(el => el.getBoundingClientRect().width > 0)
-      .map(el => norm(el.textContent||'').slice(0,30))
-      .filter(t => t.length > 2)
-      .slice(0,25);
-
-    // Priority 1: exact text match on buttons — use untrusted .click() inside evaluate
-    // (The category selection is a router-navigate link; untrusted DOM click triggers navigation correctly)
-    const buttons = Array.from(document.querySelectorAll('button, li, [role="option"], [role="listitem"]'));
-    const exact = buttons.find(b => {
+    const candidates = Array.from(document.querySelectorAll('button, li, [role="option"], [role="listitem"], hot-select-option'));
+    // Priority 1: exact match
+    let el = candidates.find(b => {
       const t = norm(b.textContent||'');
       return b.getBoundingClientRect().width > 0 && (t === catNorm || t === catFirst);
     });
-    if (exact) { exact.scrollIntoView({behavior:'instant',block:'center'}); exact.click(); return {clicked:true, text:exact.textContent.trim().slice(0,40)}; }
-
-    // Priority 2: partial text match on buttons
-    const partial = buttons.find(b => {
+    // Priority 2: partial match
+    if (!el) el = candidates.find(b => {
       const t = norm(b.textContent||'');
       const r = b.getBoundingClientRect();
       return r.width > 0 && t.length < 60 && catFirst.length > 4 && t.includes(catFirst);
     });
-    if (partial) { partial.scrollIntoView({behavior:'instant',block:'center'}); partial.click(); return {clicked:true, text:partial.textContent.trim().slice(0,40)}; }
-
-    // Priority 3: any element type with text match
-    const all = Array.from(document.querySelectorAll('button, [class*="categor"], [class*="option"], li, [role="option"], span, div'));
-    const fallback = all.find(b => {
-      const t = norm(b.textContent||'');
-      const r = b.getBoundingClientRect();
-      return r.width > 0 && t.length < 80 && catFirst.length > 4 && t.includes(catFirst);
-    });
-    if (fallback) { fallback.scrollIntoView({behavior:'instant',block:'center'}); fallback.click(); return {clicked:true, text:'fallback:'+fallback.textContent.trim().slice(0,40)}; }
-
-    return {notFound: true, catNorm, catFirst, visibleOptions: debug};
+    // Priority 3: any element including divs/spans
+    if (!el) {
+      const all = Array.from(document.querySelectorAll('*'));
+      el = all.find(b => {
+        const t = norm(b.textContent||'');
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.height < 80 && t.length > 3 && t.length < 60 && catFirst.length > 4 && t.includes(catFirst) && b.children.length < 3;
+      });
+    }
+    if (el) {
+      el.scrollIntoView({behavior:'instant', block:'center'});
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) return {x:r.left+r.width/2, y:r.top+r.height/2, text:el.textContent.trim().slice(0,40), tag:el.tagName};
+    }
+    const debug = candidates.filter(b=>b.getBoundingClientRect().width>0).map(b=>norm(b.textContent||'').slice(0,25)).filter(t=>t.length>2).slice(0,20);
+    return {notFound:true, catNorm, catFirst, visibleOptions:debug};
   }, category);
-  if (catClicked && typeof catClicked === 'object' && catClicked.notFound) {
-    log.warn('Category NOT found — debug: ' + JSON.stringify(catClicked));
-  } else if (catClicked && catClicked.clicked) {
-    log.info('Category clicked: ' + catClicked.text);
+
+  if (catRect && catRect.x) {
+    await page.mouse.click(catRect.x, catRect.y);
+    log.info('Category clicked (trusted): ' + catRect.text + ' @(' + Math.round(catRect.x)+','+Math.round(catRect.y)+')');
+    await sleep(1200); // wait for subcategory panel to appear
+  } else {
+    log.warn('Category NOT found — debug: ' + JSON.stringify(catRect).slice(0,200));
   }
-  await sleep(800);
 
   // After category click, Hotmart may show a 2-step panel:
   // Step A — category panel has its OWN Continuar (confirms category selection)
@@ -392,22 +417,86 @@ async function createProduct(page, session, ebook) {
   // Strategy: click ALL visible Continuar buttons in reverse DOM order (panel last → main),
   // then if still on /info, retry with main Continuar using trusted mouse click.
 
-  // Step A: click first subcategory if visible (Hotmart may require subcategory)
-  const subCatClicked = await page.evaluate(()=>{
+  // Step A: click first subcategory if visible (Hotmart requires subcategory after main category)
+  // Use TRUSTED page.mouse.click() — hot-select ignores untrusted clicks
+  const subCatRect = await page.evaluate(() => {
     function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
-    // Try known subcategory selectors
-    const sel = [
-      '[class*="subcategor"] button', '[class*="subcategor"] li',
-      '[class*="subCategory"] button', '[class*="sub-category"] button',
-      '[class*="subc"] button', '[class*="subcat"] button',
-    ];
-    for (const s of sel) {
-      const els = Array.from(document.querySelectorAll(s)).filter(e => e.getBoundingClientRect().width > 0);
-      if (els.length > 0) { els[0].click(); return 'sub:' + (els[0].textContent||'').trim().slice(0,30); }
+    // After clicking main category, subcategories appear as a new list of buttons/options
+    // Look for hot-select-option, li, or button elements that appeared after category selection
+    // (they'll be the SECOND set of options visible — smaller, specific sub-categories)
+    const allOptions = Array.from(document.querySelectorAll(
+      'hot-select-option, [class*="subcategor"] button, [class*="subcategor"] li, ' +
+      '[class*="subCategory"] button, [class*="sub-category"] button, [class*="subc"] button'
+    )).filter(el => {
+      const r = el.getBoundingClientRect();
+      const t = (el.textContent||'').trim();
+      return r.width > 0 && r.height > 0 && t.length > 2;
+    });
+    if (allOptions.length > 0) {
+      const el = allOptions[0];
+      el.scrollIntoView({behavior:'instant',block:'center'});
+      const r = el.getBoundingClientRect();
+      return r.width > 0 ? {x:r.left+r.width/2, y:r.top+r.height/2, text:el.textContent.trim().slice(0,40)} : null;
+    }
+    // Fallback: look for a second hot-select dropdown that appeared (subcategory)
+    const hotSels = Array.from(document.querySelectorAll('hot-select')).filter(el => {
+      const ph = (el.getAttribute('placeholder')||'').toLowerCase();
+      return (ph.includes('subcategor') || ph.includes('sub')) && el.getBoundingClientRect().width > 0;
+    });
+    if (hotSels.length > 0) {
+      const el = hotSels[0];
+      el.scrollIntoView({behavior:'instant',block:'center'});
+      const r = el.getBoundingClientRect();
+      return r.width > 0 ? {x:r.left+r.width/2, y:r.top+r.height/2, text:'hot-select-sub'} : null;
     }
     return null;
   }).catch(()=>null);
-  if (subCatClicked) { log.info('Subcategory clicked: ' + subCatClicked); await sleep(500); }
+
+  if (subCatRect && subCatRect.x) {
+    await page.mouse.click(subCatRect.x, subCatRect.y);
+    log.info('Subcategory clicked (trusted): ' + subCatRect.text);
+    await sleep(1000);
+    // If we clicked a hot-select trigger for subcategory, now click the first option
+    const subOptRect = await page.evaluate(() => {
+      const opts = Array.from(document.querySelectorAll('hot-select-option, [role="option"], li[class*="option"]'))
+        .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+      if (opts.length > 0) {
+        const el = opts[0];
+        el.scrollIntoView({behavior:'instant',block:'center'});
+        const r = el.getBoundingClientRect();
+        return r.width > 0 ? {x:r.left+r.width/2, y:r.top+r.height/2, text:el.textContent.trim().slice(0,40)} : null;
+      }
+      return null;
+    }).catch(()=>null);
+    if (subOptRect && subOptRect.x) {
+      await page.mouse.click(subOptRect.x, subOptRect.y);
+      log.info('Subcategory option clicked (trusted): ' + subOptRect.text);
+      await sleep(800);
+    }
+  } else {
+    log.info('No subcategory panel found (may not be required or already selected)');
+  }
+
+  // After category+subcategory, look for a panel Confirmar/Selecionar button to close the category panel
+  const catConfirmRect = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button')).filter(b => {
+      const t = (b.textContent||'').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+      const r = b.getBoundingClientRect();
+      return r.width > 0 && (t === 'confirmar' || t === 'selecionar' || t === 'ok' || t === 'aplicar' || t.includes('confirm') || t.includes('select'));
+    });
+    if (btns.length > 0) {
+      const b = btns[0];
+      b.scrollIntoView({behavior:'instant',block:'center'});
+      const r = b.getBoundingClientRect();
+      return r.width > 0 ? {x:r.left+r.width/2, y:r.top+r.height/2, text:b.textContent.trim().slice(0,30)} : null;
+    }
+    return null;
+  }).catch(()=>null);
+  if (catConfirmRect && catConfirmRect.x) {
+    await page.mouse.click(catConfirmRect.x, catConfirmRect.y);
+    log.info('Category panel confirm clicked: ' + catConfirmRect.text);
+    await sleep(800);
+  }
 
   // === COVER UPLOAD DURING WIZARD ===
   // NOTE: Disabled — uploading cover during the wizard interferes with the Continuar navigation
@@ -569,9 +658,12 @@ async function createProduct(page, session, ebook) {
       log.info('[' + label + '] Modal leave btn clicked: ' + btnPos.text + ' @(' + Math.round(btnPos.x) + ',' + Math.round(btnPos.y) + ')');
       return 'clicked:' + btnPos.text;
     }
-    // No button found in shadow DOM — log and return; caller retry logic handles it
-    log.warn('[' + label + '] modal-no-shadow-btn. Visible: ' + btnPos.text);
-    return 'modal-found-no-btn';
+    // No "Sair/leave" button found in modal shadow DOM — this is likely a category dropdown
+    // or file panel (not an "unsaved data" confirmation). Press Escape to close it.
+    log.warn('[' + label + '] modal-no-shadow-btn (likely category/file panel) — pressing Escape');
+    await page.keyboard.press('Escape');
+    await new Promise(r => setTimeout(r, 600));
+    return 'escape-modal';
   };
 
   // Immediate check after Continuar clicks
