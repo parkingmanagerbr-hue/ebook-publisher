@@ -251,8 +251,8 @@ async function callGemini(prompt, systemPrompt, apiKey) {
 }
 
 async function callCerebras(prompt, systemPrompt, apiKey) {
-  // Modelos disponíveis (maio 2026): qwen-3-235b-a22b-instruct-2507, gpt-oss-120b, llama3.1-8b
-  const model = process.env.CEREBRAS_MODEL || 'qwen-3-235b-a22b-instruct-2507';
+  // Modelos disponíveis (maio 2026): gpt-oss-120b, zai-glm-4.7 (qwen-3-235b removido)
+  const model = process.env.CEREBRAS_MODEL || 'gpt-oss-120b';
   const response = await axios.post('https://api.cerebras.ai/v1/chat/completions', {
     model,
     messages: [
