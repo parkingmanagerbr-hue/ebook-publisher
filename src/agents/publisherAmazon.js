@@ -1294,142 +1294,219 @@ async function publishToAmazon(ebook) {
       }
     }
 
+    // ── Dismiss "Você tem outro formato?" PDF modal (appears after PDF upload) ──
+    await sleep(1000);
+    const pdfModalResult = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+      for (const btn of btns) {
+        const t = (btn.textContent || '').trim().toLowerCase();
+        if (t.includes('continuar com pdf') || t.includes('continue with pdf') ||
+            t.includes('continuar com o pdf')) {
+          const r = btn.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) { btn.click(); return 'clicked: ' + btn.textContent.trim().slice(0, 40); }
+        }
+      }
+      return 'not-found';
+    }).catch(() => 'error');
+    log.info('PDF modal dismiss: ' + pdfModalResult);
+    if (pdfModalResult !== 'not-found') await sleep(2000);
+
     // Upload cover
     if (ebook.coverPath && fs.existsSync(ebook.coverPath)) {
-      log.info('Upload capa KDP...');
+      log.info('Upload capa KDP: ' + ebook.coverPath);
       let cvUploaded = false;
 
-      // Approach 1: waitForFileChooser
+      // Approach 1: Promise.all(waitForFileChooser, click) — most reliable when KDP opens native dialog
       try {
-        const chooserPromise = page.waitForFileChooser({ timeout: 10000 });
-        await page.evaluate(() => {
-          const texts = ['carregar capa', 'upload cover', 'upload your cover', 'capa', 'cover',
-                         'imagem', 'image', 'thumbnail', 'foto'];
-          const btns = Array.from(document.querySelectorAll('button, a, [role="button"], label, span.a-button-text'));
-          for (const text of texts) {
-            const btn = btns.find(el => (el.textContent || '').toLowerCase().includes(text) && el.getBoundingClientRect().width > 0);
-            if (btn) { btn.click(); return true; }
-          }
-          return false;
-        });
-        const chooser = await chooserPromise;
+        const [chooser] = await Promise.all([
+          page.waitForFileChooser({ timeout: 12000 }),
+          page.evaluate(() => {
+            const coverTexts = [
+              'carregar uma imagem de capa', 'carregar imagem de capa', 'carregar uma capa',
+              'carregar capa do livro', 'carregar capa', 'fazer upload de uma capa',
+              'fazer upload de imagem', 'upload a cover image', 'upload cover image',
+              'upload cover', 'upload your cover', 'upload book cover',
+              'selecionar arquivo de capa', 'selecionar imagem', 'choose cover',
+            ];
+            const allBtns = Array.from(document.querySelectorAll(
+              'button, a, [role="button"], label[for], span.a-button-text'
+            ));
+            for (const text of coverTexts) {
+              const btn = allBtns.find(el => {
+                const t = (el.textContent || '').trim().toLowerCase();
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0 && t.includes(text);
+              });
+              if (btn) { btn.click(); return 'clicked: ' + btn.textContent.trim().slice(0, 50); }
+            }
+            // Find cover section by heading and click first visible button inside it
+            const allDivs = Array.from(document.querySelectorAll('section, .a-section, fieldset, div'));
+            for (const sec of allDivs) {
+              const h = sec.querySelector('h2, h3, h4, legend, .a-form-label, label');
+              if (h && (h.textContent || '').toLowerCase().includes('capa')) {
+                const btn = Array.from(sec.querySelectorAll('button, [role="button"], a')).find(el => {
+                  const r = el.getBoundingClientRect();
+                  const t = (el.textContent || '').toLowerCase();
+                  return r.width > 0 && r.height > 0 && !t.includes('criador') && !t.includes('creator');
+                });
+                if (btn) { btn.click(); return 'section-btn: ' + btn.textContent.trim().slice(0, 50); }
+              }
+            }
+            return 'no-cover-btn';
+          }),
+        ]);
         await chooser.accept([ebook.coverPath]);
         log.info('Capa enviada via file chooser');
         cvUploaded = true;
         await sleep(8000);
         await screenshot(page, 'step2_after_cover');
       } catch(e) {
-        log.info('File chooser cover failed: ' + e.message.slice(0, 60));
+        log.info('Cover chooser failed: ' + e.message.slice(0, 80));
       }
 
-      // Approach 2: direct input (KDP cover uses data[cover] name)
-      if (!cvUploaded) {
-        const coverInput = await page.$([
-          'input[type="file"][name*="cover" i]',
-          'input[type="file"][id*="cover" i]',
-          'input[type="file"][accept*="image" i]',
-          'input[type="file"][id*="thumbnail" i]',
-          'input[type="file"][accept*="jpeg" i]',
-          'input[type="file"][accept*="jpg" i]',
-        ].join(','))
-          .catch(() => null);
-
-        if (coverInput) {
-          await coverInput.uploadFile(ebook.coverPath);
-          log.info('Capa enviada via file input');
-          cvUploaded = true;
-          await sleep(8000);
-          await screenshot(page, 'step2_after_cover');
-        } else {
-          log.warn('Cover file input not found via page.$');
-        }
-      }
-
-      // Approach 3: CDP DOM.setFileInputFiles for cover
+      // Approach 2: CDP — inspect all file inputs, identify cover input by attributes, set file directly
       if (!cvUploaded) {
         try {
           const client = await page.target().createCDPSession();
-          const { root } = await client.send('DOM.getDocument', { depth: 1 });
-          // Try cover-specific selectors first
-          const coverSelectors = [
-            'input[type="file"][name*="cover" i]',
-            'input[type="file"][id*="cover" i]',
-            'input[type="file"][accept*="image" i]',
-          ];
+          // Scroll to bottom to ensure cover section is rendered
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          await sleep(1500);
+          const { root } = await client.send('DOM.getDocument', { depth: -1 });
+          const { nodeIds } = await client.send('DOM.querySelectorAll', {
+            nodeId: root.nodeId, selector: 'input[type="file"]'
+          }).catch(() => ({ nodeIds: [] }));
+          log.info('CDP cover: ' + nodeIds.length + ' file inputs found');
+
           let coverNodeId = 0;
-          for (const sel of coverSelectors) {
-            const res = await client.send('DOM.querySelector', { nodeId: root.nodeId, selector: sel }).catch(() => ({ nodeId: 0 }));
-            if (res.nodeId > 0) { coverNodeId = res.nodeId; break; }
+          for (const nid of nodeIds) {
+            const res = await client.send('DOM.getAttributes', { nodeId: nid }).catch(() => ({ attributes: [] }));
+            const attrs = {};
+            for (let i = 0; i < res.attributes.length; i += 2) attrs[res.attributes[i]] = res.attributes[i+1];
+            log.info('  file input attrs: ' + JSON.stringify(attrs).slice(0, 120));
+            const nm = (attrs.name || attrs.id || '').toLowerCase();
+            const ac = (attrs.accept || '').toLowerCase();
+            if (nm.includes('cover') || nm.includes('capa') || nm.includes('image') ||
+                ac.includes('image') || ac.includes('jpeg') || ac.includes('jpg') || ac.includes('png')) {
+              coverNodeId = nid; break;
+            }
           }
-          if (coverNodeId > 0) {
+          // Last resort: use last file input (manuscript is first, cover is last)
+          if (!coverNodeId && nodeIds.length >= 2) coverNodeId = nodeIds[nodeIds.length - 1];
+
+          if (coverNodeId) {
             await client.send('DOM.setFileInputFiles', { files: [ebook.coverPath], nodeId: coverNodeId });
-            log.info('Capa via CDP setFileInputFiles');
+            // Dispatch events so KDP's JS detects the file
+            await page.evaluate(() => {
+              document.querySelectorAll('input[type="file"]').forEach(el => {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+              });
+            });
+            log.info('Capa via CDP setFileInputFiles nodeId=' + coverNodeId);
             cvUploaded = true;
             await sleep(8000);
             await screenshot(page, 'step2_after_cover');
           } else {
-            // Last resort: pick 2nd file input (first is manuscript)
-            const { nodeIds } = await client.send('DOM.querySelectorAll', {
-              nodeId: root.nodeId, selector: 'input[type="file"]'
-            }).catch(() => ({ nodeIds: [] }));
-            if (nodeIds.length >= 2) {
-              await client.send('DOM.setFileInputFiles', { files: [ebook.coverPath], nodeId: nodeIds[1] });
-              log.info('Capa via CDP setFileInputFiles (2nd input)');
-              cvUploaded = true;
-              await sleep(8000);
-              await screenshot(page, 'step2_after_cover');
-            } else {
-              log.warn('CDP: no cover file input found');
-            }
+            log.warn('CDP: cover file input not found');
           }
           await client.detach().catch(() => {});
         } catch(e) {
-          log.warn('CDP cover upload failed: ' + e.message.slice(0, 80));
+          log.warn('CDP cover failed: ' + e.message.slice(0, 80));
         }
       }
+
+      if (!cvUploaded) log.warn('Cover upload all approaches failed — continuing without cover');
     }
+
+    // Dismiss PDF modal again (may have reappeared during cover upload interaction)
+    await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      for (const btn of btns) {
+        const t = (btn.textContent || '').trim().toLowerCase();
+        if (t.includes('continuar com pdf') || t.includes('continue with pdf')) {
+          if (btn.getBoundingClientRect().width > 0) { btn.click(); return true; }
+        }
+      }
+    }).catch(() => {});
+    await sleep(1000);
 
     const step2Url = page.url();
     const step2ok = await clickKdpButton(page, [
       'Salvar e continuar', 'Save and continue', 'Salvar e Continuar',
-      'Continuar', 'Continue', 'Próximo', 'Next', 'Salvar',
+      // Note: 'Continuar'/'Continue' intentionally OMITTED — too generic, matches "Continuar com PDF" modal
+      'Próximo', 'Next', 'Salvar',
     ]);
     if (step2ok) await waitForUrlChange(page, step2Url, 20000);
     await sleep(5000);
     await screenshot(page, 'step3_start');
-    log.info('Etapa 3 URL: ' + page.url().slice(0, 80));
+    const step3InitialUrl = page.url();
+    log.info('Etapa 3 URL: ' + step3InitialUrl.slice(0, 80));
+
+    // If still on Step 2 /content (cover upload blocked "Salvar"), navigate to /pricing directly
+    if (step3InitialUrl.includes('/content')) {
+      log.warn('Still on /content after Step 2 save — navigating directly to /pricing');
+      const asinM = step3InitialUrl.match(/\/title-setup\/kindle\/([A-Z0-9]{10,})\//);
+      if (asinM) {
+        const pricingUrl = step3InitialUrl.replace(/\/content(\?.*)?$/, '/pricing');
+        await page.goto(pricingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await sleep(3000);
+        log.info('Pricing URL após nav direta: ' + page.url().slice(0, 80));
+      }
+    }
 
     // ── STEP 3: Pricing ──────────────────────────────────────────────────────
-    log.info('Etapa 3: Precificação');
+    log.info('Etapa 3: Precificação — URL: ' + page.url().slice(0, 80));
+
+    // Debug Step 3 DOM to find correct price input selectors
+    const step3Debug = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input'))
+        .filter(el => el.type !== 'hidden')
+        .map(el => ({ type: el.type, id: el.id, name: el.name, placeholder: el.placeholder || '', value: el.value || '' }));
+      const btns = Array.from(document.querySelectorAll('button, input[type="submit"], .a-button-text'))
+        .filter(el => el.getBoundingClientRect?.()?.width > 0)
+        .map(el => (el.textContent || el.value || '').trim().slice(0, 40));
+      const pageText = (document.body.innerText || '').slice(0, 400);
+      return { inputs: inputs.slice(0, 25), btns: btns.slice(0, 10), pageText };
+    }).catch(() => ({}));
+    log.info('Step3 DOM: ' + JSON.stringify(step3Debug).slice(0, 1000));
 
     // Publishing rights: worldwide
     await page.evaluate(() => {
       const radios = document.querySelectorAll('input[type="radio"]');
       for (const r of radios) {
-        const v = (r.value || '').toUpperCase();
-        if (v === 'WORLD' || v === 'WORLDWIDE' || r.id?.toLowerCase().includes('worldwide')) {
+        const v = (r.value || r.id || r.name || '').toUpperCase();
+        const lbl = (r.labels?.[0]?.textContent || r.closest('label')?.textContent || '').toLowerCase();
+        if (v === 'WORLD' || v === 'WORLDWIDE' || v.includes('WORLDWIDE') ||
+            lbl.includes('worldwide') || lbl.includes('todo o mundo') || lbl.includes('mundo inteiro')) {
           r.click(); break;
         }
       }
     }).catch(() => {});
     await sleep(300);
 
-    // Royalty: 35% (compatible with all prices)
+    // Royalty: 35% (compatible with all prices, no KDP Select enrollment required)
     await page.evaluate(() => {
       const radios = document.querySelectorAll('input[type="radio"]');
       for (const r of radios) {
-        const v = (r.value || '').toLowerCase();
-        if (v.includes('35') || r.id?.toLowerCase().includes('35')) { r.click(); break; }
+        const v = (r.value || r.id || '').toLowerCase();
+        const lbl = (r.labels?.[0]?.textContent || r.closest('label')?.textContent || '').toLowerCase();
+        if (v.includes('35') || r.id?.toLowerCase().includes('35') || lbl.includes('35%')) {
+          r.click(); break;
+        }
       }
     }).catch(() => {});
     await sleep(300);
 
-    // Price in USD (KDP's primary marketplace for global)
+    // Price in USD — try broad set of selectors since we don't know exact IDs yet
     const priceUsd = Math.max(0.99, DEFAULT_PRICE * 0.18).toFixed(2);
     const priceFilled = await fillField(page, [
+      'input[name*="primary_price" i]',
+      'input[name*="us_price" i]', 'input[name*="us-price" i]',
+      'input[name*="price"][name*="us" i]',
       'input[id*="us-price" i]', 'input[id*="us_price" i]',
       'input[id*="USD" i]', 'input[id*="usd" i]',
-      'input[id*="price-USD" i]',
+      'input[id*="price-USD" i]', 'input[id*="price_us" i]',
+      'input[placeholder*="0.99" i]', 'input[placeholder*="preço" i]', 'input[placeholder*="price" i]',
     ], priceUsd);
     log.info('USD price: $' + priceUsd + ' filled=' + priceFilled);
     await sleep(500);
@@ -1449,12 +1526,14 @@ async function publishToAmazon(ebook) {
     await sleep(6000);
 
     const finalUrl = page.url();
-    // True "published" means: button was clicked AND either URL changed away from setup page
-    // or we landed on bookshelf/confirmation. A URL still at new/details means it likely saved as draft.
-    const urlChanged = !finalUrl.includes('/title-setup/kindle/new') && !finalUrl.includes('/pt_BR/create');
-    const reallyPublished = published && urlChanged;
-    log.info('Amazon KDP done! buttonClicked=' + published + ' urlChanged=' + urlChanged +
-             ' published=' + reallyPublished + ' URL: ' + finalUrl.slice(0, 80));
+    // True publish: URL moved away from /pricing, /content, /details setup pages
+    // Fix for false positive: ASIN in URL (e.g. /ASIN/content) is still in-setup
+    const leftSetup = !finalUrl.includes('/pricing') && !finalUrl.includes('/content') &&
+                      !finalUrl.includes('/details') && !finalUrl.includes('/title-setup/kindle/new');
+    const onBookshelf = finalUrl.includes('/bookshelf');
+    const reallyPublished = published && (leftSetup || onBookshelf);
+    log.info('Amazon KDP done! buttonClicked=' + published + ' leftSetup=' + leftSetup +
+             ' bookshelf=' + onBookshelf + ' published=' + reallyPublished + ' URL: ' + finalUrl.slice(0, 80));
     await screenshot(page, 'step3_done');
 
     // Save updated session
