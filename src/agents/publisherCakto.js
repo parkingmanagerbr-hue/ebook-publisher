@@ -329,16 +329,33 @@ async function publishToCakto(ebook) {
           // ── Switch to "Login with password" tab (Cakto SSO defaults to passwordless) ──
           try {
             const pwTabClicked = await page.evaluate(() => {
-              const all = Array.from(document.querySelectorAll('a, button, [role="tab"], li, span, div'));
-              const el = all.find(e => {
-                const t = (e.textContent || '').toLowerCase().trim();
-                const r = e.getBoundingClientRect();
-                return r.width > 10 && r.height > 8 && r.height < 80 &&
-                       (t === 'login with password' || t === 'entrar com senha' ||
-                        t === 'senha' || t === 'password' ||
-                        t.includes('login with password') || t.includes('entrar com senha'));
-              });
-              if (el) { el.click(); return (el.textContent || '').trim().slice(0, 50); }
+              // Look for the EXACT tab element — must be a near-leaf node with short text
+              // Priority: element whose own trimmed text is EXACTLY the tab label
+              const targets = ['login with password', 'entrar com senha'];
+              const candidates = Array.from(document.querySelectorAll('a, button, [role="tab"], li'));
+              for (const target of targets) {
+                // Exact match on own text (trim + normalize whitespace)
+                const exact = candidates.find(e => {
+                  const t = (e.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                  const r = e.getBoundingClientRect();
+                  return r.width > 10 && r.height > 5 && r.height < 60 && t === target;
+                });
+                if (exact) { exact.click(); return (exact.textContent || '').trim().slice(0, 60); }
+              }
+              // Fallback: shortest element that contains the target text (avoids container elements)
+              for (const target of targets) {
+                const matches = candidates.filter(e => {
+                  const t = (e.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                  const r = e.getBoundingClientRect();
+                  return r.width > 10 && r.height > 5 && r.height < 60 && t.includes(target);
+                });
+                if (matches.length > 0) {
+                  // Click the one with shortest text (closest to leaf)
+                  matches.sort((a, b) => (a.textContent||'').length - (b.textContent||'').length);
+                  matches[0].click();
+                  return (matches[0].textContent || '').trim().slice(0, 60);
+                }
+              }
               return null;
             });
             if (pwTabClicked) {
