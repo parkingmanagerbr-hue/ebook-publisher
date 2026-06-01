@@ -665,19 +665,43 @@ async function publishToAmazon(ebook) {
 
     // ── STEP 1: Book details ─────────────────────────────────────────────────
     log.info('Etapa 1: Detalhes do livro');
-    await sleep(2000); // let form render
+    await sleep(3000); // let form render (extra time for new KDP SPA)
+
+    // Debug: dump available inputs to understand the DOM structure
+    const step1Debug = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input, textarea, select'))
+        .filter(el => {
+          const r = el.getBoundingClientRect();
+          return (r.width > 0 || el.type === 'hidden') && el.type !== 'checkbox' && el.type !== 'radio';
+        })
+        .map(el => ({
+          tag: el.tagName, type: el.type, id: el.id, name: el.name,
+          placeholder: el.placeholder, dataAttrs: Object.keys(el.dataset).join(','),
+          rect: Math.round(el.getBoundingClientRect().width) + 'x' + Math.round(el.getBoundingClientRect().height)
+        }));
+      const buttons = Array.from(document.querySelectorAll('.a-button-primary, .a-button-submit, button[type="submit"]'))
+        .map(el => ({tag: el.tagName, cls: el.className.slice(0,80), text: (el.textContent||'').trim().slice(0,40)}));
+      return { inputs: inputs.slice(0,20), buttons: buttons.slice(0,5) };
+    }).catch(() => ({}));
+    log.info('Step1 DOM: inputs=' + JSON.stringify(step1Debug.inputs) + ' buttons=' + JSON.stringify(step1Debug.buttons));
 
     // Language
     try {
       await page.select('select[name*="language" i], select[id*="language" i]', 'pt').catch(() => {});
     } catch {}
 
-    // Title
+    // Title — try expanded set of selectors for new KDP React UI
     const titleFilled = await fillField(page, [
       'input[id*="title" i]:not([id*="sub" i]):not([id*="series" i])',
       'input[name*="title" i]:not([name*="sub" i])',
       'input[placeholder*="título" i]',
       'input[placeholder*="title" i]',
+      'input[data-a-input-name*="title" i]',
+      'input[aria-label*="title" i]',
+      'input[aria-label*="título" i]',
+      '#data-asin-metadata-input-title',
+      'input.title-input',
+      'form input[type="text"]:first-of-type',
     ], ebook.title);
     log.info('Title filled: ' + titleFilled);
     await sleep(300);
@@ -764,69 +788,117 @@ async function publishToAmazon(ebook) {
       await sleep(300);
     } catch {}
 
+    // Debug step 2 DOM
+    const step2Debug = await page.evaluate(() => {
+      const allInputs = Array.from(document.querySelectorAll('input, textarea, select'))
+        .map(el => ({ tag: el.tagName, type: el.type, id: el.id, name: el.name, accept: el.accept || '', placeholder: el.placeholder.slice(0,30) }));
+      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'))
+        .map(el => ({ id: el.id, name: el.name, accept: el.accept, hidden: el.style.display === 'none' || el.offsetParent === null }));
+      const btns = Array.from(document.querySelectorAll('button, a[role="button"], input[type="button"]'))
+        .filter(el => el.getBoundingClientRect().width > 0)
+        .map(el => (el.textContent || el.value || '').trim().slice(0,40));
+      return { allInputs: allInputs.slice(0,15), fileInputs, visibleBtns: btns.slice(0,10) };
+    }).catch(() => ({}));
+    log.info('Step2 DOM: ' + JSON.stringify(step2Debug));
+
     // Upload manuscript (PDF)
     if (ebook.pdfPath && fs.existsSync(ebook.pdfPath)) {
       log.info('Upload manuscrito: ' + ebook.pdfPath);
 
-      // First try to trigger the upload dialog if needed
-      await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-        const btn = btns.find(e => {
-          const t = (e.textContent || '').toLowerCase();
-          return t.includes('manuscrito') || t.includes('manuscript') ||
-                 t.includes('upload') || t.includes('enviar arquivo') || t.includes('arquivo');
+      // Approach 1: waitForFileChooser — intercept native file dialog triggered by upload button
+      let msUploaded = false;
+      try {
+        const chooserPromise = page.waitForFileChooser({ timeout: 8000 });
+        // Click the upload button
+        await page.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button, a, [role="button"], label'));
+          const btn = btns.find(e => {
+            const t = (e.textContent || '').toLowerCase();
+            return t.includes('manuscrito') || t.includes('manuscript') ||
+                   t.includes('upload') || t.includes('enviar arquivo') || t.includes('arquivo') ||
+                   t.includes('selecionar arquivo') || t.includes('choose file') || t.includes('browse');
+          });
+          if (btn && btn.getBoundingClientRect().width > 0) { btn.click(); return true; }
+          return false;
         });
-        if (btn && btn.getBoundingClientRect().width > 0) btn.click();
-      });
-      await sleep(1500);
-
-      // Find file input
-      const msInput = await page.$([
-        'input[type="file"][id*="manuscript" i]',
-        'input[type="file"][id*="book_file" i]',
-        'input[type="file"][id*="contentFile" i]',
-        'input[type="file"][accept*="pdf" i]',
-        'input[type="file"]:not([id*="cover" i]):not([id*="thumbnail" i])',
-      ].join(','))
-        .catch(() => null)
-        ?? await page.$('input[type="file"]').catch(() => null);
-
-      if (msInput) {
-        await msInput.uploadFile(ebook.pdfPath);
-        log.info('Aguardando processamento KDP (~40s)...');
-        await sleep(40000);
+        const chooser = await chooserPromise;
+        await chooser.accept([ebook.pdfPath]);
+        log.info('Manuscrito enviado via file chooser');
+        msUploaded = true;
+        await sleep(40000); // KDP takes ~40s to process PDF
         await screenshot(page, 'step2_after_manuscript');
-      } else {
-        log.warn('Manuscript file input not found');
+      } catch(e) {
+        log.info('File chooser ms failed: ' + e.message.slice(0, 60));
+      }
+
+      // Approach 2: direct input element upload
+      if (!msUploaded) {
+        const msInput = await page.$([
+          'input[type="file"][id*="manuscript" i]',
+          'input[type="file"][id*="book_file" i]',
+          'input[type="file"][id*="contentFile" i]',
+          'input[type="file"][accept*="pdf" i]',
+          'input[type="file"]:not([id*="cover" i]):not([id*="thumbnail" i])',
+        ].join(','))
+          .catch(() => null)
+          ?? await page.$('input[type="file"]').catch(() => null);
+
+        if (msInput) {
+          await msInput.uploadFile(ebook.pdfPath);
+          log.info('Manuscrito enviado via file input');
+          await sleep(40000);
+          await screenshot(page, 'step2_after_manuscript');
+        } else {
+          log.warn('Manuscript file input not found');
+        }
       }
     }
 
     // Upload cover
     if (ebook.coverPath && fs.existsSync(ebook.coverPath)) {
       log.info('Upload capa KDP...');
-      await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-        const btn = btns.find(e => {
-          const t = (e.textContent || '').toLowerCase();
-          return t.includes('capa') || t.includes('cover') || t.includes('imagem') || t.includes('image');
+
+      // Approach 1: waitForFileChooser
+      let cvUploaded = false;
+      try {
+        const chooserPromise = page.waitForFileChooser({ timeout: 8000 });
+        await page.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button, a, [role="button"], label'));
+          const btn = btns.find(e => {
+            const t = (e.textContent || '').toLowerCase();
+            return t.includes('capa') || t.includes('cover') || t.includes('imagem') || t.includes('image') ||
+                   t.includes('thumbnail') || t.includes('foto');
+          });
+          if (btn && btn.getBoundingClientRect().width > 0) { btn.click(); return true; }
+          return false;
         });
-        if (btn && btn.getBoundingClientRect().width > 0) btn.click();
-      });
-      await sleep(1500);
-
-      const coverInput = await page.$([
-        'input[type="file"][id*="cover" i]',
-        'input[type="file"][accept*="image" i]',
-        'input[type="file"][id*="thumbnail" i]',
-      ].join(','))
-        .catch(() => null);
-
-      if (coverInput) {
-        await coverInput.uploadFile(ebook.coverPath);
+        const chooser = await chooserPromise;
+        await chooser.accept([ebook.coverPath]);
+        log.info('Capa enviada via file chooser');
+        cvUploaded = true;
         await sleep(8000);
         await screenshot(page, 'step2_after_cover');
-      } else {
-        log.warn('Cover file input not found');
+      } catch(e) {
+        log.info('File chooser cover failed: ' + e.message.slice(0, 60));
+      }
+
+      // Approach 2: direct input
+      if (!cvUploaded) {
+        const coverInput = await page.$([
+          'input[type="file"][id*="cover" i]',
+          'input[type="file"][accept*="image" i]',
+          'input[type="file"][id*="thumbnail" i]',
+        ].join(','))
+          .catch(() => null);
+
+        if (coverInput) {
+          await coverInput.uploadFile(ebook.coverPath);
+          log.info('Capa enviada via file input');
+          await sleep(8000);
+          await screenshot(page, 'step2_after_cover');
+        } else {
+          log.warn('Cover file input not found');
+        }
       }
     }
 
@@ -890,14 +962,19 @@ async function publishToAmazon(ebook) {
     await sleep(6000);
 
     const finalUrl = page.url();
-    log.info('Amazon KDP done! published=' + published + ' URL: ' + finalUrl.slice(0, 80));
+    // True "published" means: button was clicked AND either URL changed away from setup page
+    // or we landed on bookshelf/confirmation. A URL still at new/details means it likely saved as draft.
+    const urlChanged = !finalUrl.includes('/title-setup/kindle/new') && !finalUrl.includes('/pt_BR/create');
+    const reallyPublished = published && urlChanged;
+    log.info('Amazon KDP done! buttonClicked=' + published + ' urlChanged=' + urlChanged +
+             ' published=' + reallyPublished + ' URL: ' + finalUrl.slice(0, 80));
     await screenshot(page, 'step3_done');
 
     // Save updated session
     await saveSession(page);
 
     await browser.close();
-    return { success: published, url: finalUrl, platform: 'amazon' };
+    return { success: reallyPublished, url: reallyPublished ? finalUrl : null, platform: 'amazon' };
 
   } catch (err) {
     log.error('Amazon error: ' + err.message);
