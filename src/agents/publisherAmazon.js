@@ -953,81 +953,69 @@ async function publishToAmazon(ebook) {
         // Always include broad fallbacks
         catPriorities.push('não-ficção', 'nonfiction', 'educação', 'negócios');
 
-        // Multi-level category navigation — loop until leaf node is reached (up to 6 levels).
-        // Tracks already-clicked items to skip parent nodes in both expandable and replacement tree UIs.
-        const catClickedTexts = new Set();
-        let catLeafReached = false;
-        for (let catLevel = 1; catLevel <= 6; catLevel++) {
-          await sleep(catLevel === 1 ? 1500 : 2500); // extra wait after L1 click for subcategory list to load
-          const levelResult = await page.evaluate((alreadyClicked, lvl, priorities) => {
-            const modal = document.querySelector(
-              '[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, [class*="category-modal"], [class*="CategoryModal"]'
-            );
-            if (!modal) {
-              if (lvl === 1) {
-                const allClickable = Array.from(document.querySelectorAll('li, [role="option"], [role="treeitem"], button, a'))
-                  .filter(el => { const r = el.getBoundingClientRect(); return r.width > 50 && r.height > 5 && r.height < 80; });
-                return 'no-modal-l1: ' + allClickable.map(e => (e.textContent||'').trim().slice(0,20)).join(' | ').slice(0,200);
-              }
-              return 'no-modal';
-            }
-            const items = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], a, button, span, label'))
+        // KDP category modal uses <select> dropdowns (left col) + checkboxes (right col "Posicionamento")
+        // NOT a click-tree. Flow: fill <select> → wait for cascade → fill next <select> → check checkbox → confirm
+
+        // Step A: Fill <select> dropdowns (up to 4 cascading levels)
+        for (let selectRound = 1; selectRound <= 4; selectRound++) {
+          await sleep(selectRound === 1 ? 1500 : 2000);
+          const selectResult = await page.evaluate((priorities, round) => {
+            const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, .a-popover-wrapper');
+            if (!modal) return 'no-modal';
+            // Find visible, unfilled <select> elements
+            const selects = Array.from(modal.querySelectorAll('select'))
               .filter(el => {
                 const r = el.getBoundingClientRect();
-                const t = (el.textContent||'').trim().toLowerCase();
-                if (!t || t.length < 3 || t.length > 80) return false;
-                // Skip section header labels
-                if (t === 'categorias' || t === 'categories' || t === 'categoria' || t === 'category') return false;
-                // Skip help/info text
-                if (t.includes('dica') || t.includes('tip') || t.includes('help') || t.includes('escolher') || t.includes('choose')) return false;
-                // Skip buttons that reopen modal or navigate away
-                if (t.includes('outra categoria') || t.includes('another category')) return false;
-                if (t.includes('salvar categor') || t.includes('save categor')) return false;
-                if (t.includes('série') || t.includes('serie') || t.includes('series')) return false;
-                // Skip bare action-button labels (handled in confirm step) and nav buttons
-                if (t === 'adicionar' || t === 'add' || t === 'selecionar' || t === 'select' || t === 'confirmar' || t === 'confirm' || t === 'ok') return false;
-                if (t === 'cancelar' || t === 'cancel' || t === 'fechar' || t === 'close' || t === 'voltar' || t === 'back') return false;
-                // Skip status/counter text (e.g. "0 dos 3 posicionamentos de categoria selecionados")
-                if (/^\d/.test(t)) return false; // starts with digit → status text
-                if (t.includes('posicionamento') || t.includes('selecionado') || t.includes('selected') || t.includes('position')) return false;
-                // Skip items we already clicked in a previous level
-                if (alreadyClicked.includes(t)) return false;
-                if (r.width <= 30 || r.height <= 5 || r.height >= 100) return false;
-                if (el.children.length > 4) return false;
-                return true;
+                return r.width > 50 && r.height > 0 && (!el.value || el.value === '' || el.value === '0');
               });
-            if (items.length === 0) {
-              // Deep debug: dump modal structure to diagnose missing subcategory items
-              const allEls = Array.from(modal.querySelectorAll('*'))
-                .filter(el => { const r = el.getBoundingClientRect(); return r.width > 10 && r.height > 5 && r.height < 200; })
-                .slice(0, 30)
-                .map(el => {
-                  const r = el.getBoundingClientRect();
-                  return el.tagName + '.' + (el.className||'').slice(0,20) + ' [' + Math.round(r.width) + 'x' + Math.round(r.height) + '] "' + (el.textContent||'').trim().slice(0,25) + '"';
-                });
-              return 'leaf-reached|dom: ' + allEls.join(' || ').slice(0, 500);
-            }
-            // Try priority categories first, then fall back to first item
+            if (selects.length === 0) return 'no-empty-selects';
+            const sel = selects[0];
+            const options = Array.from(sel.options).filter(o => o.value && o.value !== '' && o.value !== '0');
+            if (options.length === 0) return 'no-options';
+            // Log available options for diagnostics
+            const optTexts = options.slice(0, 10).map(o => o.text.trim()).join(' | ');
+            // Try topic-priority match first, then fall back to first option
+            let chosen = null;
             for (const prio of priorities) {
-              const el = items.find(e => (e.textContent||'').toLowerCase().includes(prio));
-              if (el) { el.click(); return 'l' + lvl + '-priority:' + (el.textContent||'').trim().slice(0,50); }
+              chosen = options.find(o => o.text.toLowerCase().includes(prio));
+              if (chosen) break;
             }
-            items[0].click();
-            return 'l' + lvl + ':' + (items[0].textContent||'').trim().slice(0,50);
-          }, Array.from(catClickedTexts), catLevel, catPriorities).catch(() => 'err-l' + catLevel);
-
-          log.info('Category level ' + catLevel + ': ' + levelResult);
-
-          if (levelResult === 'leaf-reached' || levelResult === 'no-modal') {
-            catLeafReached = (levelResult === 'leaf-reached');
-            break;
-          }
-          if (levelResult.startsWith('err') || levelResult.startsWith('no-modal-l1')) break;
-          // Track clicked text so we skip it on the next level
-          const colonIdx = levelResult.indexOf(':');
-          if (colonIdx >= 0) catClickedTexts.add(levelResult.slice(colonIdx + 1).toLowerCase().trim());
+            if (!chosen) chosen = options[0];
+            sel.value = chosen.value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            sel.dispatchEvent(new Event('input', { bubbles: true }));
+            return 'r' + round + ':selected "' + chosen.text.trim().slice(0, 50) + '" from [' + optTexts.slice(0, 80) + ']';
+          }, catPriorities, selectRound).catch(() => 'err-select-r' + selectRound);
+          log.info('Category select ' + selectRound + ': ' + selectResult);
+          if (selectResult === 'no-empty-selects' || selectResult === 'no-modal') break;
         }
-        if (catLeafReached) log.info('Category navigation: leaf node reached after ' + catClickedTexts.size + ' levels, path: ' + Array.from(catClickedTexts).join(' → '));
+
+        // Step B: Check first available placement checkbox in the Posicionamento right panel
+        await sleep(1500);
+        const checkboxResult = await page.evaluate((priorities) => {
+          const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, .a-popover-wrapper');
+          if (!modal) return 'no-modal';
+          const checkboxes = Array.from(modal.querySelectorAll('input[type="checkbox"]'))
+            .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.checked; });
+          if (checkboxes.length === 0) return 'no-checkboxes';
+          // Try to find best-matching checkbox by label text
+          let chosen = null;
+          for (const prio of priorities) {
+            chosen = checkboxes.find(cb => {
+              const labelEl = cb.labels?.[0] || cb.closest('label') || cb.parentElement;
+              return (labelEl?.textContent || '').toLowerCase().includes(prio);
+            });
+            if (chosen) break;
+          }
+          if (!chosen) chosen = checkboxes[0];
+          chosen.click();
+          chosen.checked = true;
+          chosen.dispatchEvent(new Event('change', { bubbles: true }));
+          const labelEl = chosen.labels?.[0] || chosen.closest('label') || chosen.parentElement;
+          return 'checked: "' + (labelEl?.textContent || chosen.id || '?').trim().slice(0, 50) + '"';
+        }, catPriorities).catch(() => 'err-checkbox');
+        log.info('Category checkbox: ' + checkboxResult);
+        await sleep(500);
 
         // Confirm / Add button — search ONLY inside the modal; prefer short/exact "Adicionar" over "Adicionar outra categoria"
         const confirmClicked = await page.evaluate(() => {
