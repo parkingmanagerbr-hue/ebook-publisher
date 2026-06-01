@@ -85,8 +85,56 @@ const LIMITS = {
 
 // Ordem de fallback — mais rápidos/melhores primeiro
 // Providers pagos (com quota) -- fallback infinito Ollama tratado separadamente
-const PAID_PROVIDERS = ['gemini', 'cerebras', 'sambanova', 'groq', 'deepseek', 'huggingface', 'pollinations'];
+const PAID_PROVIDERS = ['gemini', 'sambanova', 'cerebras', 'groq', 'deepseek', 'huggingface', 'pollinations'];
 const PROVIDERS = PAID_PROVIDERS;
+
+// ── Cross-system Gemini quota coordinator (Redis DB 0) ────────────────────────
+const _qnet = require('net');
+const _qRH  = (process.env.REDIS_URL || 'redis://redis:6379').replace(/^redis:\/\//, '').split(':')[0] || 'redis';
+const _qRP  = parseInt(((process.env.REDIS_URL || 'redis://redis:6379').replace(/^redis:\/\//, '').split(':')[1] || '6379'));
+
+function _rCmd(...args) {
+  return new Promise(resolve => {
+    try {
+      const s = _qnet.createConnection({ host: _qRH, port: _qRP });
+      let buf = '';
+      s.setTimeout(2000);
+      s.on('timeout', () => { s.destroy(); resolve(null); });
+      s.on('error', () => resolve(null));
+      s.on('data', d => { buf += d; });
+      s.on('end', () => {
+        try {
+          const ln = buf.split('\r\n'); const h = ln[0];
+          if (h[0] === '+') return resolve(h.slice(1));
+          if (h[0] === ':') return resolve(parseInt(h.slice(1)));
+          if (h.startsWith('$-1')) return resolve(null);
+          if (h[0] === '$') return resolve(ln[1] ?? null);
+          resolve(null);
+        } catch { resolve(null); }
+      });
+      const cmd = `*${args.length}\r\n` + args.map(a => `$${String(a).length}\r\n${a}\r\n`).join('');
+      s.write(cmd); s.end();
+    } catch { resolve(null); }
+  });
+}
+const _QUOTA_SYS = 'ebook';
+const _QUOTA_MAX = 200;
+async function _isGeminiGloballyExhausted() { return !!(await _rCmd('GET', 'gemini:daily_exhausted')); }
+async function _markGeminiGloballyExhausted() {
+  const now = Date.now(), r = new Date();
+  r.setUTCHours(8, 0, 0, 0);
+  if (r.getTime() <= now) r.setUTCDate(r.getUTCDate() + 1);
+  await _rCmd('SET', 'gemini:daily_exhausted', '1', 'EX', String(Math.ceil((r.getTime() - now) / 1000)));
+}
+async function _withinDailyBudget() {
+  const key = `ai:gemini:sys:${_QUOTA_SYS}:daily:${new Date().toISOString().slice(0, 10)}`;
+  const n = await _rCmd('INCR', key);
+  if (n === 1) {
+    const t = new Date(); t.setUTCHours(0, 0, 0, 0); t.setUTCDate(t.getUTCDate() + 1);
+    await _rCmd('EXPIRE', key, String(Math.ceil((t.getTime() - Date.now()) / 1000) + 3600));
+  }
+  return n === null || n <= _QUOTA_MAX;
+}
 
 const SYSTEM_DEFAULT = 'Você é um escritor profissional especializado em e-books educativos em português brasileiro. Escreva de forma clara, prática e envolvente.';
 
@@ -496,6 +544,14 @@ async function generate(prompt, systemPrompt = '', options = {}) {
       }
     }
 
+    // Cross-system quota gate for Gemini
+    if (provider === 'gemini') {
+      if (await _isGeminiGloballyExhausted() || !(await _withinDailyBudget())) {
+        markDegraded(state, 'gemini', 24);
+        continue; // skip to next provider
+      }
+    }
+
     const keyId = LOCAL_PROVIDERS.has(provider) ? `${provider}:${apiKey}` : `${provider}:${apiKey.slice(-8)}`;
     const t0 = Date.now();
 
@@ -544,6 +600,7 @@ async function generate(prompt, systemPrompt = '', options = {}) {
             errors.push({ provider, error: errAlt.message?.slice(0, 80), key: altKeyId });
           }
         }
+        if (provider === 'gemini') await _markGeminiGloballyExhausted();
         logger.info(`   Todas as chaves de ${provider} esgotadas, indo para próximo provider...`);
       }
     }
