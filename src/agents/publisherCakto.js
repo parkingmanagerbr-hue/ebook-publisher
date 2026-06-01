@@ -309,10 +309,122 @@ async function publishToCakto(ebook) {
     let currentUrl = page.url();
     log.info('URL após navegação para dashboard: ' + currentUrl.slice(0, 100));
     if (currentUrl.includes('/login') || currentUrl.includes('/auth') || currentUrl.includes('/signin')) {
-      log.warn('Sessão Cakto expirada (redirecionou para login)');
+      log.warn('Sessão Cakto expirada (redirecionou para login) — tentando login automático');
       await screenshot(page, 'session_expired');
-      await browser.close();
-      return { success: false, error: 'Sessão expirada', platform: 'cakto' };
+
+      // ── Auto-login with credentials ──────────────────────────────────────────
+      const CAKTO_EMAIL    = process.env.CAKTO_EMAIL    || '';
+      const CAKTO_PASSWORD = process.env.CAKTO_PASSWORD || '';
+      let loginOk = false;
+
+      if (CAKTO_EMAIL && CAKTO_PASSWORD) {
+        try {
+          // Navigate to login page if not already there
+          if (!currentUrl.includes('cakto.com.br')) {
+            await page.goto('https://app.cakto.com.br/auth/login', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+            await sleep(2000);
+          }
+          await screenshot(page, 'login_page');
+
+          // Fill email
+          const emailPos = await page.evaluate(() => {
+            const sel = ['input[type="email"]', 'input[name="email"]', 'input[id*="email" i]', 'input[placeholder*="e-mail" i]', 'input[placeholder*="email" i]'];
+            for (const s of sel) {
+              const el = document.querySelector(s);
+              if (el) { const r = el.getBoundingClientRect(); if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 }; }
+            }
+            return null;
+          });
+          if (emailPos) {
+            await page.mouse.click(emailPos.x, emailPos.y, { clickCount: 3 });
+            await sleep(200);
+            await page.keyboard.type(CAKTO_EMAIL, { delay: 30 });
+            await sleep(300);
+            log.info('Cakto email preenchido');
+          }
+
+          // Fill password
+          const passPos = await page.evaluate(() => {
+            const sel = ['input[type="password"]', 'input[name="password"]', 'input[id*="pass" i]'];
+            for (const s of sel) {
+              const el = document.querySelector(s);
+              if (el) { const r = el.getBoundingClientRect(); if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 }; }
+            }
+            return null;
+          });
+          if (passPos) {
+            await page.mouse.click(passPos.x, passPos.y, { clickCount: 3 });
+            await sleep(200);
+            await page.keyboard.type(CAKTO_PASSWORD, { delay: 30 });
+            await sleep(300);
+            log.info('Cakto password preenchido');
+          }
+
+          // Submit
+          const submitPos = await page.evaluate(() => {
+            const sel = ['button[type="submit"]', 'input[type="submit"]', 'button:not([type])'];
+            for (const s of sel) {
+              for (const el of Array.from(document.querySelectorAll(s))) {
+                const t = (el.textContent || el.value || '').toLowerCase();
+                const r = el.getBoundingClientRect();
+                if (r.width > 0 && (t.includes('entrar') || t.includes('login') || t.includes('acessar') || t.includes('continuar') || t.includes('sign'))) {
+                  return { x: r.left + r.width/2, y: r.top + r.height/2 };
+                }
+              }
+            }
+            // Fallback: first submit button
+            const btn = document.querySelector('button[type="submit"], input[type="submit"]');
+            if (btn) { const r = btn.getBoundingClientRect(); if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 }; }
+            return null;
+          });
+          if (submitPos) {
+            await page.mouse.click(submitPos.x, submitPos.y);
+            log.info('Cakto submit clicado — aguardando dashboard...');
+            await sleep(5000);
+            try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }); } catch {}
+            await sleep(3000);
+          }
+
+          currentUrl = page.url();
+          log.info('URL após login: ' + currentUrl.slice(0, 100));
+          await screenshot(page, 'after_login');
+
+          if (!currentUrl.includes('/login') && !currentUrl.includes('/auth')) {
+            loginOk = true;
+            log.info('Cakto login bem-sucedido!');
+            // Save new session
+            try {
+              const cookies = await page.cookies();
+              let ls = {};
+              try { ls = await page.evaluate(() => { const o={}; for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);o[k]=localStorage.getItem(k);} return o; }); } catch {}
+              const newSession = { platform: 'cakto', savedAt: Date.now(), savedAtHuman: new Date().toLocaleString('pt-BR'), url: page.url(), cookies, localStorage: ls };
+              fs.mkdirSync(path.dirname(SESSION_FILE), { recursive: true });
+              fs.writeFileSync(SESSION_FILE, JSON.stringify(newSession, null, 2));
+              log.info('Nova sessão Cakto salva (' + cookies.length + ' cookies)');
+            } catch(se) { log.warn('Erro ao salvar sessão Cakto: ' + se.message); }
+          } else {
+            log.warn('Login Cakto falhou — ainda em página de login');
+          }
+        } catch(loginErr) {
+          log.warn('Erro no login automático Cakto: ' + loginErr.message.slice(0, 80));
+        }
+      } else {
+        log.warn('CAKTO_EMAIL/CAKTO_PASSWORD não configurados');
+      }
+
+      if (!loginOk) {
+        await browser.close();
+        return { success: false, error: 'Sessão expirada e login automático falhou', platform: 'cakto' };
+      }
+
+      // Navigate to products after successful login
+      await page.goto('https://app.cakto.com.br/dashboard/products?tab=products', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+      await sleep(3000);
+      currentUrl = page.url();
+      if (currentUrl.includes('/login') || currentUrl.includes('/auth')) {
+        await browser.close();
+        return { success: false, error: 'Login Cakto ok mas redirecionou para login novamente', platform: 'cakto' };
+      }
     }
     // Ensure we're on the "Meus Produtos" tab which shows the products list
     // and the "Adicionar Produto" button. The URL must include ?tab=products.
