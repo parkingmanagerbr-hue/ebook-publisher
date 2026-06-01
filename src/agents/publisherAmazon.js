@@ -801,35 +801,36 @@ async function publishToAmazon(ebook) {
     await screenshot(page, 'step1_filled');
 
     // Save and continue (Step 1 → Step 2)
-    // KDP uses a traditional server-side form POST (not React SPA) — clicking
-    // "Salvar e continuar" causes a full page reload to the same URL with step 2 content.
+    // KDP is a SPA — "Salvar e continuar" either does a server POST (full reload to same URL)
+    // or triggers an AJAX + React re-render on the same page. URL never changes between steps.
     const step1Url = page.url();
     const step1ok = await clickKdpButton(page, [
       'Salvar e continuar', 'Save and continue', 'Salvar e Continuar',
       'Continuar', 'Continue', 'Próximo', 'Next', 'Salvar',
     ]);
     if (step1ok) {
-      // Wait for page to reload (server-side POST → same URL but new content)
-      try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }); } catch {}
-      // Also wait for URL change as backup (sometimes KDP redirects to new URL)
-      await waitForUrlChange(page, step1Url, 10000).catch(() => {});
+      // If KDP does a full server-side POST reload, waitForNavigation will catch it
+      try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }); } catch {}
     }
-    // Extra wait for page to fully render after POST
-    await sleep(4000);
-    // Wait for step 2 content: file input or upload button should appear
+    // Extended wait for SPA re-render (execution context may be briefly destroyed during React updates)
+    await sleep(6000);
+
+    // Wait for Step 2 upload content — check body text, NOT just file input visibility
+    // KDP file inputs are always hidden (display:none), triggered by button click
     try {
       await page.waitForFunction(() => {
-        const fileInputs = document.querySelectorAll('input[type="file"]');
-        const uploadBtns = Array.from(document.querySelectorAll('button, label')).filter(el => {
-          const t = (el.textContent || '').toLowerCase();
-          return el.getBoundingClientRect().width > 0 && (t.includes('upload') || t.includes('manuscrito') || t.includes('manuscript') || t.includes('arquivo'));
-        });
-        return fileInputs.length > 0 || uploadBtns.length > 0;
-      }, { timeout: 15000 });
-      log.info('Step 2 conteúdo renderizado');
+        const text = (document.body.innerText || '').toLowerCase();
+        return text.includes('drm') ||
+               text.includes('manuscrito') || text.includes('manuscript') ||
+               text.includes('conteúdo do kindle') || text.includes('kindle content') ||
+               text.includes('carregar') || text.includes('upload') ||
+               document.querySelectorAll('input[type="file"]').length > 0;
+      }, { timeout: 30000 });
+      log.info('Step 2 conteúdo detectado');
     } catch (e) {
-      log.info('Step 2 wait: ' + e.message.slice(0, 60));
+      log.warn('Step 2 detect timeout: ' + e.message.slice(0, 60));
     }
+
     await screenshot(page, 'step2_start');
     log.info('Etapa 2 URL: ' + page.url().slice(0, 80));
 
@@ -851,37 +852,49 @@ async function publishToAmazon(ebook) {
       await sleep(300);
     } catch {}
 
-    // Debug step 2 DOM
-    const step2Debug = await page.evaluate(() => {
-      const allInputs = Array.from(document.querySelectorAll('input, textarea, select'))
-        .map(el => ({ tag: el.tagName, type: el.type, id: el.id, name: el.name, accept: el.accept || '', placeholder: el.placeholder.slice(0,30) }));
-      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'))
-        .map(el => ({ id: el.id, name: el.name, accept: el.accept, hidden: el.style.display === 'none' || el.offsetParent === null }));
-      const btns = Array.from(document.querySelectorAll('button, a[role="button"], input[type="button"]'))
-        .filter(el => el.getBoundingClientRect().width > 0)
-        .map(el => (el.textContent || el.value || '').trim().slice(0,40));
-      return { allInputs: allInputs.slice(0,15), fileInputs, visibleBtns: btns.slice(0,10) };
-    }).catch(() => ({}));
-    log.info('Step2 DOM: ' + JSON.stringify(step2Debug));
+    // Debug step 2 DOM — retry up to 3× (execution context can be briefly destroyed during SPA updates)
+    let step2Debug = {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        step2Debug = await page.evaluate(() => {
+          const allInputs = Array.from(document.querySelectorAll('input, textarea, select'))
+            .map(el => ({ tag: el.tagName, type: el.type, id: el.id, name: el.name, accept: el.accept || '' }));
+          const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'))
+            .map(el => ({ name: el.name, id: el.id, accept: el.accept }));
+          const btns = Array.from(document.querySelectorAll('button, label, .a-button-text, span.a-button-text'))
+            .filter(el => el.getBoundingClientRect().width > 0)
+            .map(el => (el.textContent || '').trim().slice(0, 40));
+          const pageText = (document.body.innerText || '').slice(0, 300);
+          return { allInputs: allInputs.slice(0, 20), fileInputs, visibleBtns: btns.slice(0, 10), pageText };
+        });
+        if (step2Debug.allInputs !== undefined) break;
+      } catch (e) {
+        log.warn('Step2 debug attempt ' + (attempt+1) + ' failed: ' + e.message.slice(0, 50));
+        await sleep(3000);
+      }
+    }
+    log.info('Step2 DOM: ' + JSON.stringify(step2Debug).slice(0, 600));
 
     // Upload manuscript (PDF)
     if (ebook.pdfPath && fs.existsSync(ebook.pdfPath)) {
       log.info('Upload manuscrito: ' + ebook.pdfPath);
+      let msUploaded = false;
 
       // Approach 1: waitForFileChooser — intercept native file dialog triggered by upload button
-      let msUploaded = false;
       try {
-        const chooserPromise = page.waitForFileChooser({ timeout: 8000 });
-        // Click the upload button
+        const chooserPromise = page.waitForFileChooser({ timeout: 10000 });
         await page.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button, a, [role="button"], label'));
-          const btn = btns.find(e => {
-            const t = (e.textContent || '').toLowerCase();
-            return t.includes('manuscrito') || t.includes('manuscript') ||
-                   t.includes('upload') || t.includes('enviar arquivo') || t.includes('arquivo') ||
-                   t.includes('selecionar arquivo') || t.includes('choose file') || t.includes('browse');
-          });
-          if (btn && btn.getBoundingClientRect().width > 0) { btn.click(); return true; }
+          const texts = ['carregar manuscrito', 'upload manuscript', 'upload your manuscript',
+                         'selecionar arquivo', 'escolher arquivo', 'choose file', 'browse',
+                         'manuscrito', 'manuscript', 'upload', 'arquivo'];
+          const btns = Array.from(document.querySelectorAll('button, a, [role="button"], label, span.a-button-text'));
+          for (const text of texts) {
+            const btn = btns.find(el => (el.textContent || '').toLowerCase().includes(text) && el.getBoundingClientRect().width > 0);
+            if (btn) { btn.click(); return true; }
+          }
+          // Fallback: click first visible label
+          const anyLabel = Array.from(document.querySelectorAll('label')).find(el => el.getBoundingClientRect().width > 0);
+          if (anyLabel) { anyLabel.click(); return true; }
           return false;
         });
         const chooser = await chooserPromise;
@@ -894,7 +907,7 @@ async function publishToAmazon(ebook) {
         log.info('File chooser ms failed: ' + e.message.slice(0, 60));
       }
 
-      // Approach 2: direct input element upload (including KDP data[book_file] name)
+      // Approach 2: direct uploadFile on hidden input (page.$() finds hidden inputs too)
       if (!msUploaded) {
         const msInput = await page.$([
           'input[type="file"][name*="book_file" i]',
@@ -911,10 +924,35 @@ async function publishToAmazon(ebook) {
         if (msInput) {
           await msInput.uploadFile(ebook.pdfPath);
           log.info('Manuscrito enviado via file input');
+          msUploaded = true;
           await sleep(40000);
           await screenshot(page, 'step2_after_manuscript');
         } else {
-          log.warn('Manuscript file input not found');
+          log.warn('Manuscript file input not found via page.$');
+        }
+      }
+
+      // Approach 3: CDP DOM.setFileInputFiles — works even on hidden/detached inputs
+      if (!msUploaded) {
+        try {
+          const client = await page.target().createCDPSession();
+          const { root } = await client.send('DOM.getDocument', { depth: 1 });
+          const { nodeId } = await client.send('DOM.querySelector', {
+            nodeId: root.nodeId,
+            selector: 'input[type="file"]'
+          });
+          if (nodeId > 0) {
+            await client.send('DOM.setFileInputFiles', { files: [ebook.pdfPath], nodeId });
+            log.info('Manuscrito via CDP setFileInputFiles');
+            msUploaded = true;
+            await sleep(40000);
+            await screenshot(page, 'step2_after_manuscript');
+          } else {
+            log.warn('CDP: no file input found in DOM');
+          }
+          await client.detach().catch(() => {});
+        } catch(e) {
+          log.warn('CDP ms upload failed: ' + e.message.slice(0, 80));
         }
       }
     }
@@ -922,19 +960,19 @@ async function publishToAmazon(ebook) {
     // Upload cover
     if (ebook.coverPath && fs.existsSync(ebook.coverPath)) {
       log.info('Upload capa KDP...');
+      let cvUploaded = false;
 
       // Approach 1: waitForFileChooser
-      let cvUploaded = false;
       try {
-        const chooserPromise = page.waitForFileChooser({ timeout: 8000 });
+        const chooserPromise = page.waitForFileChooser({ timeout: 10000 });
         await page.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button, a, [role="button"], label'));
-          const btn = btns.find(e => {
-            const t = (e.textContent || '').toLowerCase();
-            return t.includes('capa') || t.includes('cover') || t.includes('imagem') || t.includes('image') ||
-                   t.includes('thumbnail') || t.includes('foto');
-          });
-          if (btn && btn.getBoundingClientRect().width > 0) { btn.click(); return true; }
+          const texts = ['carregar capa', 'upload cover', 'upload your cover', 'capa', 'cover',
+                         'imagem', 'image', 'thumbnail', 'foto'];
+          const btns = Array.from(document.querySelectorAll('button, a, [role="button"], label, span.a-button-text'));
+          for (const text of texts) {
+            const btn = btns.find(el => (el.textContent || '').toLowerCase().includes(text) && el.getBoundingClientRect().width > 0);
+            if (btn) { btn.click(); return true; }
+          }
           return false;
         });
         const chooser = await chooserPromise;
@@ -962,10 +1000,54 @@ async function publishToAmazon(ebook) {
         if (coverInput) {
           await coverInput.uploadFile(ebook.coverPath);
           log.info('Capa enviada via file input');
+          cvUploaded = true;
           await sleep(8000);
           await screenshot(page, 'step2_after_cover');
         } else {
-          log.warn('Cover file input not found');
+          log.warn('Cover file input not found via page.$');
+        }
+      }
+
+      // Approach 3: CDP DOM.setFileInputFiles for cover
+      if (!cvUploaded) {
+        try {
+          const client = await page.target().createCDPSession();
+          const { root } = await client.send('DOM.getDocument', { depth: 1 });
+          // Try cover-specific selectors first
+          const coverSelectors = [
+            'input[type="file"][name*="cover" i]',
+            'input[type="file"][id*="cover" i]',
+            'input[type="file"][accept*="image" i]',
+          ];
+          let coverNodeId = 0;
+          for (const sel of coverSelectors) {
+            const res = await client.send('DOM.querySelector', { nodeId: root.nodeId, selector: sel }).catch(() => ({ nodeId: 0 }));
+            if (res.nodeId > 0) { coverNodeId = res.nodeId; break; }
+          }
+          if (coverNodeId > 0) {
+            await client.send('DOM.setFileInputFiles', { files: [ebook.coverPath], nodeId: coverNodeId });
+            log.info('Capa via CDP setFileInputFiles');
+            cvUploaded = true;
+            await sleep(8000);
+            await screenshot(page, 'step2_after_cover');
+          } else {
+            // Last resort: pick 2nd file input (first is manuscript)
+            const { nodeIds } = await client.send('DOM.querySelectorAll', {
+              nodeId: root.nodeId, selector: 'input[type="file"]'
+            }).catch(() => ({ nodeIds: [] }));
+            if (nodeIds.length >= 2) {
+              await client.send('DOM.setFileInputFiles', { files: [ebook.coverPath], nodeId: nodeIds[1] });
+              log.info('Capa via CDP setFileInputFiles (2nd input)');
+              cvUploaded = true;
+              await sleep(8000);
+              await screenshot(page, 'step2_after_cover');
+            } else {
+              log.warn('CDP: no cover file input found');
+            }
+          }
+          await client.detach().catch(() => {});
+        } catch(e) {
+          log.warn('CDP cover upload failed: ' + e.message.slice(0, 80));
         }
       }
     }
