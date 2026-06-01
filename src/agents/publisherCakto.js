@@ -326,6 +326,30 @@ async function publishToCakto(ebook) {
           }
           await screenshot(page, 'login_page');
 
+          // ── Switch to "Login with password" tab (Cakto SSO defaults to passwordless) ──
+          try {
+            const pwTabClicked = await page.evaluate(() => {
+              const all = Array.from(document.querySelectorAll('a, button, [role="tab"], li, span, div'));
+              const el = all.find(e => {
+                const t = (e.textContent || '').toLowerCase().trim();
+                const r = e.getBoundingClientRect();
+                return r.width > 10 && r.height > 8 && r.height < 80 &&
+                       (t === 'login with password' || t === 'entrar com senha' ||
+                        t === 'senha' || t === 'password' ||
+                        t.includes('login with password') || t.includes('entrar com senha'));
+              });
+              if (el) { el.click(); return (el.textContent || '').trim().slice(0, 50); }
+              return null;
+            });
+            if (pwTabClicked) {
+              log.info('Cakto: clicou tab "Login with password": "' + pwTabClicked + '"');
+              await sleep(1500);
+              await screenshot(page, 'after_pw_tab');
+            } else {
+              log.warn('Cakto: tab "Login with password" não encontrada — tentando assim mesmo');
+            }
+          } catch(tabErr) { log.warn('Tab click err: ' + tabErr.message.slice(0, 60)); }
+
           // Fill email
           const emailPos = await page.evaluate(() => {
             const sel = ['input[type="email"]', 'input[name="email"]', 'input[id*="email" i]', 'input[placeholder*="e-mail" i]', 'input[placeholder*="email" i]'];
