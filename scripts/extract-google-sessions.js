@@ -75,11 +75,10 @@ function decryptCookieValue(encryptedValue, aesKey) {
   if (!encryptedValue || encryptedValue.length < 4) return '';
   const encrypted = Buffer.from(encryptedValue);
   const prefix = encrypted.slice(0, 3).toString('utf8');
-  if (prefix !== 'v10' && prefix !== 'v11') {
-    try {
-      return dpapiDecrypt(encrypted.toString('base64')).toString('utf8');
-    } catch { return ''; }
-  }
+  // ONLY decrypt AES-GCM cookies (v10/v11). Skip legacy DPAPI cookies — they
+  // require one PowerShell call per cookie which is extremely slow and produces
+  // noise. Modern Chrome (v80+) uses AES-GCM for all Google cookies.
+  if (prefix !== 'v10' && prefix !== 'v11') return '';
   const nonce      = encrypted.slice(3, 15);
   const ciphertext = encrypted.slice(15, encrypted.length - 16);
   const tag        = encrypted.slice(encrypted.length - 16);
@@ -96,7 +95,24 @@ function readCookiesFromProfile(profileDir, aesKey, domains) {
 
   const tmpDb = path.join(os.tmpdir(), `chrome_google_${Date.now()}.db`);
   try {
-    fs.copyFileSync(dbPath, tmpDb);
+    // Use robocopy /B (backup mode) to copy even locked files
+    try {
+      fs.copyFileSync(dbPath, tmpDb);
+    } catch (lockErr) {
+      if (lockErr.code === 'EBUSY' || lockErr.code === 'EACCES') {
+        const srcDir  = path.dirname(dbPath);
+        const srcName = path.basename(dbPath);
+        const tmpDir  = path.dirname(tmpDb);
+        const tmpName = path.basename(tmpDb);
+        execSync(
+          `robocopy "${srcDir}" "${tmpDir}" "${srcName}" /B /NP /NFL /NDL /NJH /NJS /R:1 /W:1`,
+          { encoding: 'utf8', timeout: 15000, stdio: 'pipe' }
+        );
+        const roboCopied = path.join(tmpDir, srcName);
+        if (fs.existsSync(roboCopied) && roboCopied !== tmpDb) fs.renameSync(roboCopied, tmpDb);
+        if (!fs.existsSync(tmpDb)) throw lockErr;
+      } else { throw lockErr; }
+    }
     let Database;
     try { Database = require('better-sqlite3'); }
     catch { throw new Error('better-sqlite3 não instalado: npm install better-sqlite3'); }
