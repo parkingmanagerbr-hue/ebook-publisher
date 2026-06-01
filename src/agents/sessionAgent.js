@@ -239,6 +239,18 @@ async function tryCredentialLogin(page, platform, browser) {
       return true;
     } else {
       logger.warn(`[${platform}] Login falhou — URL: ${url}`);
+      // Salvar screenshot para debug
+      try {
+        const screenshotPath = path.join(__dirname, '../../data/logs', `${platform}_login_fail.png`);
+        await page.screenshot({ path: screenshotPath, fullPage: false });
+        logger.info(`[${platform}] Screenshot de falha salva: ${screenshotPath}`);
+      } catch {}
+      // Log page title and visible text for debugging
+      try {
+        const title = await page.title();
+        const bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 500) || '');
+        logger.warn(`[${platform}] Login página — título: "${title}" | texto: "${bodyText.replace(/\n/g,' ').slice(0,200)}"`);
+      } catch {}
       return false;
     }
   } catch (e) {
