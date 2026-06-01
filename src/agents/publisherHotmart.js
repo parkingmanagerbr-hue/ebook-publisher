@@ -682,6 +682,58 @@ async function createProduct(page, session, ebook) {
   }).catch(()=>[]);
   if (validationErrors.length > 0) log.warn('Validation errors on /info: ' + JSON.stringify(validationErrors));
 
+  // If required-field validation fires AND we have a cover — try wizard cover upload to satisfy it
+  if (validationErrors.some(e => /obrigat|required|campo/i.test(e)) && ebook.coverPath && fs.existsSync(ebook.coverPath)) {
+    log.info('Validation: required field — attempting wizard cover upload to satisfy validator...');
+    try {
+      // Expose hidden file input via shadow DOM trick
+      const handle = await page.evaluateHandle(() => {
+        function findFileInput(root) {
+          if (!root) return null;
+          const inputs = Array.from(root.querySelectorAll ? root.querySelectorAll('input[type="file"]') : []);
+          if (inputs.length) {
+            inputs[0].style.cssText = 'display:block!important;visibility:visible!important;opacity:1!important;position:fixed!important;top:0;left:0;width:200px;height:60px;z-index:9999;';
+            return inputs[0];
+          }
+          const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+          for (const el of all) { if (el.shadowRoot) { const r = findFileInput(el.shadowRoot); if (r) return r; } }
+          return null;
+        }
+        return findFileInput(document);
+      }).catch(() => null);
+      const el = handle && (handle.asElement ? handle.asElement() : null);
+      if (el) {
+        await el.uploadFile(ebook.coverPath);
+        log.info('Wizard cover uploaded via shadow file input — waiting 20s...');
+        await sleep(20000);
+      } else {
+        // FileChooser approach
+        const fcPromise = page.waitForFileChooser({ timeout: 6000 });
+        await page.evaluate(() => {
+          const btn = document.querySelector('#input-file-cover, [id*="cover" i][id*="input" i], button[id*="cover" i]');
+          if (btn) btn.click();
+        });
+        const chooser = await fcPromise;
+        await chooser.accept([ebook.coverPath]);
+        log.info('Wizard cover uploaded via file chooser — waiting 20s...');
+        await sleep(20000);
+      }
+      // Retry Continuar after cover upload
+      const retryPos2 = await page.evaluate(() => {
+        const b = Array.from(document.querySelectorAll('button')).find(b => /continuar/i.test((b.textContent||'').trim()));
+        if (b) { const r = b.getBoundingClientRect(); return r.width > 0 ? {x:r.left+r.width/2, y:r.top+r.height/2} : null; }
+        return null;
+      }).catch(() => null);
+      if (retryPos2) {
+        log.info('Retrying Continuar after cover upload...');
+        await page.mouse.click(retryPos2.x, retryPos2.y);
+        await sleep(5000);
+      }
+    } catch(e) {
+      log.warn('Wizard cover upload attempt failed: ' + e.message.slice(0, 100));
+    }
+  }
+
   // Wait for pricing step to appear (URL may stay /4/info — detect by pricing UI appearing)
   for (let i = 0; i < 25; i++) {
     await sleep(1000);
@@ -731,6 +783,22 @@ async function createProduct(page, session, ebook) {
         return null;
       }).catch(()=>null);
       if (retryPos) { await page.mouse.click(retryPos.x, retryPos.y); log.info('Continuar retry (trusted)'); }
+    }
+  }
+
+  // If still stuck on /info after full loop — force navigate to /4/pricing
+  if (page.url().includes('/4/info') && !capturedNumericId) {
+    log.warn('Still on /info after full loop — forcing navigation to /4/pricing...');
+    await page.goto('https://app.hotmart.com/products/add/4/pricing', {waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+    await sleep(3000);
+    const afterForce = page.url();
+    log.info('After forced /4/pricing nav: ' + afterForce.slice(0,80));
+    const pm2 = afterForce.match(/\/products\/manage\/(\d+)/);
+    if (pm2) capturedNumericId = capturedNumericId || pm2[1];
+    // Check if a CDP response already captured an ID
+    if (!capturedNumericId) {
+      const pm3 = afterForce.match(/\/4\/club\/(\d+)/);
+      if (pm3) capturedNumericId = capturedNumericId || pm3[1];
     }
   }
 
