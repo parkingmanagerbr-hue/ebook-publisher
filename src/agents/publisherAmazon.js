@@ -752,20 +752,19 @@ async function publishToAmazon(ebook) {
       await page.select('select[name*="language" i], select[id*="language" i]', 'pt').catch(() => {});
     } catch {}
 
-    // Title — try expanded set of selectors for new KDP React UI
+    // Title — exact KDP React ID first, then fallbacks
+    // DOM dump confirmed: actual title field is #data-title (769×32), NOT the unnamed 244×32 input
     const titleFilled = await fillField(page, [
-      'input[id*="title" i]:not([id*="sub" i]):not([id*="series" i])',
+      '#data-title',
+      'input[name="data[title]"]',
+      'input[id*="title" i]:not([id*="sub" i]):not([id*="series" i]):not([id*="asin" i])',
       'input[name*="title" i]:not([name*="sub" i])',
       'input[placeholder*="título" i]',
       'input[placeholder*="title" i]',
       'input[data-a-input-name*="title" i]',
       'input[aria-label*="title" i]',
-      'input[aria-label*="título" i]',
       '#data-asin-metadata-input-title',
       '#book_title',
-      'input.title-input',
-      'input[name="title"]',
-      'form input[type="text"]:first-of-type',
     ], ebook.title);
     log.info('Title filled: ' + titleFilled);
     await sleep(300);
@@ -773,6 +772,7 @@ async function publishToAmazon(ebook) {
     // Subtitle (optional)
     if (ebook.subtitle) {
       await fillField(page, [
+        '#data-subtitle',
         'input[id*="subtitle" i]',
         'input[name*="subtitle" i]',
         'input[placeholder*="subtítulo" i]',
@@ -780,46 +780,192 @@ async function publishToAmazon(ebook) {
       await sleep(300);
     }
 
-    // Author — KDP has first/last name fields
-    const authorFilled = await fillField(page, [
-      'input[id*="author-first" i], input[id*="firstname" i], input[id*="first_name" i]',
-    ], 'GENIA').catch(() => false);
+    // Author — exact KDP field IDs from DOM dump:
+    // first: #data-primary-author-first-name (placeholder="Nome")
+    // last:  #data-primary-author-last-name  (placeholder="Sobrenome")
+    const [authorFirst, authorLast] = (() => {
+      const parts = AUTHOR_NAME.trim().split(/\s+/);
+      return parts.length === 1 ? [parts[0], ''] : [parts[0], parts.slice(1).join(' ')];
+    })();
 
-    if (!authorFilled) {
-      // Try single author field
+    const authorFirstFilled = await fillField(page, [
+      '#data-primary-author-first-name',
+      'input[id*="author-first" i]',
+      'input[id*="first_name" i]',
+      'input[placeholder="Nome"]',
+    ], authorFirst).catch(() => false);
+
+    if (authorFirstFilled) {
+      await fillField(page, [
+        '#data-primary-author-last-name',
+        'input[id*="author-last" i]',
+        'input[id*="last_name" i]',
+        'input[placeholder="Sobrenome"]',
+      ], authorLast || '.').catch(() => {});
+    } else {
+      // Fallback: single author field
       await fillField(page, [
         'input[id*="author" i]',
         'input[name*="author" i]',
         'input[placeholder*="autor" i]',
       ], AUTHOR_NAME).catch(() => {});
-    } else {
-      await fillField(page, [
-        'input[id*="author-last" i], input[id*="lastname" i], input[id*="last_name" i]',
-      ], 'Publishing').catch(() => {});
     }
+    log.info('Author filled: ' + authorFirstFilled + ' first="' + authorFirst + '" last="' + (authorLast||'.') + '"');
     await sleep(300);
+
+    // Publishing rights — #non-public-domain = "own copyright / world rights"
+    // DOM dump confirmed: id="non-public-domain" name="data-is-public-domain"
+    try {
+      const pubRadio = await page.$('#non-public-domain');
+      if (pubRadio) {
+        await pubRadio.click();
+        log.info('Publishing rights: own copyright clicked');
+      } else {
+        const radios = await page.$$('input[type="radio"][name*="public" i]');
+        if (radios.length > 0) { await radios[0].click(); log.info('Publishing rights fallback radio clicked'); }
+        else log.warn('Publishing rights radio not found');
+      }
+    } catch(e) { log.warn('Publishing rights click error: ' + e.message); }
+    await sleep(500);
+
+    // Adult content — answer "Não" (index 1) BEFORE categories become available
+    // DOM dump: name="data[is_adult_content]-radio" — index 0=Sim, index 1=Não
+    try {
+      const adultRadios = await page.$$('input[name="data[is_adult_content]-radio"]');
+      log.info('Adult content radios found: ' + adultRadios.length);
+      if (adultRadios.length >= 2) {
+        await adultRadios[1].click();
+        log.info('Adult content: Não clicked (index 1)');
+      } else if (adultRadios.length === 1) {
+        await adultRadios[0].click();
+        log.info('Adult content: only 1 radio found, clicked index 0');
+      } else {
+        log.warn('Adult content radios not found on page');
+      }
+    } catch(e) { log.warn('Adult content click error: ' + e.message); }
+    await sleep(1500); // wait for category button to unlock after answering
 
     // Description
     const desc = (ebook.description || ('Guia completo sobre ' + ebook.title)).slice(0, 4000);
     await fillDescription(page, desc);
     await sleep(400);
 
-    // Keywords (up to 7)
+    // Keywords (up to 7) — KDP IDs: #data-keywords-0 through #data-keywords-6
     const kw = (ebook.keywords || ebook.topic || ebook.title);
     const kwArr = typeof kw === 'string' ? kw.split(',').map(k => k.trim()).slice(0, 7) : [String(kw)];
     for (let i = 0; i < kwArr.length; i++) {
       await fillField(page, [
+        `#data-keywords-${i}`,
         `input[id*="keyword-${i}" i]`,
         `input[name*="keyword${i}" i]`,
         `input[id*="keywords-${i}" i]`,
         `#search-keywords-${i}`,
       ], kwArr[i]).catch(() => {});
     }
-    // Also try the first keyword field generically
-    if (kwArr.length === 1) {
-      await fillField(page, ['input[id*="keyword" i]', 'input[name*="keyword" i]'], kwArr[0]).catch(() => {});
-    }
     await sleep(300);
+
+    // Categories — click "Escolha as categorias" → navigate modal → select + confirm
+    try {
+      // Find the category chooser button (unlocked after answering adult content question)
+      const allHandles = await page.$$('button, a, [role="button"], span, div');
+      let catBtnClicked = false;
+      for (const h of allHandles) {
+        let info;
+        try {
+          info = await h.evaluate(el => {
+            const t = (el.textContent || '').toLowerCase().trim();
+            const r = el.getBoundingClientRect();
+            return { t, vis: r.width > 0 && r.height > 0 && r.height < 80, childCount: el.children.length };
+          });
+        } catch { continue; }
+        if (info.vis && info.childCount <= 3 &&
+            (info.t.includes('escolha') || info.t === 'adicionar categoria' || info.t.includes('adicionar categoria') ||
+             info.t.includes('add a category') || info.t.includes('choose categor'))) {
+          await h.click();
+          catBtnClicked = true;
+          log.info('Category button clicked: "' + info.t.slice(0, 50) + '"');
+          break;
+        }
+      }
+
+      if (catBtnClicked) {
+        await sleep(2500);
+        await screenshot(page, 'step1_cat_modal');
+
+        // Determine topic-based category priorities for KDP's category tree
+        const topicStr = ((ebook.topic || ebook.title || '') + ' ' + (ebook.description || '')).toLowerCase();
+        const catPriorities = [];
+        if (/negoc|empreend|startup|gestão|administr/.test(topicStr))      catPriorities.push('negócios', 'business');
+        if (/financ|invest|dinheiro|poupanç|renda/.test(topicStr))         catPriorities.push('finanças pessoais', 'financial');
+        if (/saúde|saude|dieta|alimentaç|nutriç|emagr/.test(topicStr))     catPriorities.push('saúde', 'health', 'dieta');
+        if (/autoajuda|auto-ajuda|motivaç|psicolog/.test(topicStr))        catPriorities.push('autoajuda', 'self-help');
+        if (/tecnolog|programaç|software|digital/.test(topicStr))          catPriorities.push('computadores', 'tecnologia');
+        // Always include broad fallbacks
+        catPriorities.push('não-ficção', 'nonfiction', 'educação', 'negócios');
+
+        const catResult = await page.evaluate((priorities) => {
+          // Find the modal/overlay
+          const modal = document.querySelector(
+            '[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, [class*="category-modal"], [class*="CategoryModal"]'
+          );
+          if (!modal) {
+            // Maybe modal is the whole page update — scan whole document
+            const allClickable = Array.from(document.querySelectorAll('li, [role="option"], [role="treeitem"], button, a'))
+              .filter(el => { const r = el.getBoundingClientRect(); return r.width > 50 && r.height > 5 && r.height < 80; });
+            return 'no-modal, clickable items: ' + allClickable.map(e => (e.textContent||'').trim().slice(0,30)).join(' | ').slice(0,300);
+          }
+
+          const clickableInModal = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], button, a, span, label'))
+            .filter(el => {
+              const r = el.getBoundingClientRect();
+              const t = (el.textContent || '').trim();
+              return r.width > 30 && r.height > 5 && r.height < 100 && t.length > 2 && t.length < 120 && el.children.length <= 4;
+            });
+
+          if (clickableInModal.length === 0) return 'modal-found-but-empty: ' + (modal.innerText||'').slice(0,200);
+
+          // Try priority categories
+          for (const prio of priorities) {
+            const el = clickableInModal.find(e => (e.textContent||'').toLowerCase().includes(prio));
+            if (el) { el.click(); return 'priority:' + (el.textContent||'').trim().slice(0,50); }
+          }
+          // Click first available item
+          clickableInModal[0].click();
+          return 'first:' + (clickableInModal[0].textContent||'').trim().slice(0,50);
+        }, catPriorities);
+        log.info('Category modal step 1: ' + catResult);
+        await sleep(1500);
+
+        // Level 2: after clicking a top-level category, sub-categories may appear — click first one
+        const catResult2 = await page.evaluate(() => {
+          const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content');
+          if (!modal) return 'no-modal-l2';
+          const items = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], a, button, label'))
+            .filter(el => { const r = el.getBoundingClientRect(); const t=(el.textContent||'').trim(); return r.width > 30 && r.height > 5 && r.height < 100 && t.length > 2 && t.length < 120 && el.children.length <= 4; });
+          if (items.length === 0) return 'l2-no-items';
+          items[0].click();
+          return 'l2-clicked:' + (items[0].textContent||'').trim().slice(0,50);
+        }).catch(() => 'l2-err');
+        log.info('Category modal step 2: ' + catResult2);
+        await sleep(1000);
+
+        // Confirm / Add button
+        const confirmClicked = await page.evaluate(() => {
+          const addTexts = ['adicionar', 'add', 'selecionar', 'select', 'confirmar', 'confirm', 'ok', 'salvar'];
+          const allBtns = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], a[role="button"]'))
+            .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+          for (const t of addTexts) {
+            const btn = allBtns.find(el => (el.textContent||el.value||'').toLowerCase().trim().includes(t));
+            if (btn) { btn.click(); return (btn.textContent||btn.value||'').trim().slice(0,40); }
+          }
+          return null;
+        }).catch(() => null);
+        log.info('Category confirm: ' + confirmClicked);
+        await sleep(1000);
+      } else {
+        log.warn('Category button not found — form may reject without category');
+      }
+    } catch(e) { log.warn('Category selection error: ' + e.message.slice(0, 80)); }
 
     await screenshot(page, 'step1_filled');
 
