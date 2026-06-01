@@ -273,7 +273,7 @@ async function renewViaPuppeteer(platform) {
     });
 
     // Injetar cookies existentes
-    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     for (const cookie of (session.cookies || [])) {
       try { await page.setCookie(cookie); } catch {}
     }
@@ -286,7 +286,7 @@ async function renewViaPuppeteer(platform) {
     }
 
     // Navegar para a URL autenticada
-    await page.goto(testUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.goto(testUrl, { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3000));
 
     const currentUrl = page.url();

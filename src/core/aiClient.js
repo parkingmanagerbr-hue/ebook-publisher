@@ -388,37 +388,34 @@ async function callDeepSeek(prompt, systemPrompt, apiKey) {
 }
 
 async function callHuggingFace(prompt, systemPrompt, apiKey) {
-  // Tenta primeiro a API de inferência serverless direta (gratuita, sem créditos)
-  const hfDirect = [
-    "Qwen/Qwen2.5-72B-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
-    "microsoft/Phi-3-mini-4k-instruct",
-  ];
-  for (const model of hfDirect) {
-    try {
-      const url = `https://api-inference.huggingface.co/models/${model}/v1/chat/completions`;
-      const r = await axios.post(url,
-        { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
-        { headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 90_000 }
-      );
-      if (r.data.choices?.[0]?.message?.content) return r.data.choices[0].message.content;
-    } catch {}
-  }
-  // Fallback: router com providers gratuitos
+  // NOTE: api-inference.huggingface.co and api.huggingface.co DNS broke on many VPS IPs.
+  // Use router.huggingface.co (which resolves) with supported model+provider combos.
+  // Validated working combos (as of June 2026): hf-inference only for specific free-tier models.
   const hfRouter = [
-    ["novita", "Qwen/Qwen2.5-72B-Instruct"],
-    ["together", "Qwen/Qwen2.5-72B-Instruct"],
-    ["novita", "meta-llama/Llama-3.1-8B-Instruct"],
+    // hf-inference is the HF-hosted provider for free models
+    ["hf-inference", "Qwen/Qwen2.5-72B-Instruct"],
+    ["hf-inference", "mistralai/Mixtral-8x7B-Instruct-v0.1"],
+    ["hf-inference", "meta-llama/Meta-Llama-3-8B-Instruct"],
+    ["hf-inference", "mistralai/Mistral-7B-Instruct-v0.3"],
+    // cerebras provider on HF router
+    ["cerebras", "llama3.1-8b"],
+    ["cerebras", "llama3.3-70b"],
   ];
   for (const [provider, model] of hfRouter) {
     try {
       const url = `https://router.huggingface.co/${provider}/models/${model}/v1/chat/completions`;
       const r = await axios.post(url,
         { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
-        { headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 90_000 }
+        { headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 60_000 }
       );
       if (r.data.choices?.[0]?.message?.content) return r.data.choices[0].message.content;
-    } catch {}
+    } catch (e) {
+      // Log non-DNS errors to help debug
+      const status = e?.response?.status;
+      if (status && status !== 400 && status !== 404) {
+        logger.warn(`HF router ${provider}/${model}: ${status}`);
+      }
+    }
   }
   throw new Error("HuggingFace: nenhum provider disponivel");
 }
