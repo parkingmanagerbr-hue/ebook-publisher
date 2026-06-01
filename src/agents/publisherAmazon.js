@@ -801,13 +801,35 @@ async function publishToAmazon(ebook) {
     await screenshot(page, 'step1_filled');
 
     // Save and continue (Step 1 → Step 2)
+    // KDP uses a traditional server-side form POST (not React SPA) — clicking
+    // "Salvar e continuar" causes a full page reload to the same URL with step 2 content.
     const step1Url = page.url();
     const step1ok = await clickKdpButton(page, [
       'Salvar e continuar', 'Save and continue', 'Salvar e Continuar',
       'Continuar', 'Continue', 'Próximo', 'Next', 'Salvar',
     ]);
-    if (step1ok) await waitForUrlChange(page, step1Url, 15000);
+    if (step1ok) {
+      // Wait for page to reload (server-side POST → same URL but new content)
+      try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }); } catch {}
+      // Also wait for URL change as backup (sometimes KDP redirects to new URL)
+      await waitForUrlChange(page, step1Url, 10000).catch(() => {});
+    }
+    // Extra wait for page to fully render after POST
     await sleep(4000);
+    // Wait for step 2 content: file input or upload button should appear
+    try {
+      await page.waitForFunction(() => {
+        const fileInputs = document.querySelectorAll('input[type="file"]');
+        const uploadBtns = Array.from(document.querySelectorAll('button, label')).filter(el => {
+          const t = (el.textContent || '').toLowerCase();
+          return el.getBoundingClientRect().width > 0 && (t.includes('upload') || t.includes('manuscrito') || t.includes('manuscript') || t.includes('arquivo'));
+        });
+        return fileInputs.length > 0 || uploadBtns.length > 0;
+      }, { timeout: 15000 });
+      log.info('Step 2 conteúdo renderizado');
+    } catch (e) {
+      log.info('Step 2 wait: ' + e.message.slice(0, 60));
+    }
     await screenshot(page, 'step2_start');
     log.info('Etapa 2 URL: ' + page.url().slice(0, 80));
 
@@ -872,14 +894,16 @@ async function publishToAmazon(ebook) {
         log.info('File chooser ms failed: ' + e.message.slice(0, 60));
       }
 
-      // Approach 2: direct input element upload
+      // Approach 2: direct input element upload (including KDP data[book_file] name)
       if (!msUploaded) {
         const msInput = await page.$([
+          'input[type="file"][name*="book_file" i]',
+          'input[type="file"][name*="manuscript" i]',
           'input[type="file"][id*="manuscript" i]',
           'input[type="file"][id*="book_file" i]',
           'input[type="file"][id*="contentFile" i]',
           'input[type="file"][accept*="pdf" i]',
-          'input[type="file"]:not([id*="cover" i]):not([id*="thumbnail" i])',
+          'input[type="file"]:not([name*="cover" i]):not([name*="image" i]):not([id*="cover" i]):not([id*="thumbnail" i])',
         ].join(','))
           .catch(() => null)
           ?? await page.$('input[type="file"]').catch(() => null);
@@ -923,12 +947,15 @@ async function publishToAmazon(ebook) {
         log.info('File chooser cover failed: ' + e.message.slice(0, 60));
       }
 
-      // Approach 2: direct input
+      // Approach 2: direct input (KDP cover uses data[cover] name)
       if (!cvUploaded) {
         const coverInput = await page.$([
+          'input[type="file"][name*="cover" i]',
           'input[type="file"][id*="cover" i]',
           'input[type="file"][accept*="image" i]',
           'input[type="file"][id*="thumbnail" i]',
+          'input[type="file"][accept*="jpeg" i]',
+          'input[type="file"][accept*="jpg" i]',
         ].join(','))
           .catch(() => null);
 
