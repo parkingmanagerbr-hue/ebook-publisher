@@ -958,7 +958,7 @@ async function publishToAmazon(ebook) {
         const catClickedTexts = new Set();
         let catLeafReached = false;
         for (let catLevel = 1; catLevel <= 6; catLevel++) {
-          await sleep(1500);
+          await sleep(catLevel === 1 ? 1500 : 2500); // extra wait after L1 click for subcategory list to load
           const levelResult = await page.evaluate((alreadyClicked, lvl, priorities) => {
             const modal = document.querySelector(
               '[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, [class*="category-modal"], [class*="CategoryModal"]'
@@ -996,7 +996,14 @@ async function publishToAmazon(ebook) {
                 if (el.children.length > 4) return false;
                 return true;
               });
-            if (items.length === 0) return 'leaf-reached'; // no new items → leaf node
+            if (items.length === 0) {
+              // Debug: show what IS in the modal to diagnose why no items found
+              const allVisible = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], a, button, span, label'))
+                .filter(el => { const r = el.getBoundingClientRect(); return r.width > 10 && r.height > 5; })
+                .map(el => (el.textContent||'').trim().slice(0,30))
+                .filter(t => t.length > 1);
+              return 'leaf-reached|modal-content: ' + [...new Set(allVisible)].slice(0,15).join(' | ');
+            }
             // Try priority categories first, then fall back to first item
             for (const prio of priorities) {
               const el = items.find(e => (e.textContent||'').toLowerCase().includes(prio));
