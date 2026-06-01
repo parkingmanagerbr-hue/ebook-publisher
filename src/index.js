@@ -86,26 +86,36 @@ async function runPipeline(topicOverride = null, language = null) {
       const publishData = { ...ebookData, pdfPath, coverPath };
       const results = {};
 
-      // Cakto
+      // Cakto — isolado: exceção não mata o pipeline
       if (process.env.AUTO_PUBLISH_CAKTO !== 'false' &&
           (process.env.AUTO_PUBLISH_CAKTO === 'true' || (process.env.CAKTO_EMAIL && process.env.CAKTO_PASSWORD))) {
         logger.info('Publicando no Cakto...');
-        const caktoResult = await publishToCakto(publishData);
-        results.cakto = caktoResult;
-        if (caktoResult.success) logger.info(`✅ Cakto: ${caktoResult.url}`);
-        else logger.warn(`⚠️ Cakto falhou: ${caktoResult.error}`);
+        try {
+          const caktoResult = await publishToCakto(publishData);
+          results.cakto = caktoResult;
+          if (caktoResult.success) logger.info(`✅ Cakto: ${caktoResult.url}`);
+          else logger.warn(`⚠️ Cakto falhou: ${caktoResult.error}`);
+        } catch (caktoErr) {
+          logger.warn(`⚠️ Cakto erro (não fatal): ${caktoErr.message.slice(0, 120)}`);
+          results.cakto = { success: false, error: caktoErr.message };
+        }
       } else {
         logger.warn('⚠️ Cakto pulado (AUTO_PUBLISH_CAKTO não ativado)');
       }
 
-      // Hotmart
+      // Hotmart — isolado: exceção não mata o pipeline
       if (process.env.AUTO_PUBLISH_HOTMART !== 'false' &&
           (process.env.AUTO_PUBLISH_HOTMART === 'true' || (process.env.HOTMART_EMAIL && process.env.HOTMART_PASSWORD))) {
         logger.info('Publicando na Hotmart...');
-        const hotmartResult = await publishToHotmart(publishData);
-        results.hotmart = hotmartResult;
-        if (hotmartResult.success) logger.info(`✅ Hotmart: ${hotmartResult.url}`);
-        else logger.warn(`⚠️ Hotmart falhou: ${hotmartResult.error}`);
+        try {
+          const hotmartResult = await publishToHotmart(publishData);
+          results.hotmart = hotmartResult;
+          if (hotmartResult.success) logger.info(`✅ Hotmart: ${hotmartResult.url}`);
+          else logger.warn(`⚠️ Hotmart falhou: ${hotmartResult.error}`);
+        } catch (hotmartErr) {
+          logger.warn(`⚠️ Hotmart erro (não fatal): ${hotmartErr.message.slice(0, 120)}`);
+          results.hotmart = { success: false, error: hotmartErr.message };
+        }
       } else {
         logger.warn('⚠️ Hotmart pulado (AUTO_PUBLISH_HOTMART não ativado)');
       }
