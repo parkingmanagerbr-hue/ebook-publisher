@@ -545,15 +545,25 @@ async function publishToAmazon(ebook) {
         log.info('CVF/OTP challenge direto — aguardando código do usuário...');
         await screenshot(page, 'stepup_cvf');
 
-        // Se for página de redefinição com botão "Envie a senha de uso único", clicar para enviar o código
+        // Se for página de redefinição — selecionar SMS (mais confiável que email) e enviar código
         try {
-          const sendBtn = await page.$('input[type="submit"], button[type="submit"], .a-button-input');
+          // Tentar clicar no radio do telefone/SMS (segundo radio button)
+          const radios = await page.$$('input[type="radio"]');
+          if (radios.length >= 2) {
+            log.info('Selecionando opção SMS (telefone) para receber código...');
+            await radios[1].click();
+            await sleep(1000);
+          }
+          // Clicar no botão de envio
+          const sendBtn = await page.$('input[type="submit"], button[type="submit"], .a-button-input, input.a-button-input');
           if (sendBtn) {
-            log.info('Clicando botão para enviar código OTP ao email/SMS...');
+            log.info('Clicando botão "Envie a senha de uso único" via SMS...');
             await sendBtn.click();
             await sleep(3000);
             await screenshot(page, 'stepup_after_send');
-            log.info('Código enviado — aguardando usuário fornecer o código');
+            log.info('Código SMS enviado para +5519*****8899 — aguardando usuário fornecer o código');
+          } else {
+            log.warn('Botão de envio não encontrado — aguardando código mesmo assim');
           }
         } catch (btnErr) {
           log.warn('Não foi possível clicar botão de envio: ' + btnErr.message);
