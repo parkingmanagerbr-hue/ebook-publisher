@@ -986,12 +986,18 @@ async function publishToAmazon(ebook) {
         log.info('Category modal step 1: ' + catResult);
         await sleep(1500);
 
-        // Level 2: after clicking a top-level category, sub-categories may appear — click first one
+        // Level 2: after clicking a top-level category, sub-categories may appear — click first REAL one
         const catResult2 = await page.evaluate(() => {
           const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content');
           if (!modal) return 'no-modal-l2';
           const items = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], a, button, label'))
-            .filter(el => { const r = el.getBoundingClientRect(); const t=(el.textContent||'').trim(); return r.width > 30 && r.height > 5 && r.height < 100 && t.length > 2 && t.length < 120 && el.children.length <= 4; });
+            .filter(el => {
+              const r = el.getBoundingClientRect();
+              const t = (el.textContent||'').trim().toLowerCase();
+              // Skip help/info text items like "Dicas para escolher categorias"
+              if (t.includes('dica') || t.includes('tip') || t.includes('help') || t.includes('escolher') || t.includes('choose')) return false;
+              return r.width > 30 && r.height > 5 && r.height < 100 && t.length > 2 && t.length < 80 && el.children.length <= 4;
+            });
           if (items.length === 0) return 'l2-no-items';
           items[0].click();
           return 'l2-clicked:' + (items[0].textContent||'').trim().slice(0,50);
@@ -999,28 +1005,55 @@ async function publishToAmazon(ebook) {
         log.info('Category modal step 2: ' + catResult2);
         await sleep(1000);
 
-        // Confirm / Add button — search ONLY inside the modal to avoid clicking sidebar links like "Adicionar à série"
+        // Confirm / Add button — search ONLY inside the modal; prefer short/exact "Adicionar" over "Adicionar outra categoria"
         const confirmClicked = await page.evaluate(() => {
           const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, .a-popover-wrapper');
           const searchRoot = modal || null;
           if (!searchRoot) return null; // No modal open — categories may not need explicit confirm
-          const addTexts = ['adicionar', 'add', 'selecionar', 'select', 'confirmar', 'confirm', 'ok'];
           const allBtns = Array.from(searchRoot.querySelectorAll('button, input[type="button"], input[type="submit"], a[role="button"], .a-button-text'))
             .filter(el => {
               const r = el.getBoundingClientRect();
               const t = (el.textContent||el.value||'').toLowerCase().trim();
-              // Exclude sidebar/form links like "Adicionar à série"
+              // Exclude links that keep modal open ("outra categoria") or sidebar links ("série")
               if (t.includes('série') || t.includes('serie') || t.includes('series')) return false;
+              if (t.includes('outra categoria') || t.includes('another category')) return false;
               return r.width > 0 && r.height > 0;
             });
+          // Try short/exact matches first, then broader
+          const addTexts = ['adicionar', 'add', 'selecionar', 'select', 'confirmar', 'confirm', 'ok', 'salvar'];
           for (const t of addTexts) {
-            const btn = allBtns.find(el => (el.textContent||el.value||'').toLowerCase().trim().includes(t));
-            if (btn) { btn.click(); return (btn.textContent||btn.value||'').trim().slice(0,40); }
+            // Prefer shorter text (closer to exact match)
+            const candidates = allBtns.filter(el => (el.textContent||el.value||'').toLowerCase().trim().includes(t));
+            if (candidates.length > 0) {
+              candidates.sort((a, b) => (a.textContent||a.value||'').length - (b.textContent||b.value||'').length);
+              candidates[0].click();
+              return (candidates[0].textContent||candidates[0].value||'').trim().slice(0,40);
+            }
           }
           return null;
         }).catch(() => null);
         log.info('Category confirm: ' + confirmClicked);
         await sleep(1000);
+
+        // Close any category modal that might still be open (e.g., "Adicionar outra categoria" reopened it)
+        // MUST happen before clicking "Salvar e continuar" to avoid the modal blocking the save button
+        try {
+          const modalStillOpen = await page.evaluate(() => {
+            const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-popover-wrapper, .a-modal');
+            if (!modal || modal.getBoundingClientRect().width === 0) return false;
+            const closeSelectors = ['[aria-label="Fechar"]', '[aria-label="Close"]', '[aria-label="close"]', '.a-modal-close', '.a-icon-close'];
+            for (const sel of closeSelectors) {
+              const btn = modal.querySelector(sel); if (btn) { btn.click(); return 'closed:' + sel; }
+            }
+            const xBtn = Array.from(modal.querySelectorAll('button, span, a')).find(e => {
+              const t = (e.textContent || '').trim(); return t === '×' || t === 'X' || t === '✕' || t === 'Fechar';
+            });
+            if (xBtn) { xBtn.click(); return 'closed:X'; }
+            return 'modal-open-no-close';
+          });
+          if (modalStillOpen) { log.info('Category modal closed after confirm: ' + modalStillOpen); await sleep(1000); }
+        } catch(e) { /* ignore */ }
+        await page.keyboard.press('Escape').catch(() => {});
       } else {
         log.warn('Category button not found — form may reject without category');
       }
