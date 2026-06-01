@@ -413,9 +413,10 @@ async function loop() {
       setState({ lastError: err.message, currentStep: 'error' });
       // Backoff adaptativo por tipo de erro
       if (err.message && err.message.includes('PAID_PROVIDER_RECOVERED:')) {
-        // Provider pago voltou -- reiniciar imediatamente
+        // Provider pago voltou -- reiniciar imediatamente (sem pausa de intervalo)
         logger.info('Provider pago recuperado -- reiniciando em 5s...');
         await sleep(5000);
+        continue; // pula a pausa de intervalo e reinicia o ciclo imediatamente
       } else if (getIntervalMs() === 0) {
         // Modo continuo: backoff curto (30s)
         await sleep(30000);
