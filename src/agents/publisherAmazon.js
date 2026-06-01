@@ -72,6 +72,13 @@ async function waitForOtp(page, maxMs = 300_000) {
           await otpInput.type(txt, { delay: 50 });
           await sleep(500);
           await screenshot(page, 'otp_filled');
+          // Mark "Don't require OTP on this browser" to avoid 2FA on future logins
+          try {
+            await page.evaluate(() => {
+              const cb = document.querySelector('input[name="rememberDevice"], input[id*="remember" i], input[type="checkbox"]');
+              if (cb && !cb.checked) cb.click();
+            });
+          } catch {}
           // Submit
           await page.evaluate(() => {
             const btn = document.querySelector('input[type="submit"], button[type="submit"], .a-button-primary input');
