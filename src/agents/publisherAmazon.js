@@ -334,60 +334,83 @@ async function doSignin(page) {
 }
 
 // ── Click Amazon-style button by text ─────────────────────────────────────────
+// Puppeteer-native click (ElementHandle.click()) dispatches real CDP mouse events
+// with isTrusted=true. KDP's React form requires isTrusted events — programmatic
+// element.click() in page.evaluate() is isTrusted=false and gets ignored.
 async function clickKdpButton(page, texts, timeout = 20000) {
   const arr = Array.isArray(texts) ? texts : [texts];
   const deadline = Date.now() + timeout;
 
   while (Date.now() < deadline) {
-    const result = await page.evaluate((arr) => {
-      // Strategy 1: .a-button-primary input (Amazon UI kit)
-      const primaryContainer = document.querySelector('.a-button-primary, .a-button-submit');
-      if (primaryContainer) {
-        const input = primaryContainer.querySelector('input.a-button-input, button, input[type="submit"]');
-        if (input) {
-          const r = input.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) {
-            input.click();
-            return 'primary-btn';
-          }
+    // ── Strategy A: Puppeteer native click (isTrusted=true, works with React) ──
+    // Try .a-button-primary containers with matching text
+    try {
+      const containers = await page.$$('.a-button-primary');
+      for (const container of containers) {
+        const cText = await container.evaluate(el => (el.textContent || '').toLowerCase().trim()).catch(() => '');
+        const matches = arr.some(t => cText.includes(t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')));
+        if (!matches) continue;
+        // Prefer inner clickable element (input/anchor/button)
+        const inner = await container.$('input.a-button-input, a.a-button-anchor, button').catch(() => null);
+        const target = inner || container;
+        const box = await target.boundingBox().catch(() => null);
+        if (box && box.width > 0 && box.height > 0) {
+          await target.click();
+          log.info('KDP button clicked (native-A): "' + cText.slice(0, 40) + '"');
+          return true;
         }
       }
+    } catch(e) { /* fall through */ }
 
-      // Strategy 2: search all button-like elements by text
-      const candidates = Array.from(document.querySelectorAll(
-        'button, input[type="submit"], input[type="button"], input.a-button-input, a.a-button-anchor'
-      ));
+    // ── Strategy B: Puppeteer native click on button/input/anchor by text ──
+    try {
+      const handles = await page.$$('button, input[type="submit"], input.a-button-input, a.a-button-anchor');
+      for (const h of handles) {
+        const info = await h.evaluate((el, arr) => {
+          const t = (el.textContent || el.value || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+          const r = el.getBoundingClientRect();
+          return { t, ok: arr.some(x => t === x.toLowerCase() || t.includes(x.toLowerCase())), vis: r.width > 0 && r.height > 0 };
+        }, arr).catch(() => ({ ok: false, vis: false }));
+        if (info.ok && info.vis) {
+          await h.click();
+          log.info('KDP button clicked (native-B): "' + info.t.slice(0, 40) + '"');
+          return true;
+        }
+      }
+    } catch(e) { /* fall through */ }
+
+    // ── Strategy C: JS click fallback (isTrusted=false — last resort) ──
+    const result = await page.evaluate((arr) => {
+      // 1. .a-button-primary container
+      const primaryContainer = document.querySelector('.a-button-primary, .a-button-submit');
+      if (primaryContainer) {
+        const inner = primaryContainer.querySelector('input.a-button-input, a.a-button-anchor, button, input[type="submit"]');
+        if (inner) {
+          const r = inner.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) { inner.click(); return 'js-primary'; }
+        }
+      }
+      // 2. Button-like by text
       for (const text of arr) {
         const tl = text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-        // check textContent and value
-        for (const el of candidates) {
-          const elText = (el.textContent || el.value || '').trim().toLowerCase()
-            .normalize('NFD').replace(/[̀-ͯ]/g, '');
+        for (const el of Array.from(document.querySelectorAll('button, input[type="submit"], input.a-button-input, a.a-button-anchor'))) {
+          const et = (el.textContent || el.value || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
           const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0 && (elText === tl || elText.includes(tl))) {
-            el.click();
-            return (el.textContent || el.value || '').trim().slice(0, 40);
-          }
+          if (r.width > 0 && r.height > 0 && (et === tl || et.includes(tl))) { el.click(); return et.slice(0, 40); }
         }
-        // Also check span.a-button-text or any span text
-        const allEls = Array.from(document.querySelectorAll('span, div, a'));
-        for (const el of allEls) {
-          const children = el.children;
-          if (children.length > 0) continue; // only leaf nodes
-          const elText = (el.textContent || '').trim().toLowerCase()
-            .normalize('NFD').replace(/[̀-ͯ]/g, '');
+        // span leaf nodes
+        for (const el of Array.from(document.querySelectorAll('span.a-button-text, span'))) {
+          if (el.children.length > 0) continue;
+          const et = (el.textContent || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
           const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0 && r.height < 80 && (elText === tl || elText.includes(tl))) {
-            el.click();
-            return elText.slice(0, 40);
-          }
+          if (r.width > 0 && r.height > 0 && r.height < 80 && et.includes(tl)) { el.click(); return et.slice(0, 40); }
         }
       }
       return null;
     }, arr);
 
     if (result) {
-      log.info('KDP button clicked: "' + result + '"');
+      log.info('KDP button clicked (js-C): "' + result + '"');
       return true;
     }
     await sleep(600);
