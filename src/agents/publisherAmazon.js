@@ -22,7 +22,11 @@ try {
 
 const BASE_URL        = 'https://kdp.amazon.com';
 const BOOKSHELF_URL   = 'https://kdp.amazon.com/pt_BR/bookshelf';
-const NEW_TITLE_URL   = 'https://kdp.amazon.com/pt_BR/title-setup/kindle/new';
+// KDP locale-agnostic URLs (try pt_BR first, fall back to en_US)
+const NEW_TITLE_URLS  = [
+  'https://kdp.amazon.com/en_US/title-setup/kindle/new',
+  'https://kdp.amazon.com/pt_BR/title-setup/kindle/new',
+];
 const SESSION_FILE    = process.env.AMAZON_SESSION_FILE || '/app/data/sessions/amazon.json';
 const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR   || '/app/data/landing_screenshots';
 const LOGS_DIR        = '/app/data/logs';
@@ -533,8 +537,54 @@ async function publishToAmazon(ebook) {
     log.info('Sessão Amazon válida: ' + page.url().slice(0, 60));
 
     // ── Navigate to new title ────────────────────────────────────────────────
-    await page.goto(NEW_TITLE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-    await sleep(4000);
+    // Try known direct URLs first; if all 404, click "Create" from bookshelf
+    let navigatedToTitle = false;
+    for (const url of NEW_TITLE_URLS) {
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+      await sleep(3000);
+      const u = page.url();
+      if (!u.includes('/404') && !isAuthUrl(u)) {
+        log.info('New title URL OK: ' + u.slice(0, 80));
+        navigatedToTitle = true;
+        break;
+      }
+      log.warn('New title URL returned 404/auth: ' + u.slice(0, 60));
+    }
+    if (!navigatedToTitle) {
+      // Fall back: go to bookshelf and click "Create new Kindle eBook" button
+      log.info('Direct URL failed — navigating via bookshelf create button...');
+      await page.goto(BOOKSHELF_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+      await sleep(3000);
+      const clicked = await page.evaluate(() => {
+        const keywords = ['criar novo título kindle', 'create a new kindle', 'kindle ebook', 'criar ebook', 'novo título', 'new title', 'criar novo', 'create new'];
+        const els = Array.from(document.querySelectorAll('a, button, input[type="submit"], span[role="button"]'));
+        for (const kw of keywords) {
+          const el = els.find(e => {
+            const t = (e.textContent || e.value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+            const r = e.getBoundingClientRect();
+            return r.width > 0 && t.includes(kw.normalize('NFD').replace(/[̀-ͯ]/g, ''));
+          });
+          if (el) { el.click(); return (el.textContent || el.value || '').trim().slice(0, 60); }
+        }
+        // last resort: any button/link with href containing title-setup
+        const link = document.querySelector('a[href*="title-setup"]');
+        if (link) { link.click(); return link.href; }
+        return null;
+      });
+      if (clicked) {
+        log.info('Bookshelf create btn clicked: ' + clicked);
+        await sleep(4000);
+        try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }); } catch {}
+        await sleep(2000);
+      } else {
+        log.warn('Create button not found on bookshelf — dumping page buttons for debug');
+        const btns = await page.evaluate(() =>
+          Array.from(document.querySelectorAll('a, button')).filter(e => e.getBoundingClientRect().width > 0).map(e => (e.textContent || e.href || '').trim().slice(0, 50)).filter(Boolean).slice(0, 30)
+        ).catch(() => []);
+        log.warn('Visible btns: ' + btns.join(' | '));
+        await screenshot(page, 'bookshelf_no_create_btn');
+      }
+    }
     currentUrl = page.url();
 
     // Handle step-up auth if redirected to signin, CVF, OTP, or reverification
@@ -597,9 +647,12 @@ async function publishToAmazon(ebook) {
         }
       }
       // Navigate back to new title after signin
-      await page.goto(NEW_TITLE_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-      await sleep(4000);
-      currentUrl = page.url();
+      for (const url of NEW_TITLE_URLS) {
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+        await sleep(3000);
+        currentUrl = page.url();
+        if (!currentUrl.includes('/404') && !isAuthUrl(currentUrl)) break;
+      }
       if (isAuthUrl(currentUrl)) {
         log.warn('Ainda em auth após signin: ' + currentUrl.slice(0, 80));
         await screenshot(page, 'still_signin');
