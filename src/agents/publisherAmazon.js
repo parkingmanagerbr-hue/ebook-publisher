@@ -163,7 +163,11 @@ async function screenshot(page, label) {
   try {
     fs.mkdirSync(LOGS_DIR, { recursive: true });
     const f = path.join(LOGS_DIR, 'amazon_' + label + '.png');
-    await page.screenshot({ path: f, fullPage: false });
+    // Race against 12s timeout to prevent page.screenshot() from hanging indefinitely
+    await Promise.race([
+      page.screenshot({ path: f, fullPage: false }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('screenshot timeout')), 12000)),
+    ]);
     log.info('Screenshot: ' + f);
   } catch {}
 }
@@ -995,11 +999,20 @@ async function publishToAmazon(ebook) {
         log.info('Category modal step 2: ' + catResult2);
         await sleep(1000);
 
-        // Confirm / Add button
+        // Confirm / Add button — search ONLY inside the modal to avoid clicking sidebar links like "Adicionar à série"
         const confirmClicked = await page.evaluate(() => {
-          const addTexts = ['adicionar', 'add', 'selecionar', 'select', 'confirmar', 'confirm', 'ok', 'salvar'];
-          const allBtns = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], a[role="button"]'))
-            .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+          const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, .a-popover-wrapper');
+          const searchRoot = modal || null;
+          if (!searchRoot) return null; // No modal open — categories may not need explicit confirm
+          const addTexts = ['adicionar', 'add', 'selecionar', 'select', 'confirmar', 'confirm', 'ok'];
+          const allBtns = Array.from(searchRoot.querySelectorAll('button, input[type="button"], input[type="submit"], a[role="button"], .a-button-text'))
+            .filter(el => {
+              const r = el.getBoundingClientRect();
+              const t = (el.textContent||el.value||'').toLowerCase().trim();
+              // Exclude sidebar/form links like "Adicionar à série"
+              if (t.includes('série') || t.includes('serie') || t.includes('series')) return false;
+              return r.width > 0 && r.height > 0;
+            });
           for (const t of addTexts) {
             const btn = allBtns.find(el => (el.textContent||el.value||'').toLowerCase().trim().includes(t));
             if (btn) { btn.click(); return (btn.textContent||btn.value||'').trim().slice(0,40); }
@@ -1075,6 +1088,21 @@ async function publishToAmazon(ebook) {
       log.info('Step 2 conteúdo detectado');
     } catch (e) {
       log.warn('Step 2 detect timeout: ' + e.message.slice(0, 60));
+      // If still on Step 1 /details with a real ASIN, navigate directly to /content (Step 2)
+      try {
+        const currentUrl = page.url();
+        const asinMatch = currentUrl.match(/\/title-setup\/kindle\/([A-Z0-9]{10,})\//);
+        if (asinMatch && currentUrl.includes('/details')) {
+          const asin = asinMatch[1];
+          const contentUrl = currentUrl.replace(/\/details(\?.*)?$/, '/content');
+          log.info('Step1→2 direto: ASIN=' + asin + ' navigando para ' + contentUrl.slice(0, 80));
+          await page.goto(contentUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await sleep(3000);
+          log.info('Step 2 URL após navegação direta: ' + page.url().slice(0, 80));
+        }
+      } catch (navErr) {
+        log.warn('Step1→2 nav failed: ' + navErr.message.slice(0, 60));
+      }
     }
 
     await screenshot(page, 'step2_start');
