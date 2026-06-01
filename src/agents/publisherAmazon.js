@@ -663,6 +663,34 @@ async function publishToAmazon(ebook) {
     log.info('Etapa 1 URL: ' + currentUrl.slice(0, 80));
     await screenshot(page, 'step1_start');
 
+    // ── STEP 0: Handle /create type-selection page ───────────────────────────
+    // When direct new-title URLs return 404, KDP bookshelf "Create" button leads to /create
+    // which is a type-selection page (Criar eBook / Criar livro com capa comum / etc).
+    // We need to click "Criar eBook" to navigate to the actual details form.
+    if (currentUrl.includes('/create') && !currentUrl.includes('title-setup')) {
+      log.info('Tipo-seleção (/create) detectado — clicando Criar eBook...');
+      const typeClicked = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button, input[type="submit"], .a-button-primary, a.a-button-anchor, span.a-button-text'));
+        const btn = btns.find(e => {
+          const t = (e.textContent || e.value || '').trim().toLowerCase();
+          const r = e.getBoundingClientRect();
+          return r.width > 0 && (t === 'criar ebook' || t === 'criar e-book' || t.includes('ebook') || t.includes('e-book'));
+        });
+        if (btn) { btn.click(); return (btn.textContent || btn.value || '').trim().slice(0,40); }
+        // Fallback: first .a-button-primary is "Criar eBook"
+        const firstBtn = document.querySelector('.a-button-primary .a-button-text, .a-button-primary input');
+        if (firstBtn) { firstBtn.click(); return (firstBtn.textContent || firstBtn.value || '').slice(0,40); }
+        return null;
+      });
+      log.info('Tipo-seleção clicado: ' + typeClicked);
+      await sleep(3000);
+      try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }); } catch {}
+      await sleep(3000);
+      currentUrl = page.url();
+      log.info('Após tipo-seleção URL: ' + currentUrl.slice(0, 80));
+      await screenshot(page, 'step1_after_type_select');
+    }
+
     // ── STEP 1: Book details ─────────────────────────────────────────────────
     log.info('Etapa 1: Detalhes do livro');
     await sleep(3000); // let form render (extra time for new KDP SPA)
@@ -685,6 +713,17 @@ async function publishToAmazon(ebook) {
     }).catch(() => ({}));
     log.info('Step1 DOM: inputs=' + JSON.stringify(step1Debug.inputs) + ' buttons=' + JSON.stringify(step1Debug.buttons));
 
+    // Wait for the details form to render — at least one visible input required
+    try {
+      await page.waitForFunction(() => {
+        const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea');
+        return Array.from(inputs).some(el => el.getBoundingClientRect().width > 0);
+      }, { timeout: 15000 });
+      log.info('Formulário de detalhes renderizado');
+    } catch(e) {
+      log.warn('Timeout esperando formulário renderizar: ' + e.message.slice(0,60));
+    }
+
     // Language
     try {
       await page.select('select[name*="language" i], select[id*="language" i]', 'pt').catch(() => {});
@@ -700,7 +739,9 @@ async function publishToAmazon(ebook) {
       'input[aria-label*="title" i]',
       'input[aria-label*="título" i]',
       '#data-asin-metadata-input-title',
+      '#book_title',
       'input.title-input',
+      'input[name="title"]',
       'form input[type="text"]:first-of-type',
     ], ebook.title);
     log.info('Title filled: ' + titleFilled);
