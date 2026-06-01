@@ -424,7 +424,7 @@ async function callPollinations(prompt, systemPrompt) {
   const model = process.env.POLLINATIONS_MODEL || "openai";
   const r = await axios.post("https://text.pollinations.ai/openai",
     { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
-    { headers: { "Content-Type": "application/json" }, timeout: 90_000 }
+    { headers: { "Content-Type": "application/json" }, timeout: 180_000 }
   );
   return r.data.choices[0].message.content;
 }
