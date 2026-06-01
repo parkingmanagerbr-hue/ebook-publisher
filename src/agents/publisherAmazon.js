@@ -1174,20 +1174,40 @@ async function publishToAmazon(ebook) {
     // ── STEP 2: Content upload ───────────────────────────────────────────────
     log.info('Etapa 2: Upload de conteúdo');
 
-    // DRM — select "no DRM"
-    try {
-      await page.evaluate(() => {
-        const radios = document.querySelectorAll('input[type="radio"]');
-        for (const r of radios) {
-          const v = (r.value || r.id || '').toLowerCase();
-          if (v.includes('no_drm') || v.includes('none') || v.includes('false') || v === '0') {
-            r.click();
-            break;
-          }
+    // DRM — select "no DRM" (Não aplique DRM)
+    const drmResult = await page.evaluate(() => {
+      // Try by label text first (most reliable)
+      const allElements = Array.from(document.querySelectorAll('label, .a-radio-label, span'));
+      for (const el of allElements) {
+        const t = (el.textContent || '').toLowerCase();
+        if ((t.includes('não aplique') || t.includes('não, não') || t.includes('no drm') ||
+             t.includes('no, do not') || t.includes('download as') || t.includes('baixado como')) &&
+            el.getBoundingClientRect().width > 0) {
+          el.click();
+          return 'by-label: ' + t.slice(0, 50);
         }
+      }
+      // Fallback: click by radio value
+      const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+      for (const r of radios) {
+        const v = (r.value || r.id || '').toLowerCase();
+        if (v.includes('no_drm') || v.includes('none') || v.includes('false') || v === '0') {
+          r.click(); return 'by-value: ' + v;
+        }
+      }
+      // Fallback: find DRM section and click second radio (No = index 1)
+      const drmSection = Array.from(document.querySelectorAll('div, section, fieldset')).find(el => {
+        const t = (el.textContent || '').toLowerCase();
+        return t.includes('gerenciamento de direitos digitais') || t.includes('drm') || t.includes('digital rights');
       });
-      await sleep(300);
-    } catch {}
+      if (drmSection) {
+        const drmRadios = drmSection.querySelectorAll('input[type="radio"]');
+        if (drmRadios.length >= 2) { drmRadios[1].click(); return 'drm-section index-1'; }
+      }
+      return 'drm-not-found';
+    }).catch(() => 'error');
+    log.info('DRM selection: ' + drmResult);
+    await sleep(300);
 
     // Debug step 2 DOM — retry up to 3× (execution context can be briefly destroyed during SPA updates)
     let step2Debug = {};
@@ -1430,6 +1450,53 @@ async function publishToAmazon(ebook) {
     }).catch(() => {});
     await sleep(1000);
 
+    // ── AI tools disclosure (new KDP requirement) ───────────────────────────
+    const aiResult = await page.evaluate(() => {
+      // Find any radio/checkbox related to AI tools
+      const allRadios = Array.from(document.querySelectorAll('input[type="radio"]'));
+      for (const r of allRadios) {
+        const section = r.closest('section') || r.closest('.a-section') || r.closest('fieldset') || r.closest('div');
+        const sectionText = (section?.textContent || '').toLowerCase();
+        if (sectionText.includes('inteligência artificial') || sectionText.includes('artificial intelligence') ||
+            sectionText.includes('ferramentas de ia') || sectionText.includes('ai tools') ||
+            sectionText.includes('gerado por ia') || sectionText.includes('ai-generated') ||
+            sectionText.includes('conteúdo gerado')) {
+          const label = r.labels?.[0] || r.closest('label') || r.parentElement;
+          const labelText = (label?.textContent || '').toLowerCase();
+          if (labelText.includes('não') || labelText.includes('no,') || labelText.includes('nenhum') || labelText.includes('none')) {
+            r.click();
+            r.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'ai-no clicked: ' + labelText.slice(0, 50);
+          }
+        }
+      }
+      return 'ai-not-found';
+    }).catch(() => 'error');
+    log.info('AI disclosure: ' + aiResult);
+    await sleep(300);
+
+    // ── Accessibility confirmation checkbox ─────────────────────────────────
+    // KDP shows: "Ao clicar aqui, confirmo que minhas respostas estão corretas"
+    // after uploading new manuscript/cover. Must check before "Salvar e continuar".
+    const confirmResult = await page.evaluate(() => {
+      const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+      for (const cb of checkboxes) {
+        if (cb.checked) continue;
+        const label = cb.labels?.[0] || cb.closest('label') || cb.parentElement;
+        const t = (label?.textContent || '').toLowerCase();
+        if (t.includes('confirmo') || t.includes('confirm') || t.includes('corretas') ||
+            t.includes('correct') || t.includes('respostas')) {
+          cb.click();
+          cb.checked = true;
+          cb.dispatchEvent(new Event('change', { bubbles: true }));
+          return 'checked: ' + t.trim().slice(0, 60);
+        }
+      }
+      return 'no-confirm-checkbox';
+    }).catch(() => 'error');
+    log.info('Accessibility confirm: ' + confirmResult);
+    await sleep(300);
+
     const step2Url = page.url();
     const step2ok = await clickKdpButton(page, [
       'Salvar e continuar', 'Save and continue', 'Salvar e Continuar',
@@ -1497,19 +1564,49 @@ async function publishToAmazon(ebook) {
     }).catch(() => {});
     await sleep(300);
 
-    // Price in USD — try broad set of selectors since we don't know exact IDs yet
-    const priceUsd = Math.max(0.99, DEFAULT_PRICE * 0.18).toFixed(2);
-    const priceFilled = await fillField(page, [
-      'input[name*="primary_price" i]',
-      'input[name*="us_price" i]', 'input[name*="us-price" i]',
-      'input[name*="price"][name*="us" i]',
-      'input[id*="us-price" i]', 'input[id*="us_price" i]',
-      'input[id*="USD" i]', 'input[id*="usd" i]',
-      'input[id*="price-USD" i]', 'input[id*="price_us" i]',
-      'input[placeholder*="0.99" i]', 'input[placeholder*="preço" i]', 'input[placeholder*="price" i]',
-    ], priceUsd);
-    log.info('USD price: $' + priceUsd + ' filled=' + priceFilled);
-    await sleep(500);
+    // Price in USD — KDP price inputs are type="text" and appear AFTER ~200 territory checkboxes
+    // so selector-based fillField never reaches them (sliced at 25). Use evaluate to find all text inputs.
+    const priceUsd = Math.max(0.99, DEFAULT_PRICE).toFixed(2);
+
+    // Approach 1: look for inputs with ID/name containing "price" (KDP: data-digital-price-ATVPDKIKX0DER, etc.)
+    const priceFilled = await page.evaluate((price) => {
+      // Find all visible text/number inputs
+      const allInputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"]'));
+      const visible = allInputs.filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && !el.disabled && !el.readOnly;
+      });
+
+      // Prefer inputs whose id/name mentions "price" — KDP uses data[digital][price][ATVPDKIKX0DER]
+      const priceInputs = visible.filter(el => {
+        const id = (el.id || '').toLowerCase();
+        const name = (el.name || '').toLowerCase();
+        return id.includes('price') || name.includes('price');
+      });
+
+      const target = priceInputs.length > 0 ? priceInputs[0] : (visible.length > 0 ? visible[0] : null);
+      if (!target) return 'no-input-found';
+
+      target.scrollIntoView({ block: 'center' });
+      target.focus();
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      nativeInputValueSetter.call(target, price);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+      target.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      return 'filled: id=' + (target.id || target.name || 'unknown') + ' val=' + price;
+    }, priceUsd).catch(e => 'error: ' + e.message);
+    log.info('USD price: $' + priceUsd + ' result=' + priceFilled);
+    await sleep(800);
+
+    // Log all visible text inputs for debugging
+    const priceDebug = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('input[type="text"], input[type="number"]'))
+        .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })
+        .map(el => ({ id: el.id, name: el.name, value: el.value, placeholder: el.placeholder }))
+        .slice(0, 10);
+    }).catch(() => []);
+    log.info('Visible text inputs on pricing page: ' + JSON.stringify(priceDebug));
 
     await screenshot(page, 'step3_pricing');
 
