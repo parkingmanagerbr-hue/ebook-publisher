@@ -167,13 +167,16 @@ async function createProduct(page, session, ebook) {
   const preD = await handleSessionDialog(page);
   if (preD) { log.info('Pre-wizard dialog: ' + preD); await sleep(3000); }
 
-  // Poll for eBook type card -- renders as DIV with exact text "eBook" at ~26s after nav
+  // Poll for eBook type card -- renders as DIV with exact text "eBook" after OAM redirects settle
+  // Extend to 90s because OAM redirect cycles can delay SPA rendering significantly
   let ebookBtn = null;
-  for (let i = 0; i < 50; i++) {
+  let lastBodyLen = 0;
+  for (let i = 0; i < 90; i++) {
     await sleep(1000);
-    if (i % 10 === 9) {
+    if (i % 5 === 4) {
       const bLen = await page.evaluate(()=>document.body?document.body.innerHTML.length:0).catch(()=>0);
       log.info('wizard poll t='+(i+1)+'s bodyLen='+bLen+' url='+page.url().slice(0,60));
+      lastBodyLen = bLen;
     }
     ebookBtn = await page.evaluate(() => {
       const b = Array.from(document.querySelectorAll('*')).find(e => {
@@ -188,7 +191,7 @@ async function createProduct(page, session, ebook) {
     }).catch(()=>null);
     if (ebookBtn) { log.info('eBook card t='+(i+1)+'s tag='+ebookBtn.tag+' text="'+ebookBtn.text+'"'); break; }
   }
-  if (!ebookBtn) throw new Error('eBook card not found after 50s -- wizard not rendered. URL: ' + page.url().slice(0,80));
+  if (!ebookBtn) throw new Error('eBook card not found after 90s -- wizard not rendered. URL: ' + page.url().slice(0,80));
 
   await page.mouse.click(ebookBtn.x, ebookBtn.y);
   log.info('eBook clicked');
