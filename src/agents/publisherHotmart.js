@@ -1391,9 +1391,10 @@ async function uploadCoverImage(page, numericId, coverPath) {
     // Try approach B (shadow DOM input expose) — last-resort DOM approach
     if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
 
-    // Reload and retry both approaches once — SPA can take >45s to mount on slow VPS
-    log.info('Cover: reloading /info to help SPA mount...');
-    await page.reload({waitUntil:'domcontentloaded', timeout:20000}).catch(()=>{});
+    // Re-navigate (not reload — reload triggers OAM redirect to home) — SPA can take >45s to mount on slow VPS
+    log.info('Cover: re-navigating to /info to help SPA mount...');
+    await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',
+      {waitUntil:'domcontentloaded', timeout:20000}).catch(()=>{});
     await sleep(3000);
     if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
     if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
@@ -1532,8 +1533,9 @@ async function uploadPDF(page, numericId, pdfPath) {
     if(len>=1200) break;
     // If still empty after 20s, reload and give up on waiting for full content
     if(i===19 && len===0){
-      log.info('PDF-page empty after 20s — reloading once and continuing...');
-      await page.reload({waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+      log.info('PDF-page empty after 20s — re-navigating to /info (avoid reload OAM redirect)...');
+      await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',
+        {waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
       await sleep(5000);
       break;
     }
