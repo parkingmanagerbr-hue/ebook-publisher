@@ -953,57 +953,67 @@ async function publishToAmazon(ebook) {
         // Always include broad fallbacks
         catPriorities.push('não-ficção', 'nonfiction', 'educação', 'negócios');
 
-        const catResult = await page.evaluate((priorities) => {
-          // Find the modal/overlay
-          const modal = document.querySelector(
-            '[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, [class*="category-modal"], [class*="CategoryModal"]'
-          );
-          if (!modal) {
-            // Maybe modal is the whole page update — scan whole document
-            const allClickable = Array.from(document.querySelectorAll('li, [role="option"], [role="treeitem"], button, a'))
-              .filter(el => { const r = el.getBoundingClientRect(); return r.width > 50 && r.height > 5 && r.height < 80; });
-            return 'no-modal, clickable items: ' + allClickable.map(e => (e.textContent||'').trim().slice(0,30)).join(' | ').slice(0,300);
+        // Multi-level category navigation — loop until leaf node is reached (up to 6 levels).
+        // Tracks already-clicked items to skip parent nodes in both expandable and replacement tree UIs.
+        const catClickedTexts = new Set();
+        let catLeafReached = false;
+        for (let catLevel = 1; catLevel <= 6; catLevel++) {
+          await sleep(1500);
+          const levelResult = await page.evaluate((alreadyClicked, lvl, priorities) => {
+            const modal = document.querySelector(
+              '[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content, [class*="category-modal"], [class*="CategoryModal"]'
+            );
+            if (!modal) {
+              if (lvl === 1) {
+                const allClickable = Array.from(document.querySelectorAll('li, [role="option"], [role="treeitem"], button, a'))
+                  .filter(el => { const r = el.getBoundingClientRect(); return r.width > 50 && r.height > 5 && r.height < 80; });
+                return 'no-modal-l1: ' + allClickable.map(e => (e.textContent||'').trim().slice(0,20)).join(' | ').slice(0,200);
+              }
+              return 'no-modal';
+            }
+            const items = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], a, button, span, label'))
+              .filter(el => {
+                const r = el.getBoundingClientRect();
+                const t = (el.textContent||'').trim().toLowerCase();
+                if (!t || t.length < 3 || t.length > 80) return false;
+                // Skip section header labels
+                if (t === 'categorias' || t === 'categories' || t === 'categoria' || t === 'category') return false;
+                // Skip help/info text
+                if (t.includes('dica') || t.includes('tip') || t.includes('help') || t.includes('escolher') || t.includes('choose')) return false;
+                // Skip buttons that reopen modal or navigate away
+                if (t.includes('outra categoria') || t.includes('another category')) return false;
+                if (t.includes('salvar categor') || t.includes('save categor')) return false;
+                if (t.includes('série') || t.includes('serie') || t.includes('series')) return false;
+                // Skip bare action-button labels (handled in confirm step)
+                if (t === 'adicionar' || t === 'add' || t === 'selecionar' || t === 'select' || t === 'confirmar' || t === 'confirm' || t === 'ok') return false;
+                // Skip items we already clicked in a previous level
+                if (alreadyClicked.includes(t)) return false;
+                if (r.width <= 30 || r.height <= 5 || r.height >= 100) return false;
+                if (el.children.length > 4) return false;
+                return true;
+              });
+            if (items.length === 0) return 'leaf-reached'; // no new items → leaf node
+            // Try priority categories first, then fall back to first item
+            for (const prio of priorities) {
+              const el = items.find(e => (e.textContent||'').toLowerCase().includes(prio));
+              if (el) { el.click(); return 'l' + lvl + '-priority:' + (el.textContent||'').trim().slice(0,50); }
+            }
+            items[0].click();
+            return 'l' + lvl + ':' + (items[0].textContent||'').trim().slice(0,50);
+          }, Array.from(catClickedTexts), catLevel, catPriorities).catch(() => 'err-l' + catLevel);
+
+          log.info('Category level ' + catLevel + ': ' + levelResult);
+
+          if (levelResult === 'leaf-reached' || levelResult === 'no-modal') {
+            catLeafReached = (levelResult === 'leaf-reached');
+            break;
           }
-
-          const clickableInModal = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], button, a, span, label'))
-            .filter(el => {
-              const r = el.getBoundingClientRect();
-              const t = (el.textContent || '').trim();
-              return r.width > 30 && r.height > 5 && r.height < 100 && t.length > 2 && t.length < 120 && el.children.length <= 4;
-            });
-
-          if (clickableInModal.length === 0) return 'modal-found-but-empty: ' + (modal.innerText||'').slice(0,200);
-
-          // Try priority categories
-          for (const prio of priorities) {
-            const el = clickableInModal.find(e => (e.textContent||'').toLowerCase().includes(prio));
-            if (el) { el.click(); return 'priority:' + (el.textContent||'').trim().slice(0,50); }
-          }
-          // Click first available item
-          clickableInModal[0].click();
-          return 'first:' + (clickableInModal[0].textContent||'').trim().slice(0,50);
-        }, catPriorities);
-        log.info('Category modal step 1: ' + catResult);
-        await sleep(1500);
-
-        // Level 2: after clicking a top-level category, sub-categories may appear — click first REAL one
-        const catResult2 = await page.evaluate(() => {
-          const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-modal-body, .a-popover-content');
-          if (!modal) return 'no-modal-l2';
-          const items = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], a, button, label'))
-            .filter(el => {
-              const r = el.getBoundingClientRect();
-              const t = (el.textContent||'').trim().toLowerCase();
-              // Skip help/info text items like "Dicas para escolher categorias"
-              if (t.includes('dica') || t.includes('tip') || t.includes('help') || t.includes('escolher') || t.includes('choose')) return false;
-              return r.width > 30 && r.height > 5 && r.height < 100 && t.length > 2 && t.length < 80 && el.children.length <= 4;
-            });
-          if (items.length === 0) return 'l2-no-items';
-          items[0].click();
-          return 'l2-clicked:' + (items[0].textContent||'').trim().slice(0,50);
-        }).catch(() => 'l2-err');
-        log.info('Category modal step 2: ' + catResult2);
-        await sleep(1000);
+          if (levelResult.startsWith('err') || levelResult.startsWith('no-modal-l1')) break;
+          // Track clicked text so we skip it on the next level
+          const colonIdx = levelResult.indexOf(':');
+          if (colonIdx >= 0) catClickedTexts.add(levelResult.slice(colonIdx + 1).toLowerCase().trim());
+        }
+        if (catLeafReached) log.info('Category navigation: leaf node reached after ' + catClickedTexts.size + ' levels, path: ' + Array.from(catClickedTexts).join(' → '));
 
         // Confirm / Add button — search ONLY inside the modal; prefer short/exact "Adicionar" over "Adicionar outra categoria"
         const confirmClicked = await page.evaluate(() => {
@@ -1075,6 +1085,24 @@ async function publishToAmazon(ebook) {
     }
     // Extended wait for SPA re-render (execution context may be briefly destroyed during React updates)
     await sleep(4000);
+
+    // Check for Step 1 validation errors that prevented the form from saving
+    try {
+      const validationErrors = await page.evaluate(() => {
+        const selectors = ['.a-alert-content', '.a-color-error', '[class*="error-message" i]',
+                           '.a-box-error', '[role="alert"]', '.a-alert-error'];
+        const errors = [];
+        for (const sel of selectors) {
+          document.querySelectorAll(sel).forEach(el => {
+            const r = el.getBoundingClientRect();
+            const t = (el.textContent||'').trim();
+            if (r.width > 0 && t.length > 3 && t.length < 300) errors.push(t.slice(0, 150));
+          });
+        }
+        return [...new Set(errors)]; // dedupe
+      });
+      if (validationErrors.length > 0) log.warn('Step 1 validation errors: ' + JSON.stringify(validationErrors));
+    } catch(e) { /* ignore */ }
 
     // ── Close any unexpected modal that opened during Step 1 (e.g., "Adicionar à série") ──
     try {
