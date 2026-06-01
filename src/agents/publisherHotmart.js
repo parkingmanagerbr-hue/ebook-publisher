@@ -1451,19 +1451,29 @@ async function uploadCoverImage(page, numericId, coverPath) {
 
 async function uploadPDF(page, numericId, pdfPath) {
   log.info('Uploading PDF to '+numericId);
+  // Navigate to info page; Hotmart SPA may redirect via OAM — catch context destruction
   await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
+  // Wait for SPA to mount — allow OAM redirects to complete; body len often stays 0 due to SPA redirects
   for(let i=0;i<40;i++){
     await sleep(1000);
     const len = await page.evaluate(()=>document.body&&document.body.innerText?document.body.innerText.length:0).catch(()=>0);
     if(i%5===4) log.info('PDF-page t='+(i+1)+'s len='+len);
     if(len>=1200) break;
+    // If still empty after 20s, reload and give up on waiting for full content
+    if(i===19 && len===0){
+      log.info('PDF-page empty after 20s — reloading once and continuing...');
+      await page.reload({waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+      await sleep(5000);
+      break;
+    }
   }
-  await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Painel');if(b)b.click();});
+  // Wrap evaluate calls to avoid crash on OAM navigation
+  await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Painel');if(b)b.click();}).catch(()=>{});
   await sleep(3000);
   let configs=[];
   for(let i=0;i<20;i++){
     await sleep(1000);
-    configs=await page.evaluate(()=>Array.from(document.querySelectorAll('button')).filter(b=>b.textContent.trim()==='Configurar').map(b=>{const r=b.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2,vis:r.width>0};}).filter(b=>b.vis));
+    configs=await page.evaluate(()=>Array.from(document.querySelectorAll('button')).filter(b=>b.textContent.trim()==='Configurar').map(b=>{const r=b.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2,vis:r.width>0};}).filter(b=>b.vis)).catch(()=>[]);
     if(configs.length>0){log.info('Configurar at t='+(i+1)+'s');break;}
   }
   if(!configs.length){log.warn('No Configurar button found');return false;}
@@ -1473,7 +1483,7 @@ async function uploadPDF(page, numericId, pdfPath) {
   for(let att=0;att<3;att++){
     const inp=await page.$('input[type="file"]').catch(()=>null);
     if(inp){log.info('File input found!');await inp.uploadFile(pdfPath);await sleep(15000);return true;}
-    const bi=await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>['selecione','upload','enviar','arquivo','escolher'].some(k=>(b.textContent||'').toLowerCase().includes(k)));if(b){const r=b.getBoundingClientRect();return{text:b.textContent.trim(),x:r.left+r.width/2,y:r.top+r.height/2};}return null;});
+    const bi=await page.evaluate(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>['selecione','upload','enviar','arquivo','escolher'].some(k=>(b.textContent||'').toLowerCase().includes(k)));if(b){const r=b.getBoundingClientRect();return{text:b.textContent.trim(),x:r.left+r.width/2,y:r.top+r.height/2};}return null;}).catch(()=>null);
     if(bi){log.info('Clicking "'+bi.text+'"');await page.mouse.click(bi.x,bi.y);await sleep(2000);const i2=await page.$('input[type="file"]').catch(()=>null);if(i2){log.info('Input appeared!');await i2.uploadFile(pdfPath);await sleep(15000);return true;}}
     await sleep(3000);
   }
@@ -1605,9 +1615,12 @@ async function publishToHotmart(ebook) {
       log.info('Cover already uploaded during wizard — skipping post-creation upload');
     }
     log.info('Cover uploaded: '+coverUploaded);
-    // Step 3: Upload PDF content
-    const uploaded=await uploadPDF(page,numericId,pdfPath);
-    if(!uploaded) log.warn('PDF upload failed');
+    // Step 3: Upload PDF content (non-fatal — context-destroyed errors during OAM redirects)
+    const uploaded=await uploadPDF(page,numericId,pdfPath).catch(e=>{
+      log.warn('PDF upload exception (non-fatal): '+e.message.slice(0,100));
+      return false;
+    });
+    if(!uploaded) log.warn('PDF upload failed — continuing to finalize');
     // Step 4: Finalizar cadastro
     const finalized=await finalizarCadastro(page,numericId);
     // Step 4b: Retry cover upload after finalization (product has been live for 60-120s now)
