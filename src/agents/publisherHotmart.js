@@ -1160,23 +1160,32 @@ async function uploadCoverImage(page, numericId, coverPath) {
   if (!coverPath || !fs.existsSync(coverPath)) { log.warn('No cover image at: '+coverPath); return false; }
   log.info('Uploading cover to product '+numericId+'...');
   try {
-    // CDP interceptor to capture the actual cover upload API endpoint when SPA works
-    // This runs passively and logs the endpoint without blocking the upload flow
+    // ── CDP: capture exact headers from any SPA cover upload that succeeds ──────────────────
+    // If the SPA manages to upload on its own (e.g. after a wizard step), this records the
+    // auth headers so the API fallback can replay them with our file.
     let _coverCdp = null;
+    let _capturedSpaRequest = null; // { url, headers } from a successful SPA cover POST
+    let _coverApiSuccessViaCdp = false; // true when CDP sees 200 on cover endpoint
     try {
       _coverCdp = await page.createCDPSession();
       await _coverCdp.send('Network.enable');
       _coverCdp.on('Network.requestWillBeSent', (evt) => {
         const u = evt.request.url, m = evt.request.method;
-        // Ignore GET requests and data: URLs (inline SVG/PNG icons — false positives)
         if (m !== 'GET' && !u.startsWith('data:') && (u.includes('cover') || u.includes('thumbnail') || u.includes('upload') || u.includes('media'))) {
           log.info('🔍 COVER_API_INTERCEPT: ' + m + ' ' + u.slice(0, 150));
+          // Capture auth headers from the first non-GET upload request
+          if (!_capturedSpaRequest && m === 'POST' && u.includes('cover')) {
+            _capturedSpaRequest = { url: u, headers: evt.request.headers || {} };
+            log.info('🔍 COVER_API_HEADERS: ' + JSON.stringify(Object.keys(_capturedSpaRequest.headers)));
+          }
         }
       });
       _coverCdp.on('Network.responseReceived', async(evt) => {
         const u = evt.response.url, m = evt.response.status;
         if ([200,201,204].includes(m) && !u.startsWith('data:') && (u.includes('cover') || u.includes('thumbnail') || u.includes('upload') || u.includes('media'))) {
           log.info('🔍 COVER_API_RESPONSE OK: ' + m + ' ' + u.slice(0, 150));
+          // Mark success via CDP — used as fallback when page.evaluate context is destroyed
+          if (u.includes('cover')) _coverApiSuccessViaCdp = true;
           try {
             const rb = await _coverCdp.send('Network.getResponseBody', {requestId: evt.requestId}).catch(()=>null);
             if (rb && rb.body) log.info('🔍 COVER_API_BODY: ' + rb.body.slice(0, 200));
@@ -1184,60 +1193,116 @@ async function uploadCoverImage(page, numericId, coverPath) {
         }
       });
     } catch(e) { log.warn('Cover CDP setup failed: ' + e.message.slice(0,50)); }
-    // Known file input selectors from confirmed Hotmart manage/info page runs
-    const COVER_INPUT_SELS = [
-      'input[id*="cover_image"]',
-      'input[accept*="image"][type="file"]',
-      'input[type="file"]',
-    ];
 
-    // Poll for the cover file input — replaces fixed sleeps
-    async function waitForCoverInput(maxMs) {
-      const deadline = Date.now() + maxMs;
-      while (Date.now() < deadline) {
-        // 1. Standard selectors (finds hidden inputs too)
-        for (const sel of COVER_INPUT_SELS) {
-          const fi = await page.$(sel).catch(() => null);
-          if (fi) { log.info('Cover input found via: ' + sel); return fi; }
-        }
-        // 2. Deep shadow DOM search — Hotmart hides file inputs inside web component shadow roots
-        const shadowHandle = await page.evaluateHandle(() => {
-          function findFileInput(root) {
-            if (!root) return null;
-            const inputs = Array.from(root.querySelectorAll ? root.querySelectorAll('input[type="file"]') : []);
-            if (inputs.length > 0) {
-              // Expose the hidden input so Puppeteer can interact with it
-              inputs[0].style.cssText = 'display:block!important;visibility:visible!important;opacity:1!important;position:fixed!important;top:0;left:0;width:1px;height:1px;';
-              return inputs[0];
+    // ── Helper: find and return coordinates of the visible upload button/area ──────────────
+    async function findUploadAreaPos() {
+      return page.evaluate(() => {
+        const known = document.querySelector('#input-file-cover');
+        if (known) { known.scrollIntoView({behavior:'instant',block:'center'}); const r=known.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:'#input-file-cover'}; }
+        const byId = document.querySelector('[id*="cover" i], [id*="imagem" i], [id*="thumbnail" i]');
+        if (byId) { byId.scrollIntoView({behavior:'instant',block:'center'}); const r=byId.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:'id:'+byId.id}; }
+        const classSels = ['[class*="upload-image"]','[class*="image-upload"]','[class*="upload"][class*="cover"]','[class*="cover"][class*="upload"]'];
+        for (const sel of classSels) { const el=document.querySelector(sel); if(el) { el.scrollIntoView({behavior:'instant',block:'center'}); const r=el.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:sel}; } }
+        // Try shadow DOM — look for any visible upload-like element inside shadow roots
+        function findInShadow(root) {
+          if (!root) return null;
+          const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+          for (const el of all) {
+            const t = (el.textContent||'').toLowerCase().trim();
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && (t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('selecione um arquivo')||t.includes('cover')||t.includes('upload'))) {
+              return {x:r.left+r.width/2, y:r.top+r.height/2, src:'shadow:'+el.tagName+':'+t.slice(0,20)};
             }
-            const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
-            for (const el of all) {
-              if (el.shadowRoot) { const r = findFileInput(el.shadowRoot); if (r) return r; }
-            }
-            return null;
+            if (el.shadowRoot) { const found = findInShadow(el.shadowRoot); if (found) return found; }
           }
-          return findFileInput(document);
-        }).catch(() => null);
-        if (shadowHandle) {
-          const el = shadowHandle.asElement ? shadowHandle.asElement() : null;
-          if (el) { log.info('Cover input found via shadow DOM'); return el; }
-          await shadowHandle.dispose().catch(()=>{});
+          return null;
         }
-        await sleep(500);
-      }
-      return null;
+        const shadowResult = findInShadow(document);
+        if (shadowResult) return shadowResult;
+        const btn = Array.from(document.querySelectorAll('button,[role="button"],label')).find(b => {
+          const t=(b.textContent||'').toLowerCase(); const r=b.getBoundingClientRect();
+          return r.width>0 && (t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('selecione um arquivo')||t.includes('cover'));
+        });
+        if (btn) { btn.scrollIntoView({behavior:'instant',block:'center'}); const r=btn.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2, src:'btn:'+btn.textContent.trim().slice(0,30)}; }
+        return null;
+      }).catch(() => null);
     }
 
-    // Step 1: Navigate to /info and wait generously for SPA cover component to mount
+    // ── Approach A: waitForFileChooser + click visible upload area ────────────────────────
+    // This bypasses shadow DOM entirely — we intercept the native OS file dialog that the
+    // upload button triggers, regardless of whether the <input type="file"> is reachable.
+    async function tryFileChooser() {
+      const pos = await findUploadAreaPos();
+      if (!pos) { log.info('Cover: upload area not found for file chooser approach'); return false; }
+      log.info('Cover upload area pos: ' + JSON.stringify(pos));
+
+      try {
+        // Register listener BEFORE the click, then click — race condition safe this way
+        const chooserPromise = page.waitForFileChooser({ timeout: 12000 });
+        await page.mouse.click(pos.x, pos.y);
+        const fileChooser = await chooserPromise;
+        await fileChooser.accept([coverPath]);
+        log.info('Cover uploaded via file chooser (pos: ' + pos.src + ')');
+        await sleep(4000); // wait for upload to process
+        // Save after upload
+        await page.evaluate(() => {
+          const b = Array.from(document.querySelectorAll('button')).find(b => {
+            const t = b.textContent.trim().toLowerCase();
+            return t === 'salvar' || t === 'save' || t === 'confirmar' || t.includes('salvar');
+          });
+          if (b) b.click();
+        }).catch(()=>{});
+        await sleep(2000);
+        return true;
+      } catch(e) {
+        log.info('File chooser approach failed: ' + e.message.slice(0, 80));
+        return false;
+      }
+    }
+
+    // ── Approach B: expose file input from shadow DOM and call uploadFile ─────────────────
+    async function tryShadowDomInput() {
+      const shadowHandle = await page.evaluateHandle(() => {
+        function findFileInput(root) {
+          if (!root) return null;
+          const inputs = Array.from(root.querySelectorAll ? root.querySelectorAll('input[type="file"]') : []);
+          if (inputs.length > 0) {
+            inputs[0].style.cssText = 'display:block!important;visibility:visible!important;opacity:1!important;position:fixed!important;top:0;left:0;width:1px;height:1px;';
+            return inputs[0];
+          }
+          const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+          for (const el of all) {
+            if (el.shadowRoot) { const r = findFileInput(el.shadowRoot); if (r) return r; }
+          }
+          return null;
+        }
+        return findFileInput(document);
+      }).catch(() => null);
+      if (!shadowHandle) return false;
+      const el = shadowHandle.asElement ? shadowHandle.asElement() : null;
+      if (!el) { await shadowHandle.dispose().catch(()=>{}); return false; }
+      log.info('Cover input found via shadow DOM expose');
+      await el.uploadFile(coverPath);
+      await sleep(4000);
+      await page.evaluate(() => {
+        const b = Array.from(document.querySelectorAll('button')).find(b => {
+          const t = b.textContent.trim().toLowerCase();
+          return t === 'salvar' || t === 'save' || t === 'confirmar' || t.includes('salvar');
+        });
+        if (b) b.click();
+      }).catch(()=>{});
+      await sleep(2000);
+      return true;
+    }
+
+    // ── Navigate to /info and wait for SPA to mount ───────────────────────────────────────
     await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',
       {waitUntil:'load', timeout:35000}).catch(()=>{});
-    await sleep(4000); // extra wait for lazy-mounted web components (they mount async after page load)
-    // Debug screenshot to see actual page state during cover upload
+    await sleep(4000);
     await page.screenshot({path:'/app/cover_debug_'+numericId+'.png', fullPage:false}).catch(()=>{});
-    // Scroll page to trigger lazy rendering of sections
     await page.evaluate(() => { window.scrollTo(0,500); window.scrollTo(0,0); }).catch(()=>{});
     await sleep(1000);
-    // Try clicking any visible "Capa" / cover section to expand it
+    // Expand cover section if collapsed
     await page.evaluate(() => {
       const allElements = Array.from(document.querySelectorAll('h2,h3,h4,button,[role="button"],[role="tab"],label,span,div'));
       const capaEl = allElements.find(el => {
@@ -1247,113 +1312,61 @@ async function uploadCoverImage(page, numericId, coverPath) {
       });
       if (capaEl) { capaEl.scrollIntoView({behavior:'instant',block:'center'}); capaEl.click(); }
     }).catch(()=>{});
-    await sleep(1000);
-    let fileInput = await waitForCoverInput(45000); // 45s — SPA can take up to 45s to render
-    log.info('Cover input after /info nav: ' + (fileInput ? 'FOUND' : 'not found'));
+    await sleep(1500);
 
-    // If 45s wasn't enough, try a full page reload (same technique that helps finalizar)
-    if (!fileInput) {
-      log.info('Cover input: reloading /info page to help SPA mount...');
-      await page.reload({waitUntil:'domcontentloaded', timeout:20000}).catch(()=>{});
-      await sleep(3000);
-      fileInput = await waitForCoverInput(25000); // 25s more after reload
-      log.info('Cover input after reload: ' + (fileInput ? 'FOUND' : 'not found'));
-    }
+    // Try approach A (file chooser) — works even with deep shadow DOM
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
 
-    if (!fileInput) {
-      // Step 2: /overview to warm up the SPA shell, then soft-navigate to /info via tab click, poll 30s
-      await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
-        {waitUntil:'domcontentloaded', timeout:25000}).catch(()=>{});
-      await page.waitForFunction(() => document.querySelectorAll('button').length > 3,
-        {timeout: 15000}).catch(() => {});
-      await sleep(1500);
+    // Try approach B (shadow DOM input expose) — last-resort DOM approach
+    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
 
-      // Try clicking "Informações" tab to trigger soft SPA nav to /info
-      const tabClicked = await page.evaluate(() => {
-        const tabs = Array.from(document.querySelectorAll('button, a, [role="tab"], [href*="/info"]'));
-        const infoTab = tabs.find(t => {
-          const txt = (t.textContent||'').toLowerCase().trim();
-          return txt === 'informações' || txt === 'informacoes' || txt === 'info' || txt.includes('informa');
-        });
-        if (infoTab) { infoTab.scrollIntoView({behavior:'instant',block:'center'}); infoTab.click(); return true; }
-        return false;
-      });
-      log.info('Informações tab clicked: ' + tabClicked);
+    // Reload and retry both approaches once — SPA can take >45s to mount on slow VPS
+    log.info('Cover: reloading /info to help SPA mount...');
+    await page.reload({waitUntil:'domcontentloaded', timeout:20000}).catch(()=>{});
+    await sleep(3000);
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
 
-      // Whether or not tab click worked, wait for the file input (up to 30s) — the React component mounts asynchronously
-      fileInput = await waitForCoverInput(30000);
-      log.info('Cover input after tab click: ' + (fileInput ? 'FOUND' : 'not found'));
+    // Warm up via /overview → tab-click to /info as soft SPA nav, then retry
+    await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
+      {waitUntil:'domcontentloaded', timeout:25000}).catch(()=>{});
+    await page.waitForFunction(() => document.querySelectorAll('button').length > 3, {timeout:15000}).catch(()=>{});
+    await sleep(1500);
+    const tabClicked = await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('button, a, [role="tab"], [href*="/info"]'));
+      const infoTab = tabs.find(t => { const txt=(t.textContent||'').toLowerCase().trim(); return txt==='informações'||txt==='informacoes'||txt==='info'||txt.includes('informa'); });
+      if (infoTab) { infoTab.scrollIntoView({behavior:'instant',block:'center'}); infoTab.click(); return true; }
+      return false;
+    });
+    log.info('Informações tab clicked: ' + tabClicked);
+    await sleep(3000);
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
 
-      // If still not found and tab click failed, force-navigate to /info as last resort
-      if (!fileInput) {
-        await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',
-          {waitUntil:'domcontentloaded', timeout:25000}).catch(()=>{});
-        fileInput = await waitForCoverInput(20000);
-        log.info('Cover input after forced /info nav: ' + (fileInput ? 'FOUND' : 'not found'));
-      }
-    }
-
-    if (!fileInput) {
-      // Step 3: Click the image upload area (TRUSTED mouse) then wait (up to 10s)
-      const imgAreaPos = await page.evaluate(() => {
-        const known = document.querySelector('#input-file-cover');
-        if (known) { known.scrollIntoView({behavior:'instant',block:'center'}); const r=known.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:'#input-file-cover'}; }
-        const byId = document.querySelector('[id*="cover" i], [id*="imagem" i], [id*="thumbnail" i]');
-        if (byId) { byId.scrollIntoView({behavior:'instant',block:'center'}); const r=byId.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:'id:'+byId.id}; }
-        const classSels = ['[class*="upload-image"]','[class*="image-upload"]','[class*="upload"][class*="cover"]','[class*="cover"][class*="upload"]'];
-        for (const sel of classSels) { const el=document.querySelector(sel); if(el) { el.scrollIntoView({behavior:'instant',block:'center'}); const r=el.getBoundingClientRect(); if(r.width>0) return {x:r.left+r.width/2, y:r.top+r.height/2, src:sel}; } }
-        const btn = Array.from(document.querySelectorAll('button,[role="button"],label')).find(b => {
-          const t=(b.textContent||'').toLowerCase(); const r=b.getBoundingClientRect();
-          return r.width>0 && (t.includes('imagem')||t.includes('foto')||t.includes('capa')||t.includes('selecione um arquivo')||t.includes('cover'));
-        });
-        if (btn) { btn.scrollIntoView({behavior:'instant',block:'center'}); const r=btn.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2, src:'btn:'+btn.textContent.trim().slice(0,30)}; }
-        return null;
-      });
-      log.info('Image area pos: ' + JSON.stringify(imgAreaPos));
-      if (imgAreaPos) {
-        await page.mouse.click(imgAreaPos.x, imgAreaPos.y);
-        fileInput = await waitForCoverInput(10000);
-        log.info('Cover input after area click: ' + (fileInput ? 'FOUND' : 'not found'));
-      }
-    }
-
-    // Debug final state
+    // Debug what we actually see
     const dbg = await page.evaluate(() => {
       const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).map(i=>({id:i.id,accept:i.accept}));
       return {url: location.href.slice(-60), fileInputs};
     }).catch(() => null);
-    log.info('Cover upload final debug: ' + JSON.stringify(dbg));
+    log.info('Cover upload DOM debug: ' + JSON.stringify(dbg));
 
-    if (fileInput) {
-      await fileInput.uploadFile(coverPath);
-      await sleep(4000);
-      await page.evaluate(() => {
-        const b = Array.from(document.querySelectorAll('button')).find(b => {
-          const t = b.textContent.trim().toLowerCase();
-          return t === 'salvar' || t === 'save' || t === 'confirmar' || t.includes('salvar');
-        });
-        if (b) b.click();
-      });
-      await sleep(3000);
-      log.info('Cover uploaded!');
-      return true;
-    }
-
-    // ── API FALLBACK ── When SPA file input never renders, upload directly via Hotmart REST API.
-    // The JWT token (from localStorage) authenticates the multipart POST.
-    // Tries multiple known Hotmart API URL patterns (vulcano v2/v1, api-sec) until one responds 2xx.
+    // ── API FALLBACK ── Direct multipart POST using the JWT from localStorage.
+    // The SPA uses cookies+Bearer for auth. We try both, plus any headers captured from SPA requests.
     log.info('SPA cover input unreachable — trying direct API upload...');
     try {
       const coverBase64 = fs.readFileSync(coverPath).toString('base64');
-      // Make sure page is on hotmart.com so localStorage has the JWT
-      const curUrl = page.url();
-      if (!curUrl.includes('hotmart.com')) {
+      if (!page.url().includes('hotmart.com')) {
         await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
           {waitUntil:'domcontentloaded', timeout:15000}).catch(()=>{});
         await sleep(2000);
       }
-      const apiResult = await page.evaluate(async (b64, id) => {
-        // Try multiple token key names Hotmart SPA might use
+
+      // Build extra headers from any SPA request we captured via CDP
+      const spaHeaders = _capturedSpaRequest ? _capturedSpaRequest.headers : {};
+      const capturedUrl = _capturedSpaRequest ? _capturedSpaRequest.url : null;
+      if (capturedUrl) log.info('Using captured SPA url: ' + capturedUrl.slice(0, 120));
+
+      const apiResult = await page.evaluate(async (b64, id, extraHeaders, capturedUrl) => {
         const token = localStorage.getItem('token') ||
                       localStorage.getItem('access_token') ||
                       localStorage.getItem('hotmart_token') ||
@@ -1361,16 +1374,16 @@ async function uploadCoverImage(page, numericId, coverPath) {
                       localStorage.getItem('_hotmart_token') ||
                       sessionStorage.getItem('token') ||
                       sessionStorage.getItem('access_token');
+        const tokenInfo = token ? 'JWT:' + token.slice(0,20) + '...' : 'NO_TOKEN';
 
         const binary = atob(b64);
         const bytes  = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const blob = new Blob([bytes], {type: 'image/jpeg'});
 
-        // Log what token we found
-        const tokenInfo = token ? 'JWT:' + token.slice(0,20) + '...' : 'NO_TOKEN';
-
+        // If CDP captured the real SPA URL, put it first
         const endpoints = [
+          ...(capturedUrl ? [['POST', capturedUrl]] : []),
           ['POST', `https://api-product.vulcano.hotmart.com/product/v2/products/${id}/cover`],
           ['PUT',  `https://api-product.vulcano.hotmart.com/product/v2/products/${id}/cover`],
           ['POST', `https://api-product.vulcano.hotmart.com/product/v1/products/${id}/cover`],
@@ -1379,11 +1392,17 @@ async function uploadCoverImage(page, numericId, coverPath) {
           ['PATCH',`https://api-product.vulcano.hotmart.com/product/v2/products/${id}`],
         ];
 
+        // Filter CDP-captured headers to only auth/content-type headers (drop host, content-length)
+        const safeExtra = Object.fromEntries(
+          Object.entries(extraHeaders||{}).filter(([k]) =>
+            /^(authorization|x-hotmart|x-csrf|x-request|origin|referer)$/i.test(k)
+          )
+        );
+
         const results = [];
         for (const [method, url] of endpoints) {
-          // Try A: with cookie credentials (SPA-style)
-          // Try B: with Bearer token if available
           const variants = [
+            { credentials: 'include', headers: { ...(token ? {'Authorization':'Bearer '+token} : {}), ...safeExtra } },
             { credentials: 'include', headers: token ? { 'Authorization': 'Bearer ' + token } : {} },
             { credentials: 'include', headers: {} },
             { credentials: 'omit',    headers: token ? { 'Authorization': 'Bearer ' + token } : {} },
@@ -1393,19 +1412,11 @@ async function uploadCoverImage(page, numericId, coverPath) {
               const fd = new FormData();
               fd.append('cover', blob, 'cover.jpg');
               fd.append('file',  blob, 'cover.jpg');
-              const r = await fetch(url, {
-                method,
-                headers: variant.headers,
-                credentials: variant.credentials,
-                body: fd
-              });
+              const r = await fetch(url, { method, headers: variant.headers, credentials: variant.credentials, body: fd });
               const text = await r.text().catch(() => '');
-              const entry = { method, url: url.slice(-50), status: r.status, body: text.slice(0, 150), creds: variant.credentials, token: tokenInfo };
+              const entry = { method, url: url.slice(-60), status: r.status, body: text.slice(0, 150), creds: variant.credentials, token: tokenInfo };
               results.push(entry);
-              if (r.ok || r.status === 201 || r.status === 204) {
-                return { ok: true, ...entry, results };
-              }
-              // Only try variants when getting auth errors; skip remaining variants on other errors
+              if (r.ok || r.status === 201 || r.status === 204) return { ok: true, ...entry, results };
               if (r.status !== 401 && r.status !== 403) break;
             } catch(e) {
               results.push({ method, url: url.slice(-40), error: e.message.slice(0, 60) });
@@ -1413,25 +1424,23 @@ async function uploadCoverImage(page, numericId, coverPath) {
           }
         }
         return { ok: false, tokenInfo, results };
-      }, coverBase64, numericId);
+      }, coverBase64, numericId, spaHeaders, capturedUrl);
 
       log.info('API cover result: ' + JSON.stringify({
-        ok: apiResult.ok,
-        status: apiResult.status,
-        method: apiResult.method,
-        url: apiResult.url,
+        ok: apiResult.ok, status: apiResult.status, method: apiResult.method, url: apiResult.url,
         results: (apiResult.results||[]).map(r=>r.method+' '+r.status+' '+r.url).join(' | ')
       }).slice(0, 400));
 
-      if (apiResult && apiResult.ok) {
-        log.info('Cover uploaded via API!');
-        return true;
-      }
+      if (apiResult && apiResult.ok) { log.info('Cover uploaded via API!'); if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+      // Even if page.evaluate returned ok:false, CDP may have seen 200 — trust CDP
+      if (_coverApiSuccessViaCdp) { log.info('Cover uploaded via API (CDP 200 confirmed)!'); if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
     } catch(e) {
+      // "Execution context was destroyed" means a navigation fired mid-evaluate — check CDP flag
+      if (_coverApiSuccessViaCdp) { log.info('Cover API 200 confirmed via CDP (context destroyed mid-eval)'); if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
       log.warn('API cover upload error: ' + e.message.slice(0, 100));
     }
 
-    log.warn('Cover file input not found — skipping cover (non-fatal)');
+    log.warn('Cover upload failed — skipping (non-fatal)');
     if (_coverCdp) await _coverCdp.detach().catch(()=>{});
     return false;
   } catch(e) {
