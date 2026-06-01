@@ -1,6 +1,12 @@
 /**
  * GENIA EbookPublisher — Orquestrador Principal
  * Pipeline: Pesquisa → Escrita → Capa → PDF → Publicação → Aprendizado
+ *
+ * Prioridade de geração de conteúdo:
+ *   1. Serviços web gratuitos (Gamma → Piktochart → ebookmaker.ai → Visme)
+ *      Usa contas Google do Chrome. 168 ebooks/mês gratuitos.
+ *   2. Pipeline normal (writerAgent LLM + pdfAgent)
+ *      Ilimitado via Gemini/Cerebras/SambaNova.
  */
 require('dotenv').config();
 const { v4: uuidv4 } = require('uuid');
@@ -15,7 +21,24 @@ const { runLearningCycle } = require('./agents/learningAgent');
 const { generateAudiobook, isAvailable: audiobookAvailable } = require('./agents/audiobookAgent');
 const db = require('./core/database');
 
+// Web Ebook Agents (Gamma, Piktochart, ebookmaker.ai, Visme)
+let webEbookAgents = null;
+try {
+  webEbookAgents = require('./agents/webEbookAgents');
+} catch (e) {
+  // Não fatal — usa pipeline normal se módulo não estiver disponível
+}
+
 const logger = createLogger('orchestrator');
+
+// ── Cron mensal: reset de créditos dos serviços web no dia 1 de cada mês ──────
+if (webEbookAgents) {
+  cron.schedule('0 0 1 * *', () => {
+    logger.info('🔄 [cron] Reset mensal de créditos web ebook');
+    try { webEbookAgents.resetMonthlyCredits(); }
+    catch (e) { logger.warn('Reset mensal falhou: ' + e.message); }
+  });
+}
 
 // =============================================
 // PIPELINE COMPLETO
@@ -42,28 +65,72 @@ async function runPipeline(topicOverride = null, language = null) {
 
     db.markTopicUsed(topic.topic);
 
-    // ===== 2. ESCREVER E-BOOK =====
-    logger.info(`\n📝 ETAPA 1: Gerando conteúdo do e-book [idioma=${lang}]...`);
-    const ebook = await generateFullEbook(topic.topic, lang);
-    logger.info(`✅ Conteúdo gerado: "${ebook.title}" (${ebook.wordCount} palavras) [${lang}]`);
+    // ===== 2. TENTAR SERVIÇOS WEB GRATUITOS PRIMEIRO =====
+    let ebook, pdfPath, coverPath;
+    let webResult = null;
 
-    // ===== 3. GERAR CAPA =====
-    logger.info('\n🎨 ETAPA 2: Gerando capa...');
-    const coverPath = await generateCover(ebook.title, ebook.subtitle, topic.topic);
-    logger.info(`✅ Capa gerada: ${coverPath}`);
+    const useWebFirst = process.env.WEB_EBOOK_FIRST !== 'false' && webEbookAgents;
+    if (useWebFirst) {
+      try {
+        logger.info(`\n🌐 ETAPA 1: Tentando serviços web gratuitos (Gamma/Piktochart/ebookmaker/Visme)...`);
+        const credits = webEbookAgents.getCreditsSummary();
+        logger.info(`   Créditos restantes: ${Object.entries(credits.services).map(([s,i]) => `${s}:${i.remaining}`).join(' | ')}`);
 
-    // ===== 4. GERAR PDF =====
-    logger.info('\n📄 ETAPA 3: Gerando PDF...');
-    const ebookData = { ...ebook, id: ebookId, coverPath, price: 4.99 };
-    const pdfPath = await generatePDF(ebookData, coverPath);
-    logger.info(`✅ PDF gerado: ${pdfPath}`);
+        webResult = await webEbookAgents.tryWebEbookGeneration({ topic: topic.topic, language: lang });
+
+        if (webResult) {
+          logger.info(`✅ Web gerado via ${webResult.source} (${webResult.email}): ${webResult.pdfPath}`);
+          // Construir objeto ebook compatível com o resto do pipeline
+          ebook = {
+            id:          ebookId,
+            title:       webResult.title,
+            subtitle:    '',
+            description: webResult.description || `Ebook sobre ${topic.topic}`,
+            topic:       topic.topic,
+            chapters:    [],
+            wordCount:   0,
+            provider:    webResult.source,
+            language:    lang,
+          };
+          pdfPath = webResult.pdfPath;
+          // Gerar capa normal para ter uma imagem de capa pro Hotmart/KDP
+          logger.info('\n🎨 Gerando capa para o ebook web...');
+          coverPath = await generateCover(ebook.title, ebook.subtitle, topic.topic).catch(() => null);
+        }
+      } catch (webErr) {
+        logger.warn(`⚠️  Serviços web falharam: ${webErr.message.slice(0, 100)} — usando pipeline normal`);
+      }
+    }
+
+    // ===== 2b. PIPELINE NORMAL (fallback ou sempre, se WEB_EBOOK_FIRST=false) =====
+    if (!webResult) {
+      logger.info(`\n📝 ETAPA 1: Gerando conteúdo do e-book [idioma=${lang}]...`);
+      ebook = await generateFullEbook(topic.topic, lang);
+      logger.info(`✅ Conteúdo gerado: "${ebook.title}" (${ebook.wordCount} palavras) [${lang}]`);
+
+      // ===== 3. GERAR CAPA =====
+      logger.info('\n🎨 ETAPA 2: Gerando capa...');
+      coverPath = await generateCover(ebook.title, ebook.subtitle, topic.topic);
+      logger.info(`✅ Capa gerada: ${coverPath}`);
+
+      // ===== 4. GERAR PDF =====
+      logger.info('\n📄 ETAPA 3: Gerando PDF...');
+      const ebookDataForPdf = { ...ebook, id: ebookId, coverPath, price: parseFloat(process.env.EBOOK_PRICE || '4.99') };
+      pdfPath = await generatePDF(ebookDataForPdf, coverPath);
+      logger.info(`✅ PDF gerado: ${pdfPath}`);
+    } else {
+      logger.info(`\n📄 PDF web já disponível: ${pdfPath}`);
+    }
+
+    // ── Objeto unificado para o resto do pipeline ──────────────────────────────
+    const ebookData = { ...ebook, id: ebookId, coverPath, price: parseFloat(process.env.EBOOK_PRICE || '4.99') };
 
     // Salvar no banco
     db.saveEbook({
       ...ebookData,
       id: ebookId,
       pdfPath,
-      aiProvider: ebook.provider,
+      aiProvider: ebook.provider || 'web',
       status: 'ready'
     });
 
