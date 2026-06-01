@@ -430,6 +430,53 @@ async function publishToCakto(ebook) {
           log.info('URL após login: ' + currentUrl.slice(0, 100));
           await screenshot(page, 'after_login');
 
+          // ── Handle /sso-devices/ 2FA code page ──────────────────────────────────
+          if (currentUrl.includes('/sso-devices') || currentUrl.includes('/login/device')) {
+            log.info('Cakto 2FA: código de 6 dígitos enviado para o email. Aguardando...');
+            log.info('   Escreva o código: echo XXXXXX > /app/data/cakto_otp.txt');
+            const CAKTO_OTP_FILE = '/app/data/cakto_otp.txt';
+            try { fs.mkdirSync('/app/data', { recursive: true }); fs.writeFileSync(CAKTO_OTP_FILE, 'WAITING'); } catch {}
+            const otpDeadline = Date.now() + 300_000; // 5 min
+            while (Date.now() < otpDeadline) {
+              await sleep(4000);
+              try {
+                const otpTxt = fs.readFileSync(CAKTO_OTP_FILE, 'utf8').trim();
+                if (/^\d{4,8}$/.test(otpTxt)) {
+                  fs.writeFileSync(CAKTO_OTP_FILE, 'USED:' + otpTxt);
+                  log.info('Cakto 2FA: código recebido: ' + otpTxt);
+                  // Fill 6 individual digit inputs
+                  await page.evaluate((code) => {
+                    const inputs = Array.from(document.querySelectorAll('input'))
+                      .filter(e => { const r = e.getBoundingClientRect(); return r.width > 20 && r.width < 80 && r.height > 20; });
+                    const digits = code.split('');
+                    inputs.forEach((inp, i) => {
+                      if (i < digits.length) {
+                        inp.focus(); inp.click();
+                        const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+                        if (ns && ns.set) ns.set.call(inp, digits[i]); else inp.value = digits[i];
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
+                        inp.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+                      }
+                    });
+                  }, otpTxt);
+                  await sleep(800);
+                  // Click Confirm Code button
+                  await page.evaluate(() => {
+                    const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+                    const btn = btns.find(b => { const t = (b.textContent||b.value||'').toLowerCase(); return t.includes('confirm') || t.includes('verificar') || t.includes('continuar'); });
+                    if (btn) btn.click();
+                  });
+                  await sleep(6000);
+                  currentUrl = page.url();
+                  log.info('Cakto 2FA: URL após código: ' + currentUrl.slice(0, 100));
+                  await screenshot(page, 'after_2fa');
+                  break;
+                }
+              } catch {}
+            }
+          }
+
           if (!currentUrl.includes('/login') && !currentUrl.includes('/auth')) {
             loginOk = true;
             log.info('Cakto login bem-sucedido!');
