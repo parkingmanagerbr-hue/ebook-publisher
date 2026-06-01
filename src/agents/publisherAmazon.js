@@ -1175,39 +1175,53 @@ async function publishToAmazon(ebook) {
     log.info('Etapa 2: Upload de conteúdo');
 
     // DRM — select "no DRM" (Não aplique DRM)
+    // IMPORTANT: Must click the radio INPUT directly — clicking a label without `for` attr does nothing.
     const drmResult = await page.evaluate(() => {
-      // Try by label text first (most reliable)
-      const allElements = Array.from(document.querySelectorAll('label, .a-radio-label, span'));
-      for (const el of allElements) {
-        const t = (el.textContent || '').toLowerCase();
-        if ((t.includes('não aplique') || t.includes('não, não') || t.includes('no drm') ||
-             t.includes('no, do not') || t.includes('download as') || t.includes('baixado como')) &&
-            el.getBoundingClientRect().width > 0) {
-          el.click();
-          return 'by-label: ' + t.slice(0, 50);
-        }
-      }
-      // Fallback: click by radio value
       const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+
+      // Strategy 1: radio value/id contains hint
       for (const r of radios) {
-        const v = (r.value || r.id || '').toLowerCase();
-        if (v.includes('no_drm') || v.includes('none') || v.includes('false') || v === '0') {
-          r.click(); return 'by-value: ' + v;
+        const v = (r.value || r.id || r.name || '').toLowerCase();
+        if (v.includes('no_drm') || v.includes('no-drm') || v === 'false' || v === '0' || v === 'none') {
+          r.click(); r.dispatchEvent(new Event('change', { bubbles: true }));
+          return 'by-value: ' + v;
         }
       }
-      // Fallback: find DRM section and click second radio (No = index 1)
-      const drmSection = Array.from(document.querySelectorAll('div, section, fieldset')).find(el => {
-        const t = (el.textContent || '').toLowerCase();
-        return t.includes('gerenciamento de direitos digitais') || t.includes('drm') || t.includes('digital rights');
-      });
-      if (drmSection) {
-        const drmRadios = drmSection.querySelectorAll('input[type="radio"]');
-        if (drmRadios.length >= 2) { drmRadios[1].click(); return 'drm-section index-1'; }
+
+      // Strategy 2: walk UP from each radio, find "não aplique" or "pdf"/"epub" in ancestor text
+      for (const r of radios) {
+        for (let el = r.parentElement, depth = 0; el && depth < 6; el = el.parentElement, depth++) {
+          const t = (el.textContent || '').toLowerCase();
+          // Must include "não"/"no" + ("aplique"/"apply" or "drm"/"pdf"/"epub")
+          // AND this specific container should NOT also contain "Sim, aplique" (would be too broad)
+          if ((t.includes('não aplique') || t.includes('não, não aplique') || t.includes('no, do not')) &&
+              (t.includes('pdf') || t.includes('epub') || t.includes('drm')) &&
+              !t.includes('sim, aplique')) {
+            r.click(); r.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'by-ancestor depth=' + depth + ': ' + t.trim().slice(0, 60);
+          }
+        }
       }
+
+      // Strategy 3: find DRM section by heading text, pick 2nd radio (Não = index 1)
+      const allContainers = Array.from(document.querySelectorAll('div, section, fieldset, li'));
+      for (const c of allContainers) {
+        const t = (c.textContent || '').toLowerCase();
+        if ((t.includes('gerenciamento de direitos digitais') || t.includes('digital rights management') || t.includes('drm')) &&
+            c.getBoundingClientRect().width > 0) {
+          const drmRadios = c.querySelectorAll('input[type="radio"]');
+          if (drmRadios.length >= 2) {
+            drmRadios[1].click();
+            drmRadios[1].dispatchEvent(new Event('change', { bubbles: true }));
+            return 'by-section-index1: ' + drmRadios.length + ' radios found';
+          }
+        }
+      }
+
       return 'drm-not-found';
     }).catch(() => 'error');
     log.info('DRM selection: ' + drmResult);
-    await sleep(300);
+    await sleep(500);
 
     // Debug step 2 DOM — retry up to 3× (execution context can be briefly destroyed during SPA updates)
     let step2Debug = {};
@@ -1478,24 +1492,97 @@ async function publishToAmazon(ebook) {
     // ── Accessibility confirmation checkbox ─────────────────────────────────
     // KDP shows: "Ao clicar aqui, confirmo que minhas respostas estão corretas"
     // after uploading new manuscript/cover. Must check before "Salvar e continuar".
+    // NOTE: In KDP's Amazon widget (.a-row > .a-col), the checkbox and text may be in
+    // sibling columns — cb.parentElement has no text. Must walk up 5-7 ancestor levels.
     const confirmResult = await page.evaluate(() => {
       const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+
+      // Debug: log page text to understand what's available
+      const pageText = (document.body.innerText || '').toLowerCase();
+      const hasConfirm = pageText.includes('confirmo') || pageText.includes('corretas');
+
       for (const cb of checkboxes) {
         if (cb.checked) continue;
-        const label = cb.labels?.[0] || cb.closest('label') || cb.parentElement;
-        const t = (label?.textContent || '').toLowerCase();
-        if (t.includes('confirmo') || t.includes('confirm') || t.includes('corretas') ||
-            t.includes('correct') || t.includes('respostas')) {
-          cb.click();
-          cb.checked = true;
-          cb.dispatchEvent(new Event('change', { bubbles: true }));
-          return 'checked: ' + t.trim().slice(0, 60);
+
+        // Strategy 1: labels[] (works if checkbox has id + label has for attr)
+        const lbl = cb.labels?.[0];
+        if (lbl) {
+          const t = (lbl.textContent || '').toLowerCase();
+          if (t.includes('confirmo') || t.includes('corretas') || t.includes('respostas')) {
+            cb.scrollIntoView({ block: 'center' });
+            cb.click(); cb.checked = true;
+            cb.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'checked-label: ' + t.trim().slice(0, 60);
+          }
+        }
+
+        // Strategy 2: closest label ancestor
+        const closestLabel = cb.closest('label');
+        if (closestLabel) {
+          const t = (closestLabel.textContent || '').toLowerCase();
+          if (t.includes('confirmo') || t.includes('corretas') || t.includes('respostas')) {
+            cb.scrollIntoView({ block: 'center' });
+            cb.click(); cb.checked = true;
+            cb.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'checked-closest-label: ' + t.trim().slice(0, 60);
+          }
+        }
+
+        // Strategy 3: walk up DOM tree (handles sibling-column layouts)
+        for (let el = cb.parentElement, depth = 0; el && el !== document.body && depth < 8; el = el.parentElement, depth++) {
+          const t = (el.textContent || '').toLowerCase();
+          if (t.includes('confirmo') || t.includes('corretas') || t.includes('respostas')) {
+            cb.scrollIntoView({ block: 'center' });
+            cb.click(); cb.checked = true;
+            cb.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'checked-ancestor depth=' + depth + ': ' + t.trim().slice(0, 60);
+          }
+        }
+
+        // Strategy 4: check next sibling or uncle element
+        const parent = cb.parentElement;
+        if (parent) {
+          const next = parent.nextElementSibling || parent.parentElement?.querySelector('span, label, div');
+          if (next) {
+            const t = (next.textContent || '').toLowerCase();
+            if (t.includes('confirmo') || t.includes('corretas') || t.includes('respostas')) {
+              cb.scrollIntoView({ block: 'center' });
+              cb.click(); cb.checked = true;
+              cb.dispatchEvent(new Event('change', { bubbles: true }));
+              return 'checked-sibling: ' + t.trim().slice(0, 60);
+            }
+          }
         }
       }
-      return 'no-confirm-checkbox';
+      return hasConfirm ? 'no-confirm-checkbox (page has text confirmo)' : 'no-confirm-checkbox';
     }).catch(() => 'error');
     log.info('Accessibility confirm: ' + confirmResult);
-    await sleep(300);
+    await sleep(500);
+
+    // If confirm not found, scroll to bottom and retry once (checkbox may be below fold)
+    if (confirmResult === 'no-confirm-checkbox' || confirmResult.includes('page has text')) {
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await sleep(1000);
+      const confirmRetry = await page.evaluate(() => {
+        const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+        for (const cb of checkboxes) {
+          if (cb.checked) continue;
+          // Walk up to body
+          for (let el = cb.parentElement, d = 0; el && el !== document.body && d < 10; el = el.parentElement, d++) {
+            const t = (el.textContent || '').toLowerCase();
+            if (t.includes('confirmo') || t.includes('corretas') || t.includes('novo manuscrito')) {
+              cb.scrollIntoView({ block: 'center' });
+              cb.click(); cb.checked = true;
+              cb.dispatchEvent(new Event('change', { bubbles: true }));
+              return 'retry-checked depth=' + d + ': ' + t.trim().slice(0, 60);
+            }
+          }
+        }
+        return 'retry-not-found';
+      }).catch(() => 'error');
+      log.info('Accessibility confirm retry: ' + confirmRetry);
+      await sleep(500);
+    }
 
     const step2Url = page.url();
     const step2ok = await clickKdpButton(page, [
@@ -1509,12 +1596,46 @@ async function publishToAmazon(ebook) {
     const step3InitialUrl = page.url();
     log.info('Etapa 3 URL: ' + step3InitialUrl.slice(0, 80));
 
-    // If still on Step 2 /content (cover upload blocked "Salvar"), navigate to /pricing directly
+    // If still on Step 2 /content (validation error blocked save), retry checkbox + save once
     if (step3InitialUrl.includes('/content')) {
-      log.warn('Still on /content after Step 2 save — navigating directly to /pricing');
-      const asinM = step3InitialUrl.match(/\/title-setup\/kindle\/([A-Z0-9]{10,})\//);
+      log.warn('Still on /content after Step 2 save — checking for missed confirm checkbox');
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await sleep(1000);
+      // Screenshot to diagnose
+      await screenshot(page, 'step2_content_retry');
+      const retryConfirm = await page.evaluate(() => {
+        const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+        for (const cb of checkboxes) {
+          if (cb.checked) continue;
+          for (let el = cb.parentElement, d = 0; el && el !== document.body && d < 10; el = el.parentElement, d++) {
+            const t = (el.textContent || '').toLowerCase();
+            if (t.includes('confirmo') || t.includes('corretas') || t.includes('manuscrito') || t.includes('capa')) {
+              cb.scrollIntoView({ block: 'center' });
+              cb.click(); cb.checked = true;
+              cb.dispatchEvent(new Event('change', { bubbles: true }));
+              return 'retry-checked d=' + d + ': ' + t.trim().slice(0, 50);
+            }
+          }
+        }
+        return 'retry-not-found';
+      }).catch(() => 'error');
+      log.info('Step2 retry confirm: ' + retryConfirm);
+      if (retryConfirm.startsWith('retry-checked')) {
+        await sleep(500);
+        const step2UrlRetry = page.url();
+        await clickKdpButton(page, ['Salvar e continuar', 'Save and continue', 'Salvar e Continuar', 'Próximo', 'Next']);
+        await waitForUrlChange(page, step2UrlRetry, 20000).catch(() => {});
+        await sleep(4000);
+        log.info('Step2 retry URL: ' + page.url().slice(0, 80));
+      }
+    }
+
+    // If STILL on /content, force navigate directly to /pricing (last resort)
+    if (page.url().includes('/content')) {
+      log.warn('Still on /content after retry — navigating directly to /pricing');
+      const asinM = page.url().match(/\/title-setup\/kindle\/([A-Z0-9]{10,})\//);
       if (asinM) {
-        const pricingUrl = step3InitialUrl.replace(/\/content(\?.*)?$/, '/pricing');
+        const pricingUrl = page.url().replace(/\/content(\?.*)?$/, '/pricing');
         await page.goto(pricingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await sleep(3000);
         log.info('Pricing URL após nav direta: ' + page.url().slice(0, 80));
