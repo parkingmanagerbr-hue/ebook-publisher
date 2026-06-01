@@ -412,7 +412,7 @@ async function loop() {
       logger.error('Ciclo falhou: ' + err.message);
       setState({ lastError: err.message, currentStep: 'error' });
       // Backoff adaptativo por tipo de erro
-      if (err.message && err.message.startsWith('PAID_PROVIDER_RECOVERED:')) {
+      if (err.message && err.message.includes('PAID_PROVIDER_RECOVERED:')) {
         // Provider pago voltou -- reiniciar imediatamente
         logger.info('Provider pago recuperado -- reiniciando em 5s...');
         await sleep(5000);
