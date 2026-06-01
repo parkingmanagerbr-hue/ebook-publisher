@@ -997,12 +997,15 @@ async function publishToAmazon(ebook) {
                 return true;
               });
             if (items.length === 0) {
-              // Debug: show what IS in the modal to diagnose why no items found
-              const allVisible = Array.from(modal.querySelectorAll('li, [role="option"], [role="treeitem"], a, button, span, label'))
-                .filter(el => { const r = el.getBoundingClientRect(); return r.width > 10 && r.height > 5; })
-                .map(el => (el.textContent||'').trim().slice(0,30))
-                .filter(t => t.length > 1);
-              return 'leaf-reached|modal-content: ' + [...new Set(allVisible)].slice(0,15).join(' | ');
+              // Deep debug: dump modal structure to diagnose missing subcategory items
+              const allEls = Array.from(modal.querySelectorAll('*'))
+                .filter(el => { const r = el.getBoundingClientRect(); return r.width > 10 && r.height > 5 && r.height < 200; })
+                .slice(0, 30)
+                .map(el => {
+                  const r = el.getBoundingClientRect();
+                  return el.tagName + '.' + (el.className||'').slice(0,20) + ' [' + Math.round(r.width) + 'x' + Math.round(r.height) + '] "' + (el.textContent||'').trim().slice(0,25) + '"';
+                });
+              return 'leaf-reached|dom: ' + allEls.join(' || ').slice(0, 500);
             }
             // Try priority categories first, then fall back to first item
             for (const prio of priorities) {
