@@ -899,8 +899,17 @@ async function publishToAmazon(ebook) {
 
     // Categories — click "Escolha as categorias" → navigate modal → select + confirm
     try {
-      // Find the category chooser button (unlocked after answering adult content question)
-      const allHandles = await page.$$('button, a, [role="button"], span, div');
+      // First scroll down to the category section so it's in viewport
+      await page.evaluate(() => {
+        const labels = Array.from(document.querySelectorAll('label, h2, h3, .a-form-label, legend'));
+        const catLabel = labels.find(el => (el.textContent || '').toLowerCase().includes('categor'));
+        if (catLabel) catLabel.scrollIntoView({ behavior: 'instant', block: 'center' });
+      }).catch(() => {});
+      await sleep(800);
+
+      // Find the category chooser button — exclude toast notifications (idioma/language warnings)
+      // and sidebar links (Adicionar à série etc). Button must be in main form area.
+      const allHandles = await page.$$('button, a, [role="button"], span.a-button-text');
       let catBtnClicked = false;
       for (const h of allHandles) {
         let info;
@@ -908,12 +917,16 @@ async function publishToAmazon(ebook) {
           info = await h.evaluate(el => {
             const t = (el.textContent || '').toLowerCase().trim();
             const r = el.getBoundingClientRect();
-            return { t, vis: r.width > 0 && r.height > 0 && r.height < 80, childCount: el.children.length };
+            return { t, x: r.x, vis: r.width > 0 && r.height > 0 && r.height < 80, childCount: el.children.length };
           });
         } catch { continue; }
-        if (info.vis && info.childCount <= 3 &&
-            (info.t.includes('escolha') || info.t === 'adicionar categoria' || info.t.includes('adicionar categoria') ||
-             info.t.includes('add a category') || info.t.includes('choose categor'))) {
+        const isToast = info.t.includes('idioma') || info.t.includes('language') || info.t.includes('série');
+        const isMainArea = info.x > 200; // exclude left sidebar
+        if (info.vis && info.childCount <= 3 && isMainArea && !isToast &&
+            (info.t === 'adicionar categoria' || info.t === 'add a category' ||
+             info.t.includes('adicionar categoria') || info.t.includes('add a category') ||
+             (info.t.includes('escolha') && info.t.includes('categor')) ||
+             (info.t.includes('choose') && info.t.includes('categor')))) {
           await h.click();
           catBtnClicked = true;
           log.info('Category button clicked: "' + info.t.slice(0, 50) + '"');
@@ -1015,7 +1028,38 @@ async function publishToAmazon(ebook) {
       try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }); } catch {}
     }
     // Extended wait for SPA re-render (execution context may be briefly destroyed during React updates)
-    await sleep(6000);
+    await sleep(4000);
+
+    // ── Close any unexpected modal that opened during Step 1 (e.g., "Adicionar à série") ──
+    try {
+      const modalClosed = await page.evaluate(() => {
+        const modal = document.querySelector('[role="dialog"], .a-modal-wrapper, .a-popover-wrapper, .a-modal');
+        if (!modal || modal.getBoundingClientRect().width === 0) return false;
+        // Try close button / X button inside modal
+        const closeSelectors = [
+          '[aria-label="Fechar"]', '[aria-label="Close"]', '[aria-label="close"]',
+          '.a-modal-close', '.a-icon-close', 'button.a-button-close',
+        ];
+        for (const sel of closeSelectors) {
+          const btn = modal.querySelector(sel);
+          if (btn) { btn.click(); return 'closed:' + sel; }
+        }
+        // Find × / X button by text
+        const xBtn = Array.from(modal.querySelectorAll('button, span, a')).find(e => {
+          const t = (e.textContent || '').trim();
+          return t === '×' || t === 'X' || t === '✕' || t === 'Fechar';
+        });
+        if (xBtn) { xBtn.click(); return 'closed:X'; }
+        return 'modal-found-no-close';
+      });
+      if (modalClosed) {
+        log.info('Step1 modal fechado: ' + modalClosed);
+        await sleep(1500);
+      }
+    } catch(e) { log.warn('Modal close err: ' + e.message.slice(0, 50)); }
+    // Also press Escape to dismiss any remaining overlay
+    await page.keyboard.press('Escape').catch(() => {});
+    await sleep(2000);
 
     // Wait for Step 2 upload content — check body text, NOT just file input visibility
     // KDP file inputs are always hidden (display:none), triggered by button click
