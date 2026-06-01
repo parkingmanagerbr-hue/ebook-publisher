@@ -38,6 +38,24 @@ const app    = express();
 const PORT   = process.env.DASHBOARD_PORT || 3100;
 const JWT_SECRET = process.env.JWT_SECRET || 'genia-ebook-secret-2026-change-in-prod';
 
+// ── Ensure required data directories exist at startup ─────────────────────────
+// Prevents ENOENT errors when agents try to write files on a fresh bind-mount.
+const DATA_DIR = path.join(__dirname, '../data');
+[
+  DATA_DIR,
+  path.join(DATA_DIR, 'covers'),
+  path.join(DATA_DIR, 'pdfs'),
+  path.join(DATA_DIR, 'audiobooks'),
+  path.join(DATA_DIR, 'logs'),
+  path.join(DATA_DIR, 'landing_screenshots'),
+  path.join(DATA_DIR, 'sessions'),
+  path.join(DATA_DIR, 'db'),
+].forEach(dir => {
+  try { fs.mkdirSync(dir, { recursive: true }); }
+  catch (e) { /* already exists or permission error — logged below */ }
+});
+logger.info('Data directories ensured: ' + DATA_DIR);
+
 // ── Bootstrap DB + Migrations ─────────────────────────────────────────────────
 const db   = getDb();
 runMigrations(db);
@@ -129,6 +147,32 @@ app.post('/api/amazon-otp', (req, res) => {
 app.get('/api/amazon-otp', (req, res) => {
   try {
     const otpFile = '/app/data/amazon_otp.txt';
+    const txt = fs.existsSync(otpFile) ? fs.readFileSync(otpFile, 'utf8').trim() : '';
+    res.json({ status: txt || 'none', waiting: txt === 'WAITING' });
+  } catch (e) {
+    res.json({ status: 'none', waiting: false });
+  }
+});
+
+// ── Cakto OTP endpoint (6-digit email 2FA code for /sso-devices/ step) ─────────
+app.post('/api/cakto-otp', (req, res) => {
+  const code = String(req.body?.code || '').trim();
+  if (!/^\d{4,8}$/.test(code)) {
+    return res.status(400).json({ error: 'code must be 4-8 digits', example: '{"code":"776889"}' });
+  }
+  const otpFile = path.join(DATA_DIR, 'cakto_otp.txt');
+  try {
+    fs.writeFileSync(otpFile, code);
+    logger.info('[cakto-otp] Código recebido via API: ' + code);
+    res.json({ ok: true, code, message: 'Código enviado ao publisher Cakto' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/cakto-otp', (req, res) => {
+  try {
+    const otpFile = path.join(DATA_DIR, 'cakto_otp.txt');
     const txt = fs.existsSync(otpFile) ? fs.readFileSync(otpFile, 'utf8').trim() : '';
     res.json({ status: txt || 'none', waiting: txt === 'WAITING' });
   } catch (e) {
