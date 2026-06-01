@@ -471,11 +471,7 @@ async function waitForUrlChange(page, fromUrl, maxMs = 30000) {
 async function publishToAmazon(ebook) {
   log.info('Amazon KDP: publicando "' + ebook.title + '"');
 
-  const session = loadSession();
-  if (!session) {
-    log.warn('Sessão Amazon não encontrada');
-    return { success: false, error: 'Sessão não configurada', platform: 'amazon' };
-  }
+  const session = loadSession() || { cookies: [] }; // sessão vazia → login fresh
   if (!KDP_EMAIL || !KDP_PASSWORD) {
     log.warn('KDP_EMAIL/KDP_PASSWORD não configurados');
     return { success: false, error: 'Credenciais KDP não configuradas', platform: 'amazon' };
