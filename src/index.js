@@ -115,6 +115,8 @@ async function runPipeline(topicOverride = null, language = null) {
       db.updateEbookStatus(ebookId, published ? 'published' : 'ready', {
         caktoUrl: results.cakto?.url,
         hotmartUrl: results.hotmart?.url,
+        hotmartProductId: results.hotmart?.hotmartProductId || results.hotmart?.productId || null,
+        caktoProductId: results.cakto?.caktoProductId || results.cakto?.productId || null,
       });
 
     } else {
