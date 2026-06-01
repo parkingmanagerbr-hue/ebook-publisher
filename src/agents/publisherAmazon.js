@@ -544,6 +544,21 @@ async function publishToAmazon(ebook) {
       if (hasCvfInput || currentUrl.includes('/ap/cvf') || currentUrl.includes('reverification')) {
         log.info('CVF/OTP challenge direto — aguardando código do usuário...');
         await screenshot(page, 'stepup_cvf');
+
+        // Se for página de redefinição com botão "Envie a senha de uso único", clicar para enviar o código
+        try {
+          const sendBtn = await page.$('input[type="submit"], button[type="submit"], .a-button-input');
+          if (sendBtn) {
+            log.info('Clicando botão para enviar código OTP ao email/SMS...');
+            await sendBtn.click();
+            await sleep(3000);
+            await screenshot(page, 'stepup_after_send');
+            log.info('Código enviado — aguardando usuário fornecer o código');
+          }
+        } catch (btnErr) {
+          log.warn('Não foi possível clicar botão de envio: ' + btnErr.message);
+        }
+
         const code = await waitForOtp(page);
         if (!code) {
           await browser.close();
