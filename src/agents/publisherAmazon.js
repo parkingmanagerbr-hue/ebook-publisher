@@ -984,8 +984,12 @@ async function publishToAmazon(ebook) {
                 if (t.includes('outra categoria') || t.includes('another category')) return false;
                 if (t.includes('salvar categor') || t.includes('save categor')) return false;
                 if (t.includes('série') || t.includes('serie') || t.includes('series')) return false;
-                // Skip bare action-button labels (handled in confirm step)
+                // Skip bare action-button labels (handled in confirm step) and nav buttons
                 if (t === 'adicionar' || t === 'add' || t === 'selecionar' || t === 'select' || t === 'confirmar' || t === 'confirm' || t === 'ok') return false;
+                if (t === 'cancelar' || t === 'cancel' || t === 'fechar' || t === 'close' || t === 'voltar' || t === 'back') return false;
+                // Skip status/counter text (e.g. "0 dos 3 posicionamentos de categoria selecionados")
+                if (/^\d/.test(t)) return false; // starts with digit → status text
+                if (t.includes('posicionamento') || t.includes('selecionado') || t.includes('selected') || t.includes('position')) return false;
                 // Skip items we already clicked in a previous level
                 if (alreadyClicked.includes(t)) return false;
                 if (r.width <= 30 || r.height <= 5 || r.height >= 100) return false;
