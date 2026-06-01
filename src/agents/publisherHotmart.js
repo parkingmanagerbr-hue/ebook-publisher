@@ -1568,20 +1568,28 @@ async function finalizarCadastro(page, numericId) {
   await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
     {waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
   await sleep(3000);
+  const overviewUrl = 'https://app.hotmart.com/products/manage/'+numericId+'/overview';
   let fInfo=null;
   for(let i=0;i<90;i++){
     await sleep(1000);
-    // At t=20s, reload to help lazy-mounting SPA components
-    if(i===19){
-      log.info('Finalizar t=20s — reloading page to help SPA mount');
-      await page.reload({waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+    // After OAM redirects, page may land on home — re-navigate to overview
+    const curUrl = page.url();
+    if (curUrl === 'https://app.hotmart.com/' || curUrl.endsWith('/') && !curUrl.includes('/manage/') && !curUrl.includes('/products/')) {
+      log.info('Finalizar t='+(i+1)+'s — OAM redirected to home, re-navigating to overview...');
+      await page.goto(overviewUrl, {waitUntil:'domcontentloaded',timeout:25000}).catch(()=>{});
       await sleep(3000);
     }
-    // At t=50s, reload again if button still not enabled
+    // At t=20s, goto overview to help lazy-mounting SPA components (avoid reload which triggers OAM)
+    if(i===19){
+      log.info('Finalizar t=20s — re-navigating to overview to help SPA mount');
+      await page.goto(overviewUrl, {waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+      await sleep(4000);
+    }
+    // At t=50s, navigate again if button still not enabled
     if(i===49){
-      log.info('Finalizar t=50s — second reload (PDF still processing?)');
-      await page.reload({waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
-      await sleep(3000);
+      log.info('Finalizar t=50s — second navigation to overview (PDF still processing?)');
+      await page.goto(overviewUrl, {waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
+      await sleep(4000);
     }
     fInfo=await page.evaluate(()=>{
       // Search both light DOM and through shadow roots
