@@ -48,6 +48,39 @@ function isAuthUrl(url) {
 
 // ── OTP wait (polls OTP_FILE for up to maxMs) ─────────────────────────────────
 async function waitForOtp(page, maxMs = 300_000) {
+  // Step 0: If we're on the OTP-delivery-choice page (no input yet), click "Send OTP" button first
+  try {
+    const sendBtnPos = await page.evaluate(() => {
+      // Look for "Envie a senha de uso único" or similar send buttons on the pre-OTP page
+      const texts = ['envie a senha de uso único', 'send one-time password', 'send otp', 'enviar código', 'enviar senha', 'continue'];
+      const all = Array.from(document.querySelectorAll('input[type="submit"], button[type="submit"], .a-button-primary input, .a-button-primary button, a-button'));
+      for (const el of all) {
+        const t = (el.value || el.textContent || '').toLowerCase().trim();
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && texts.some(tx => t.includes(tx))) {
+          return { x: r.left + r.width/2, y: r.top + r.height/2, t: t.slice(0,50) };
+        }
+      }
+      // Also check if there's a submit button on a page with radio buttons (delivery choice page)
+      const radios = document.querySelectorAll('input[type="radio"]');
+      if (radios.length > 0) {
+        const submitBtn = document.querySelector('input[type="submit"], button[type="submit"]');
+        if (submitBtn) {
+          const r = submitBtn.getBoundingClientRect();
+          if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2, t: (submitBtn.value || submitBtn.textContent || 'submit').slice(0,50) };
+        }
+      }
+      return null;
+    });
+    if (sendBtnPos) {
+      log.info('OTP: clicando "' + sendBtnPos.t + '" para enviar código via WhatsApp/SMS...');
+      await page.mouse.click(sendBtnPos.x, sendBtnPos.y);
+      await sleep(4000);
+      await screenshot(page, 'otp_sent');
+      log.info('OTP: código enviado para o telefone. URL: ' + page.url().slice(0, 80));
+    }
+  } catch(e) { log.warn('OTP send-button step: ' + e.message.slice(0, 60)); }
+
   // Write WAITING flag
   try {
     fs.mkdirSync(path.dirname(OTP_FILE), { recursive: true });
