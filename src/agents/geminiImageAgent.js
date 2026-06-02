@@ -26,11 +26,12 @@ const GEMINI_KEYS = [
 ].filter(Boolean);
 
 // Modelos a tentar em ordem — para em qualquer que retornar imagem válida
+// Atualizado junho/2026: gemini-2.0-flash-preview-image-generation foi descontinuado
 const IMAGE_MODELS = [
-  'gemini-2.0-flash-preview-image-generation',
-  'gemini-2.5-flash-image',
-  'gemini-3-pro-image-preview',
-  'gemini-3.1-flash-image-preview',
+  'gemini-2.5-flash-image',            // Primário (maio 2026+)
+  'gemini-3.1-flash-image-preview',    // Fallback 1
+  'gemini-3-pro-image-preview',        // Fallback 2
+  'gemini-3.1-flash-image',            // Fallback 3
 ];
 
 // Chaves esgotadas (429/403) — limpas a cada 1h
