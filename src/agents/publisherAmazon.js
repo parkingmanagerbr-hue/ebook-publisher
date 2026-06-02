@@ -329,8 +329,17 @@ async function doSignin(page) {
         }
         return null;
       });
-      if (signInPos) { await page.mouse.click(signInPos.x, signInPos.y); await sleep(6000); }
-      else { log.warn('Password submit button not found'); }
+      if (signInPos) {
+        await page.mouse.click(signInPos.x, signInPos.y);
+        // Wait for navigation after password submit — sleep(6000) is unreliable:
+        // if redirect takes >6s, page.url() still returns the signin URL causing OTP false positive
+        try {
+          await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
+        } catch(navErr) {
+          log.warn('Password submit navigation timeout: ' + navErr.message.slice(0, 60));
+          await sleep(3000);
+        }
+      } else { log.warn('Password submit button not found'); }
     } else { log.warn('Password input not found'); }
   } catch(e) { log.warn('Password step error: ' + e.message); }
 
