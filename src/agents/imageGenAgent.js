@@ -19,6 +19,16 @@ const path = require('path');
 const { createLogger } = require('../core/logger');
 const logger = createLogger('imageGenAgent');
 
+// Module-level provider failure cache — skip providers that failed recently
+// Cleared every 60 minutes so transient errors don't permanently block a provider
+const _failedProviders = new Set();
+setInterval(() => {
+  if (_failedProviders.size > 0) {
+    logger.info(`[imageGenAgent] Limpando cache de falhas: ${[..._failedProviders].join(', ')}`);
+    _failedProviders.clear();
+  }
+}, 60 * 60 * 1000).unref();
+
 // ═══════════════════════════════════════════════════
 // 0. HIGGSFIELD — FLUX Pro Kontext Max (melhor qualidade)
 //    Env var: HIGGSFIELD_API_KEY=KEY_ID:KEY_SECRET
@@ -495,6 +505,11 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
 
   for (const provider of providers) {
     if (!provider.enabled) { logger.info(`⏭️  ${provider.name} pulado (sem chave)`); continue; }
+    // Skip providers that failed recently (module-level cache — resets every 60min)
+    if (_failedProviders.has(provider.name)) {
+      logger.info(`⏭️  ${provider.name} pulado (falhou recentemente — cache)`);
+      continue;
+    }
     try {
       logger.info(`🎨 Gerando imagem com ${provider.name}...`);
       const t0 = Date.now();
@@ -506,6 +521,11 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
     } catch (err) {
       const detail = err.response?.data ? JSON.stringify(err.response.data).slice(0, 150) : '';
       logger.warn(`❌ ${provider.name} falhou: ${err.message?.slice(0, 100)}${detail ? ' — '+detail : ''}`);
+      // Cache this provider as failed — skip on next illustration within the same hour
+      // Don't cache Pollinations (last resort — always retry it)
+      if (provider.name !== 'Pollinations.ai') {
+        _failedProviders.add(provider.name);
+      }
     }
   }
   throw new Error('Todos os providers de imagem falharam (incluindo Pollinations)');

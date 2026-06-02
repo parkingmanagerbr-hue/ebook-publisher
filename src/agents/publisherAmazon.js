@@ -209,7 +209,10 @@ async function doSignin(page) {
 
     if (pageInfo.shownEmail) log.info('Conta na página: "' + pageInfo.shownEmail + '" (KDP_EMAIL: ' + KDP_EMAIL + ')');
 
-    if (pageInfo.switchPos && (!pageInfo.shownEmail || !pageInfo.shownEmail.includes(KDP_EMAIL))) {
+    // Only switch accounts if a DIFFERENT email is shown — skip if email is hidden (step-up auth)
+    // Step-up auth pages hide the email in a hidden input — shownEmail will be empty there
+    const wrongAccount = pageInfo.shownEmail && !pageInfo.shownEmail.includes(KDP_EMAIL);
+    if (pageInfo.switchPos && wrongAccount) {
       log.info('Trocar contas link encontrado (email=' + (pageInfo.shownEmail||'?') + ') — clicando...');
       await page.mouse.click(pageInfo.switchPos.x, pageInfo.switchPos.y);
       // Wait for page to fully load after account switch (loading spinner needs time)
@@ -335,8 +338,20 @@ async function doSignin(page) {
 
   // Check for OTP / MFA / CVF challenge
   const postPasswordUrl = page.url();
+
+  // If we successfully landed on a KDP page after password, login succeeded — no OTP needed
+  // This avoids false positives where KDP form fields match the OTP input selectors
+  const onKdpPage = !isAuthUrl(postPasswordUrl) && postPasswordUrl.includes('kdp.amazon.com');
+  if (onKdpPage) {
+    log.info('Signin resultado: OK — já na página KDP após password: ' + postPasswordUrl.slice(0, 80));
+    await saveSession(page);
+    return true;
+  }
+
+  // Only check for OTP if still on auth domain — removed broad selectors (id*="code", name="code")
+  // that falsely match KDP form fields (promo codes, ISBNs, edition fields, etc.)
   const hasChallengeInput = await page.$(
-    'input[name="otpCode"], input[id*="otp" i], input[id*="mfa" i], input[id*="cvf" i], input[id*="code" i], input[name="code"]'
+    'input[name="otpCode"], input[id*="otp" i], input[id*="mfa" i], input[id*="cvf" i]'
   ).catch(() => null);
 
   if (hasChallengeInput || isAuthUrl(postPasswordUrl)) {
