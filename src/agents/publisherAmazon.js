@@ -1850,10 +1850,12 @@ async function publishToAmazon(ebook) {
     const finalUrl = page.url();
     // True publish: URL moved away from /pricing, /content, /details setup pages
     // Fix for false positive: ASIN in URL (e.g. /ASIN/content) is still in-setup
+    // Fix for auth false positive: if still on signin page, not published
     const leftSetup = !finalUrl.includes('/pricing') && !finalUrl.includes('/content') &&
                       !finalUrl.includes('/details') && !finalUrl.includes('/title-setup/kindle/new');
     const onBookshelf = finalUrl.includes('/bookshelf');
-    const reallyPublished = published && (leftSetup || onBookshelf);
+    const notAuthPage = !isAuthUrl(finalUrl); // prevent false positive when stuck on signin
+    const reallyPublished = published && (leftSetup || onBookshelf) && notAuthPage;
     log.info('Amazon KDP done! buttonClicked=' + published + ' leftSetup=' + leftSetup +
              ' bookshelf=' + onBookshelf + ' published=' + reallyPublished + ' URL: ' + finalUrl.slice(0, 80));
     await screenshot(page, 'step3_done');
