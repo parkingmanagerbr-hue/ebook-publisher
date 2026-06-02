@@ -749,6 +749,48 @@ async function publishToAmazon(ebook) {
       currentUrl = page.url();
       log.info('Após tipo-seleção URL: ' + currentUrl.slice(0, 80));
       await screenshot(page, 'step1_after_type_select');
+
+      // Step-up auth can happen after type-selection — handle it
+      if (isAuthUrl(currentUrl)) {
+        log.info('Step-up auth após type-selection: ' + currentUrl.slice(0, 80));
+        const ok = await doSignin(page);
+        if (!ok) {
+          await screenshot(page, 'signin_failed_after_type_select');
+          await browser.close();
+          return { success: false, error: 'Amazon auth após type-selection falhou', platform: 'amazon' };
+        }
+        // Try navigating back to new title after signin
+        for (const url of NEW_TITLE_URLS) {
+          await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+          await sleep(3000);
+          currentUrl = page.url();
+          if (!currentUrl.includes('/404') && !isAuthUrl(currentUrl)) break;
+        }
+        if (isAuthUrl(currentUrl)) {
+          log.warn('Ainda em auth após re-signin: ' + currentUrl.slice(0, 80));
+          await browser.close();
+          return { success: false, error: 'Amazon auth persistente após type-selection', platform: 'amazon' };
+        }
+        // Handle type-selection again if needed
+        if (currentUrl.includes('/create') && !currentUrl.includes('title-setup')) {
+          await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button, input[type="submit"], .a-button-primary, a.a-button-anchor, span.a-button-text'));
+            const btn = btns.find(e => {
+              const t = (e.textContent || e.value || '').trim().toLowerCase();
+              const r = e.getBoundingClientRect();
+              return r.width > 0 && (t === 'criar ebook' || t === 'criar e-book' || t.includes('ebook') || t.includes('e-book'));
+            });
+            if (btn) { btn.click(); return true; }
+            const firstBtn = document.querySelector('.a-button-primary .a-button-text, .a-button-primary input');
+            if (firstBtn) { firstBtn.click(); return true; }
+          }).catch(() => {});
+          await sleep(3000);
+          try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }); } catch {}
+          await sleep(2000);
+          currentUrl = page.url();
+          log.info('Após re-type-selection URL: ' + currentUrl.slice(0, 80));
+        }
+      }
     }
 
     // ── STEP 1: Book details ─────────────────────────────────────────────────
@@ -1585,29 +1627,37 @@ async function publishToAmazon(ebook) {
         !confirmResult.startsWith('custom') && !confirmResult.startsWith('warning') &&
         !confirmResult.startsWith('fallback')) {
       try {
-        // XPath: find checkbox inside element containing "confirmo"
-        const confirmXPath = '//input[@type="checkbox"][ancestor::*[contains(translate(., "CONFIRMO", "confirmo"), "confirmo")]]';
-        const confirmEls = await page.$x(confirmXPath).catch(() => []);
-        for (const elHandle of confirmEls) {
-          const isChecked = await page.evaluate(el => el.checked, elHandle);
-          if (!isChecked) {
-            await elHandle.evaluate(el => el.scrollIntoView({ block: 'center' }));
-            await elHandle.click().catch(() => {});
-            log.info('Accessibility confirm XPath: clicked checkbox');
-            break;
+        // XPath via page.evaluate (page.$x removed in Puppeteer v21+)
+        const xpathResult = await page.evaluate(() => {
+          const result = { clicked: false, textClicked: false };
+          // Find checkbox in ancestor containing "confirmo"
+          const cbs = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+          for (const cb of cbs) {
+            if (cb.checked) continue;
+            let el = cb.parentElement;
+            for (let d = 0; el && d < 12; el = el.parentElement, d++) {
+              if ((el.textContent || '').toLowerCase().includes('confirmo')) {
+                cb.scrollIntoView({ block: 'center' });
+                cb.click(); cb.checked = true;
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                result.clicked = true;
+                return result;
+              }
+            }
           }
-        }
-        if (confirmEls.length === 0) {
-          // Try clicking the text itself (might trigger checkbox via label)
-          const textXPath = '//*[contains(text(), "confirmo")]';
-          const textEls = await page.$x(textXPath).catch(() => []);
-          for (const el of textEls) {
-            await el.evaluate(e => e.scrollIntoView({ block: 'center' }));
-            await el.click().catch(() => {});
-            log.info('Accessibility confirm XPath: clicked text element');
-            await sleep(200);
+          // Fallback: click first element containing "confirmo" text
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+          let node;
+          while ((node = walker.nextNode())) {
+            if ((node.textContent || '').toLowerCase().includes('confirmo')) {
+              const el = node.parentElement;
+              if (el) { el.scrollIntoView({ block: 'center' }); el.click(); result.textClicked = true; return result; }
+            }
           }
-        }
+          return result;
+        }).catch(() => ({ clicked: false }));
+        if (xpathResult.clicked) log.info('Accessibility confirm XPath-eval: clicked checkbox');
+        else if (xpathResult.textClicked) log.info('Accessibility confirm XPath-eval: clicked text element');
       } catch(xe) { log.warn('Confirm XPath error: ' + xe.message.slice(0, 50)); }
     }
 
