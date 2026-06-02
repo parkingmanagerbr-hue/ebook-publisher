@@ -80,10 +80,9 @@ async function generateWithHiggsfield(prompt, width, height, apiKey) {
 // 1. DALL-E 3 (OpenAI) — mais rápido e confiável (~15s)
 // ═══════════════════════════════════════════════════
 async function generateWithDallE3(prompt, width, height, apiKey) {
-  // Tenta gpt-image-1 (novo modelo) e depois dall-e-3 (legado)
+  // Usa apenas gpt-image-1 (dall-e-3 foi descontinuado em junho/2026)
   const models = [
     { id: 'gpt-image-1',  sizes: ['1024x1024', '1024x1536', '1536x1024'] },
-    { id: 'dall-e-3',     sizes: ['1024x1024', '1024x1792', '1792x1024'] },
   ];
 
   const ratio = width / height;
@@ -427,7 +426,13 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
   const cfAccountId   = process.env.CF_ACCOUNT_ID;
   const cfApiToken    = process.env.CF_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN;
   const falKey        = process.env.FAL_AI_API_KEY;
-  const geminiKey     = process.env.GEMINI_API_KEY;
+  // Rotate Gemini keys: try all 5 keys (5x daily quota)
+  const _geminiKeys   = [
+    process.env.GEMINI_API_KEY,   process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3, process.env.GEMINI_API_KEY_4,
+    process.env.GEMINI_API_KEY_5,
+  ].filter(Boolean);
+  const geminiKey     = _geminiKeys[0]; // generateWithImagen loops internally per model; we wrap outer loop
   const hfKey         = process.env.HUGGINGFACE_API_KEY;
 
   // Aspect ratio para Gemini/Higgsfield
@@ -436,9 +441,20 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
 
   const providers = [
     {
-      name: 'Gemini Image Gen',   // ✅ PRIMÁRIO — grátis com chaves Gemini já configuradas
-      enabled: !!geminiKey,
-      fn: () => generateWithImagen(prompt, aspectRatio, geminiKey),
+      name: 'Gemini Image Gen',   // ✅ PRIMÁRIO — grátis com chaves Gemini já configuradas (5 chaves em rotação)
+      enabled: _geminiKeys.length > 0,
+      fn: async () => {
+        let lastErr;
+        for (const key of _geminiKeys) {
+          try { return await generateWithImagen(prompt, aspectRatio, key); }
+          catch (e) {
+            const s = e?.response?.status;
+            if (s === 429 || s === 403 || s === 400) { lastErr = e; continue; } // quota/model → try next key
+            throw e; // auth or network error → fail immediately
+          }
+        }
+        throw lastErr || new Error('Todas as chaves Gemini esgotadas para imagem');
+      },
     },
     {
       name: 'HuggingFace FLUX',   // ✅ grátis — router.huggingface.co, 4 chaves com rotação
