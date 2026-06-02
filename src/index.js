@@ -17,6 +17,7 @@ const { generateCover } = require('./agents/coverAgent');
 const { generatePDF } = require('./agents/pdfAgent');
 const { publishToCakto } = require('./agents/publisherCakto');
 const { publishToHotmart } = require('./agents/publisherHotmart');
+const { publishToAmazon } = require('./agents/publisherAmazon');
 const { runLearningCycle } = require('./agents/learningAgent');
 const { generateAudiobook, isAvailable: audiobookAvailable } = require('./agents/audiobookAgent');
 const db = require('./core/database');
@@ -187,13 +188,32 @@ async function runPipeline(topicOverride = null, language = null) {
         logger.warn('⚠️ Hotmart pulado (AUTO_PUBLISH_HOTMART não ativado)');
       }
 
+      // Amazon KDP — isolado: exceção não mata o pipeline
+      if (process.env.AUTO_PUBLISH_AMAZON !== 'false' &&
+          (process.env.AUTO_PUBLISH_AMAZON === 'true' || (process.env.KDP_EMAIL && process.env.KDP_PASSWORD))) {
+        logger.info('Publicando na Amazon KDP...');
+        try {
+          const amazonResult = await publishToAmazon(publishData);
+          results.amazon = amazonResult;
+          if (amazonResult?.success) logger.info(`✅ Amazon KDP: ${amazonResult.url || amazonResult.asin || 'OK'}`);
+          else logger.warn(`⚠️ Amazon KDP falhou: ${amazonResult?.error || 'desconhecido'}`);
+        } catch (amazonErr) {
+          logger.warn(`⚠️ Amazon KDP erro (não fatal): ${amazonErr.message.slice(0, 120)}`);
+          results.amazon = { success: false, error: amazonErr.message };
+        }
+      } else {
+        logger.warn('⚠️ Amazon KDP pulado (AUTO_PUBLISH_AMAZON não ativado)');
+      }
+
       // Atualizar status
-      const published = results.cakto?.success || results.hotmart?.success;
+      const published = results.cakto?.success || results.hotmart?.success || results.amazon?.success;
       db.updateEbookStatus(ebookId, published ? 'published' : 'ready', {
         caktoUrl: results.cakto?.url,
         hotmartUrl: results.hotmart?.url,
         hotmartProductId: results.hotmart?.hotmartProductId || results.hotmart?.productId || null,
         caktoProductId: results.cakto?.caktoProductId || results.cakto?.productId || null,
+        amazonUrl: results.amazon?.url || null,
+        amazonAsin: results.amazon?.asin || null,
       });
 
     } else {
