@@ -1491,89 +1491,143 @@ async function publishToAmazon(ebook) {
 
     // ── Accessibility confirmation checkbox ─────────────────────────────────
     // KDP shows: "Ao clicar aqui, confirmo que minhas respostas estão corretas"
-    // after uploading new manuscript/cover. Must check before "Salvar e continuar".
-    // NOTE: In KDP's Amazon widget (.a-row > .a-col), the checkbox and text may be in
-    // sibling columns — cb.parentElement has no text. Must walk up 5-7 ancestor levels.
+    // DIAGNOSIS: page has text "confirmo" but no native input[type="checkbox"] found with it
+    // in ancestors. Amazon may use custom element (div[role="checkbox"]) or the checkbox
+    // is checked=true already (territory checkboxes), or shadow DOM, or iframe.
     const confirmResult = await page.evaluate(() => {
-      const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
-
-      // Debug: log page text to understand what's available
       const pageText = (document.body.innerText || '').toLowerCase();
       const hasConfirm = pageText.includes('confirmo') || pageText.includes('corretas');
 
-      for (const cb of checkboxes) {
-        if (cb.checked) continue;
+      // DEBUG: log ALL checkbox-like elements
+      const allNativeCbs = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+      const cbState = allNativeCbs.map(cb => ({
+        id: cb.id.slice(0,30), name: cb.name.slice(0,30), checked: cb.checked,
+        parentText: (cb.parentElement?.textContent || '').trim().slice(0, 40),
+        grandParentText: (cb.parentElement?.parentElement?.textContent || '').trim().slice(0, 40),
+      }));
+      // Log unchecked ones only (territory checkboxes may be huge)
+      const unchecked = allNativeCbs.filter(cb => !cb.checked);
 
-        // Strategy 1: labels[] (works if checkbox has id + label has for attr)
-        const lbl = cb.labels?.[0];
-        if (lbl) {
-          const t = (lbl.textContent || '').toLowerCase();
-          if (t.includes('confirmo') || t.includes('corretas') || t.includes('respostas')) {
-            cb.scrollIntoView({ block: 'center' });
-            cb.click(); cb.checked = true;
-            cb.dispatchEvent(new Event('change', { bubbles: true }));
-            return 'checked-label: ' + t.trim().slice(0, 60);
-          }
-        }
-
-        // Strategy 2: closest label ancestor
-        const closestLabel = cb.closest('label');
-        if (closestLabel) {
-          const t = (closestLabel.textContent || '').toLowerCase();
-          if (t.includes('confirmo') || t.includes('corretas') || t.includes('respostas')) {
-            cb.scrollIntoView({ block: 'center' });
-            cb.click(); cb.checked = true;
-            cb.dispatchEvent(new Event('change', { bubbles: true }));
-            return 'checked-closest-label: ' + t.trim().slice(0, 60);
-          }
-        }
-
-        // Strategy 3: walk up DOM tree (handles sibling-column layouts)
-        for (let el = cb.parentElement, depth = 0; el && el !== document.body && depth < 8; el = el.parentElement, depth++) {
-          const t = (el.textContent || '').toLowerCase();
-          if (t.includes('confirmo') || t.includes('corretas') || t.includes('respostas')) {
-            cb.scrollIntoView({ block: 'center' });
-            cb.click(); cb.checked = true;
-            cb.dispatchEvent(new Event('change', { bubbles: true }));
-            return 'checked-ancestor depth=' + depth + ': ' + t.trim().slice(0, 60);
-          }
-        }
-
-        // Strategy 4: check next sibling or uncle element
-        const parent = cb.parentElement;
-        if (parent) {
-          const next = parent.nextElementSibling || parent.parentElement?.querySelector('span, label, div');
-          if (next) {
-            const t = (next.textContent || '').toLowerCase();
-            if (t.includes('confirmo') || t.includes('corretas') || t.includes('respostas')) {
-              cb.scrollIntoView({ block: 'center' });
-              cb.click(); cb.checked = true;
-              cb.dispatchEvent(new Event('change', { bubbles: true }));
-              return 'checked-sibling: ' + t.trim().slice(0, 60);
+      // Strategy 1-4: text walker — find TEXT NODE containing "confirmo", look for nearby checkbox
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+      let node;
+      while ((node = walker.nextNode())) {
+        const t = (node.textContent || '').toLowerCase();
+        if (t.includes('confirmo') || t.includes('corretas')) {
+          // Search within ancestor containers for a checkbox
+          let el = node.parentElement;
+          for (let d = 0; el && el !== document.body && d < 8; el = el.parentElement, d++) {
+            const cbs = Array.from(el.querySelectorAll('input[type="checkbox"]'));
+            const uncheckedCb = cbs.find(cb => !cb.checked);
+            if (uncheckedCb) {
+              uncheckedCb.scrollIntoView({ block: 'center' });
+              uncheckedCb.click(); uncheckedCb.checked = true;
+              uncheckedCb.dispatchEvent(new Event('change', { bubbles: true }));
+              return 'text-walker-found d=' + d + ': ' + t.slice(0, 40);
             }
           }
         }
       }
-      return hasConfirm ? 'no-confirm-checkbox (page has text confirmo)' : 'no-confirm-checkbox';
-    }).catch(() => 'error');
+
+      // Strategy 5: custom Amazon checkbox elements (div/span with role="checkbox")
+      const customCbs = Array.from(document.querySelectorAll(
+        '[role="checkbox"]:not([aria-checked="true"]), .a-checkbox-input:not(:checked), input[type="checkbox"]:not(:checked)'
+      ));
+      for (const el of customCbs) {
+        // Walk up to find "confirmo" context
+        for (let parent = el.parentElement, d = 0; parent && d < 8; parent = parent.parentElement, d++) {
+          const t = (parent.textContent || '').toLowerCase();
+          if (t.includes('confirmo') || t.includes('corretas')) {
+            el.scrollIntoView({ block: 'center' });
+            el.click();
+            if (el.tagName === 'INPUT') { el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); }
+            return 'custom-checkbox d=' + d + ': ' + t.trim().slice(0, 50);
+          }
+        }
+      }
+
+      // Strategy 6: Find the orange warning box by class, click inside it
+      const warningBox = document.querySelector('.a-box.a-alert-warning, .a-alert-warning, [class*="alert"][class*="warning"], [class*="warning"]');
+      if (warningBox) {
+        const wCb = warningBox.querySelector('input[type="checkbox"], [role="checkbox"]');
+        if (wCb && !wCb.checked) {
+          wCb.scrollIntoView({ block: 'center' });
+          wCb.click(); if (wCb.tagName === 'INPUT') { wCb.checked = true; wCb.dispatchEvent(new Event('change', { bubbles: true })); }
+          return 'warning-box-checkbox: ' + (warningBox.textContent || '').trim().slice(0, 60);
+        }
+      }
+
+      // Strategy 7: All unchecked checkboxes — try each one that's near "confirmo" at ANY depth
+      for (const cb of unchecked) {
+        const fullPath = cb.closest('form') || cb.closest('main') || document.body;
+        const pathText = (fullPath?.textContent || '').toLowerCase();
+        if (pathText.includes('confirmo')) {
+          cb.scrollIntoView({ block: 'center' });
+          cb.click(); cb.checked = true;
+          cb.dispatchEvent(new Event('change', { bubbles: true }));
+          return 'fallback-unchecked: ' + (cb.id || cb.name || 'noname');
+        }
+      }
+
+      // Return debug info for diagnosis
+      const debugInfo = JSON.stringify({
+        total: allNativeCbs.length, unchecked: unchecked.length,
+        samples: cbState.slice(0, 5),
+        hasConfirm,
+      });
+      return (hasConfirm ? 'no-confirm-checkbox (page has text confirmo)' : 'no-confirm-checkbox') + ' | debug=' + debugInfo;
+    }).catch(e => 'error: ' + e.message.slice(0, 60));
     log.info('Accessibility confirm: ' + confirmResult);
     await sleep(500);
 
+    // If confirm not found, try clicking by Puppeteer XPath (outside page.evaluate)
+    if (!confirmResult.startsWith('checked') && !confirmResult.startsWith('text-walker-found') &&
+        !confirmResult.startsWith('custom') && !confirmResult.startsWith('warning') &&
+        !confirmResult.startsWith('fallback')) {
+      try {
+        // XPath: find checkbox inside element containing "confirmo"
+        const confirmXPath = '//input[@type="checkbox"][ancestor::*[contains(translate(., "CONFIRMO", "confirmo"), "confirmo")]]';
+        const confirmEls = await page.$x(confirmXPath).catch(() => []);
+        for (const elHandle of confirmEls) {
+          const isChecked = await page.evaluate(el => el.checked, elHandle);
+          if (!isChecked) {
+            await elHandle.evaluate(el => el.scrollIntoView({ block: 'center' }));
+            await elHandle.click().catch(() => {});
+            log.info('Accessibility confirm XPath: clicked checkbox');
+            break;
+          }
+        }
+        if (confirmEls.length === 0) {
+          // Try clicking the text itself (might trigger checkbox via label)
+          const textXPath = '//*[contains(text(), "confirmo")]';
+          const textEls = await page.$x(textXPath).catch(() => []);
+          for (const el of textEls) {
+            await el.evaluate(e => e.scrollIntoView({ block: 'center' }));
+            await el.click().catch(() => {});
+            log.info('Accessibility confirm XPath: clicked text element');
+            await sleep(200);
+          }
+        }
+      } catch(xe) { log.warn('Confirm XPath error: ' + xe.message.slice(0, 50)); }
+    }
+
     // If confirm not found, scroll to bottom and retry once (checkbox may be below fold)
-    if (confirmResult === 'no-confirm-checkbox' || confirmResult.includes('page has text')) {
+    if (!confirmResult.startsWith('checked') && !confirmResult.startsWith('text-walker') &&
+        !confirmResult.startsWith('custom') && !confirmResult.startsWith('warning') &&
+        !confirmResult.startsWith('fallback')) {
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await sleep(1000);
       const confirmRetry = await page.evaluate(() => {
-        const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+        const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
         for (const cb of checkboxes) {
-          if (cb.checked) continue;
+          const isChecked = cb.checked || cb.getAttribute('aria-checked') === 'true';
+          if (isChecked) continue;
           // Walk up to body
           for (let el = cb.parentElement, d = 0; el && el !== document.body && d < 10; el = el.parentElement, d++) {
             const t = (el.textContent || '').toLowerCase();
             if (t.includes('confirmo') || t.includes('corretas') || t.includes('novo manuscrito')) {
               cb.scrollIntoView({ block: 'center' });
-              cb.click(); cb.checked = true;
-              cb.dispatchEvent(new Event('change', { bubbles: true }));
+              cb.click(); if (cb.tagName === 'INPUT') { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); }
               return 'retry-checked depth=' + d + ': ' + t.trim().slice(0, 60);
             }
           }
