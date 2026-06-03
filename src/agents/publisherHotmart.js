@@ -320,18 +320,32 @@ async function createProduct(page, session, ebook) {
   // Click category — Step 1: open the dropdown by clicking the category trigger
   // CRITICAL: use TRUSTED page.mouse.click() — hot-select web components check event.isTrusted
   // and ignore untrusted evaluate().click() calls. Return bounding rect from evaluate, then click outside.
-  const catTriggerRect = await page.evaluate(() => {
+  //
+  // NOTE: "Category panel already open" with ["selecione um arquivo","cancelar","continuar"] means
+  // the FILE UPLOAD panel is open, NOT the category dropdown. We must distinguish these two cases.
+  const CAT_KW = ['saude','esporte','financas','investimento','relacionamento','negocio','carreira',
+                   'espiritual','educacao','tecnologia','programacao','desenvolvimento','pessoal',
+                   'estetica','idioma','gastronomia','animal','humor','saude e esportes',
+                   'negocios e carreira','desenvolvimento pessoal'];
+  const catTriggerRect = await page.evaluate((catKw) => {
     function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
-    // Priority 1: hot-select element with category placeholder
-    const hotSel = Array.from(document.querySelectorAll('hot-select')).find(el => {
-      const ph = (el.getAttribute('placeholder')||'').toLowerCase();
-      return ph.includes('categori') || ph.includes('category');
-    });
-    if (hotSel) {
-      const r = hotSel.getBoundingClientRect();
-      if (r.width > 0) { hotSel.scrollIntoView({behavior:'instant',block:'center'}); return {x:r.left+r.width/2, y:r.top+r.height/2, src:'hot-select'}; }
+    // Priority 1: ANY hot-select element — search light DOM + shadow DOM (Hotmart nests components)
+    function findHotSelect(root) {
+      const els = Array.from(root.querySelectorAll ? root.querySelectorAll('hot-select') : []);
+      for (const el of els) { const r = el.getBoundingClientRect(); if (r.width > 50) return el; }
+      const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+      for (const el of all) {
+        if (el.shadowRoot) { const r = findHotSelect(el.shadowRoot); if (r) return r; }
+      }
+      return null;
     }
-    // Priority 2: look for category trigger button by class
+    const hotSel = findHotSelect(document);
+    if (hotSel) {
+      hotSel.scrollIntoView({behavior:'instant',block:'center'});
+      const r = hotSel.getBoundingClientRect();
+      return {x:r.left+r.width/2, y:r.top+r.height/2, src:'hot-select(ph='+hotSel.getAttribute('placeholder')+')'};
+    }
+    // Priority 2: look for category trigger button by class/attribute
     const trigger = document.querySelector(
       '[class*="categor"] button, [class*="category"] button, button[id*="categor"], ' +
       'select[name*="categor"], [aria-label*="ategori"], [placeholder*="ategori"]'
@@ -341,7 +355,7 @@ async function createProduct(page, session, ebook) {
       const r = trigger.getBoundingClientRect();
       return {x:r.left+r.width/2, y:r.top+r.height/2, src:'trigger:'+trigger.tagName};
     }
-    // Priority 3: find any element with "Categoria" label text and click nearby input
+    // Priority 3: label text "Categoria" adjacent to clickable element
     const labels = Array.from(document.querySelectorAll('label, span, div, p, h3, h4'));
     const catLabel = labels.find(el => {
       const t = norm(el.textContent||'').trim();
@@ -352,12 +366,18 @@ async function createProduct(page, session, ebook) {
       const r = catLabel.getBoundingClientRect();
       return {x:r.left+r.width/2, y:r.top+r.height/2, src:'label:'+catLabel.tagName};
     }
-    // Priority 4: all visible buttons — is the category panel already open?
-    const visibleBtns = Array.from(document.querySelectorAll('button, li, [role="option"]'))
+    // Priority 4: check if a REAL category panel is already open (contains category keywords)
+    // Do NOT treat the file-upload panel ("selecione um arquivo") as an open category panel
+    const visibleOpts = Array.from(document.querySelectorAll('button, li, [role="option"]'))
       .filter(el => el.getBoundingClientRect().width > 0)
-      .map(el => norm(el.textContent||'').slice(0,30)).filter(t=>t.length>2).slice(0,20);
-    return {alreadyOpen: true, visibleBtns};
-  }).catch(()=>null);
+      .map(el => norm(el.textContent||'').slice(0,40)).filter(t=>t.length>2);
+    const hasCatOptions = visibleOpts.some(t => catKw.some(k => t.includes(k)));
+    if (hasCatOptions) {
+      return {alreadyOpen: true, visibleBtns: visibleOpts.slice(0,20)};
+    }
+    // Fallback: return debug info (category panel NOT open yet, trigger not found)
+    return {notFound: true, visibleBtns: visibleOpts.slice(0,10)};
+  }, CAT_KW).catch(()=>null);
 
   if (catTriggerRect && catTriggerRect.x) {
     await page.mouse.click(catTriggerRect.x, catTriggerRect.y);
@@ -366,7 +386,14 @@ async function createProduct(page, session, ebook) {
   } else if (catTriggerRect && catTriggerRect.alreadyOpen) {
     log.info('Category panel already open: ' + JSON.stringify(catTriggerRect.visibleBtns).slice(0,120));
   } else {
-    log.warn('Category trigger not found');
+    log.warn('Category trigger not found — debug: ' + JSON.stringify(catTriggerRect));
+    // Try scrolling to find the hot-select and clicking at a fixed offset from "Categoria" text
+    const scrollAndClick = await page.evaluate(() => {
+      // Scroll down slowly to find the category section
+      window.scrollTo(0, document.body.scrollHeight / 2);
+      return {scrolled: true, bodyLen: document.body.innerText.length};
+    }).catch(()=>null);
+    if (scrollAndClick) { await sleep(800); }
   }
 
   // Step 2: find and click the correct category option — TRUSTED page.mouse.click()
@@ -1653,7 +1680,7 @@ async function publishToHotmart(ebook) {
   if(!pdfPath||!fs.existsSync(pdfPath)) throw new Error('PDF not found: '+pdfPath);
   const session=JSON.parse(fs.readFileSync(SESSION_FILE,'utf8'));
   const browser=await puppeteer.launch({
-    headless:true, executablePath:'/usr/bin/chromium',
+    headless:true, executablePath:process.env.CHROME_EXECUTABLE||process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',
     args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu',
           '--disable-blink-features=AutomationControlled','--window-size=1280,900'],
     defaultViewport:{width:1280,height:900}
