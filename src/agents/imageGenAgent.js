@@ -251,6 +251,11 @@ async function generateWithCloudflare(prompt, width, height, accountId, apiToken
 // 2b. HUGGINGFACE — FLUX.1-schnell via router (funciona com free tier)
 //     Usa rotação entre 4 chaves HF para evitar rate limit (402)
 // ═══════════════════════════════════════════════════
+// Chaves HF que esgotaram créditos (402) — puladas até reset horário.
+// Evita 4 chamadas 402 desperdiçadas por ilustração.
+const _hfDepleted = new Set();
+setInterval(() => _hfDepleted.clear(), 60 * 60 * 1000).unref();
+
 async function generateWithFlux(prompt, width, height, _primaryKey) {
   // Rotação entre todas as chaves HF disponíveis
   const allKeys = [
@@ -268,6 +273,7 @@ async function generateWithFlux(prompt, width, height, _primaryKey) {
 
   let lastErr;
   for (const key of allKeys) {
+    if (_hfDepleted.has(key)) continue; // pula chaves sem crédito (402)
     try {
       logger.info(`   HF FLUX.1-schnell (key ...${key.slice(-8)})`);
       const response = await axios.post(
@@ -293,7 +299,8 @@ async function generateWithFlux(prompt, width, height, _primaryKey) {
       lastErr = e;
       const status = e.response?.status;
       logger.warn(`   HF FLUX.1-schnell falhou (${status || e.code}): ${e.message?.slice(0, 60)}`);
-      if (status === 402 || status === 429) continue; // tenta próxima chave
+      if (status === 402) { _hfDepleted.add(key); continue; } // crédito esgotado → marca e pula nas próximas
+      if (status === 429) continue; // rate-limit transitório → tenta próxima chave
       break; // outro erro → desiste
     }
   }
