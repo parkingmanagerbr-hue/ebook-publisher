@@ -369,41 +369,49 @@ async function publishToCakto(ebook) {
 
           // Fill email + password — find the VISIBLE inputs (by coordinates) after tab switch
           // Note: both tabs share the DOM, so we must find the input that is actually visible/clickable
-          const fieldPositions = await page.evaluate(() => {
-            // Get ALL inputs and find the ones that are actually visible in the viewport
+          // STRUCTURAL approach: the password input and its matching email input live in the
+          // SAME <form>. We find the password input, walk up to its closest <form> ancestor, then
+          // pick the email/text input inside THAT form. This is language- and layout-independent,
+          // unlike geometry which kept selecting the passwordless field.
+          const detected = await page.evaluate(() => {
+            const rectOf = (el) => {
+              const r = el.getBoundingClientRect();
+              return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height };
+            };
+            const isVisible = (el) => {
+              const r = el.getBoundingClientRect();
+              const st = window.getComputedStyle(el);
+              return r.width > 50 && r.height > 15 && st.visibility !== 'hidden' && st.display !== 'none' && parseFloat(st.opacity || '1') > 0.05;
+            };
             const allInputs = Array.from(document.querySelectorAll('input'));
-            const visible = allInputs
-              .map(el => {
-                const r = el.getBoundingClientRect();
-                return { type: el.type, name: el.name || '', placeholder: el.placeholder || '', x: r.left + r.width/2, y: r.top + r.height/2, w: r.width, h: r.height };
-              })
-              .filter(i => i.w > 50 && i.h > 15 && i.y > 50 && i.y < window.innerHeight - 50);
-            return visible;
+            const debug = allInputs.map(el => ({
+              type: el.type, ph: (el.placeholder || '').slice(0, 30),
+              vis: isVisible(el), y: Math.round(el.getBoundingClientRect().top),
+            }));
+            // Pick the visible password input (prefer it; fall back to any password input)
+            const passEl = allInputs.find(el => el.type === 'password' && isVisible(el))
+              || allInputs.find(el => el.type === 'password');
+            let emailEl = null;
+            if (passEl) {
+              const form = passEl.closest('form');
+              const scope = form || document;
+              const candidates = Array.from(scope.querySelectorAll('input')).filter(el =>
+                el.type === 'email' ||
+                (el.type === 'text' && (/e-?mail/i.test(el.placeholder || '') || /email/i.test(el.name || '')))
+              );
+              // Prefer a visible email candidate inside the same form
+              emailEl = candidates.find(isVisible) || candidates[0] || null;
+            }
+            return {
+              debug,
+              email: emailEl ? { ...rectOf(emailEl), ph: (emailEl.placeholder || '').slice(0, 30), inForm: !!emailEl.closest('form') } : null,
+              pass: passEl ? { ...rectOf(passEl), ph: (passEl.placeholder || '').slice(0, 30) } : null,
+            };
           });
-          log.info(`Cakto: campos visíveis: ${JSON.stringify(fieldPositions.map(f => f.type + '/' + f.placeholder.slice(0, 20)))}`);
-
-          // Find email and password among visible inputs
-          // IMPORTANT: Both tabs (passwordless + password) have email inputs visible in the DOM
-          // simultaneously. The passwordless tab's email has "para" in its placeholder
-          // (e.g. "Digite seu e-mail para login sem senha"). We must pick the password tab's
-          // email field — it's the one WITHOUT "para" in the placeholder.
-          const emailFields = fieldPositions.filter(f => f.type === 'email' || (f.type === 'text' && (f.placeholder.toLowerCase().includes('e-mail') || f.placeholder.toLowerCase().includes('email') || f.name === 'email')));
-          const passField  = fieldPositions.find(f => f.type === 'password');
-          // Both tabs coexist in the DOM, so há 2 campos de email: o do "passwordless" e o do
-          // "login with password". O passwordless tem placeholder tipo "...for passwordless login"
-          // (EN) ou "...para login sem senha" (PT). Escolha estruturalmente: o campo de email
-          // imediatamente ACIMA do campo de senha pertence ao formulário correto (independe de idioma).
-          const _passwordlessRe = /para login|sem senha|passwordless|for passwordless|magic link/i;
-          let emailField = null;
-          if (passField) {
-            const above = emailFields.filter(f => f.y < passField.y).sort((a, b) => b.y - a.y);
-            emailField = above[0] || null;
-          }
-          if (!emailField) {
-            emailField = emailFields.find(f => !_passwordlessRe.test(f.placeholder))
-              || emailFields[emailFields.length - 1] || null;
-          }
-          log.info(`Cakto: emailFields=${JSON.stringify(emailFields.map(f=>f.placeholder.slice(0,25)))} → escolhido: ${emailField ? emailField.placeholder.slice(0,30) : 'nenhum'}`);
+          log.info(`Cakto: inputs=${JSON.stringify(detected.debug)}`);
+          const emailField = detected.email;
+          const passField  = detected.pass;
+          log.info(`Cakto: escolhido email="${emailField ? emailField.ph : 'nenhum'}" (y=${emailField?emailField.y:'-'}) | pass y=${passField?passField.y:'-'}`);
 
           if (emailField) {
             await page.mouse.click(emailField.x, emailField.y, { clickCount: 3 });
