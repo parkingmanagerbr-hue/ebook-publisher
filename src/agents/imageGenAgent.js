@@ -128,11 +128,12 @@ async function generateWithDallE3(prompt, width, height, apiKey) {
 // ═══════════════════════════════════════════════════
 async function generateWithImagen(prompt, aspectRatio, apiKey) {
   // Modelos atualizados (maio 2026) — em ordem de preferência
+  // Apenas modelos free-tier que aceitam generateContent.
+  // Imagen 4 (predict) exige plano pago → removido (sempre 400).
   const models = [
-    { id: 'imagen-4.0-fast-generate-001', type: 'predict' },   // Imagen 4 Fast (mais rápido)
-    { id: 'gemini-2.5-flash-image',       type: 'generate' },  // Gemini 2.5 Flash Image
-    { id: 'gemini-3.1-flash-image-preview', type: 'generate' }, // Gemini 3.1 Flash Image
-    { id: 'imagen-4.0-generate-001',      type: 'predict' },   // Imagen 4 (padrão)
+    { id: 'gemini-2.5-flash-image',         type: 'generate' },  // Gemini 2.5 Flash Image
+    { id: 'gemini-3.1-flash-image',         type: 'generate' },  // Gemini 3.1 Flash Image
+    { id: 'gemini-3-pro-image',             type: 'generate' },  // Gemini 3 Pro Image
   ];
   let lastErr;
   for (const { id: model, type } of models) {
@@ -257,6 +258,8 @@ async function generateWithFlux(prompt, width, height, _primaryKey) {
     process.env.HUGGINGFACE_API_KEY_2,
     process.env.HUGGINGFACE_API_KEY_3,
     process.env.HUGGINGFACE_API_KEY_4,
+    process.env.HUGGINGFACE_API_KEY_5,
+    process.env.HUGGINGFACE_API_KEY_6,
   ].filter(Boolean);
 
   const BASE = 'https://router.huggingface.co/hf-inference/models';
@@ -451,7 +454,12 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
 
   const providers = [
     {
-      name: 'Gemini Image Gen',   // ✅ PRIMÁRIO — grátis com chaves Gemini já configuradas (5 chaves em rotação)
+      name: 'HuggingFace FLUX',   // ✅ PRIMÁRIO — router.huggingface.co, 6 chaves com rotação
+      enabled: !!hfKey,
+      fn: () => generateWithFlux(prompt, width, height, hfKey),
+    },
+    {
+      name: 'Gemini Image Gen',   // grátis com chaves Gemini (free tier de imagem frequentemente esgota → 429)
       enabled: _geminiKeys.length > 0,
       fn: async () => {
         let lastErr;
@@ -465,11 +473,6 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
         }
         throw lastErr || new Error('Todas as chaves Gemini esgotadas para imagem');
       },
-    },
-    {
-      name: 'HuggingFace FLUX',   // ✅ grátis — router.huggingface.co, 4 chaves com rotação
-      enabled: !!hfKey,
-      fn: () => generateWithFlux(prompt, width, height, hfKey),
     },
     {
       name: 'fal.ai FLUX',        // ⚡ ~3s, free tier
