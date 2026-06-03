@@ -36,6 +36,36 @@ const KDP_PASSWORD    = process.env.KDP_PASSWORD || '';
 const DEFAULT_PRICE   = parseFloat(process.env.EBOOK_PRICE || '4.99');
 const OTP_FILE        = '/app/data/amazon_otp.txt';
 
+// ── Shadow-DOM-piercing file-input finder (CDP) ───────────────────────────────
+// KDP renders the manuscript/cover upload <input type=file> inside web-component
+// shadow roots. CDP's DOM.querySelector does NOT cross shadow boundaries, so we
+// fetch the full tree with pierce:true and walk shadowRoots + iframe contentDocs.
+async function findFileInputsPierced(client) {
+  let doc;
+  try {
+    doc = await client.send('DOM.getDocument', { depth: -1, pierce: true });
+  } catch {
+    return [];
+  }
+  const out = [];
+  const walk = (node) => {
+    if (!node) return;
+    if (node.nodeName === 'INPUT') {
+      const a = node.attributes || [];
+      const attrs = {};
+      for (let i = 0; i < a.length; i += 2) attrs[a[i]] = a[i + 1];
+      if ((attrs.type || '').toLowerCase() === 'file') {
+        out.push({ nodeId: node.nodeId, attrs });
+      }
+    }
+    (node.children || []).forEach(walk);
+    (node.shadowRoots || []).forEach(walk);
+    if (node.contentDocument) walk(node.contentDocument);
+  };
+  walk(doc.root);
+  return out;
+}
+
 // ── Amazon auth-challenge URL detection ───────────────────────────────────────
 function isAuthUrl(url) {
   const authPatterns = [
@@ -1426,23 +1456,38 @@ async function publishToAmazon(ebook) {
         }
       }
 
-      // Approach 3: CDP DOM.setFileInputFiles — works even on hidden/detached inputs
+      // Approach 3: CDP DOM.setFileInputFiles with shadow-DOM piercing — KDP's
+      // upload input lives inside a web-component shadow root, invisible to
+      // page.$() and to non-piercing CDP querySelector.
       if (!msUploaded) {
         try {
           const client = await page.target().createCDPSession();
-          const { root } = await client.send('DOM.getDocument', { depth: 1 });
-          const { nodeId } = await client.send('DOM.querySelector', {
-            nodeId: root.nodeId,
-            selector: 'input[type="file"]'
+          const fileInputs = await findFileInputsPierced(client);
+          log.info('CDP ms (pierced): ' + fileInputs.length + ' file inputs found' +
+            (fileInputs.length ? ' — attrs=' + JSON.stringify(fileInputs.map(f => f.attrs)).slice(0, 200) : ''));
+          // Pick the manuscript input: NOT cover/image; prefer pdf accept; else the first.
+          let msNode = fileInputs.find(f => {
+            const nm = (f.attrs.name || f.attrs.id || '').toLowerCase();
+            const ac = (f.attrs.accept || '').toLowerCase();
+            return ac.includes('pdf') || ac.includes('epub') || ac.includes('doc') ||
+                   nm.includes('manuscript') || nm.includes('book_file') || nm.includes('content');
           });
-          if (nodeId > 0) {
-            await client.send('DOM.setFileInputFiles', { files: [ebook.pdfPath], nodeId });
-            log.info('Manuscrito via CDP setFileInputFiles');
+          if (!msNode) {
+            msNode = fileInputs.find(f => {
+              const nm = (f.attrs.name || f.attrs.id || '').toLowerCase();
+              const ac = (f.attrs.accept || '').toLowerCase();
+              return !nm.includes('cover') && !nm.includes('image') && !nm.includes('thumbnail') &&
+                     !ac.includes('image') && !ac.includes('jpeg') && !ac.includes('png');
+            }) || fileInputs[0];
+          }
+          if (msNode) {
+            await client.send('DOM.setFileInputFiles', { files: [ebook.pdfPath], nodeId: msNode.nodeId });
+            log.info('Manuscrito via CDP setFileInputFiles (pierced) nodeId=' + msNode.nodeId);
             msUploaded = true;
             await sleep(40000);
             await screenshot(page, 'step2_after_manuscript');
           } else {
-            log.warn('CDP: no file input found in DOM');
+            log.warn('CDP: no file input found in DOM (even pierced)');
           }
           await client.detach().catch(() => {});
         } catch(e) {
@@ -1521,34 +1566,28 @@ async function publishToAmazon(ebook) {
         log.info('Cover chooser failed: ' + e.message.slice(0, 80));
       }
 
-      // Approach 2: CDP — inspect all file inputs, identify cover input by attributes, set file directly
+      // Approach 2: CDP (shadow-DOM piercing) — identify cover input by attributes, set file directly
       if (!cvUploaded) {
         try {
           const client = await page.target().createCDPSession();
           // Scroll to bottom to ensure cover section is rendered
           await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
           await sleep(1500);
-          const { root } = await client.send('DOM.getDocument', { depth: -1 });
-          const { nodeIds } = await client.send('DOM.querySelectorAll', {
-            nodeId: root.nodeId, selector: 'input[type="file"]'
-          }).catch(() => ({ nodeIds: [] }));
-          log.info('CDP cover: ' + nodeIds.length + ' file inputs found');
+          const fileInputs = await findFileInputsPierced(client);
+          log.info('CDP cover (pierced): ' + fileInputs.length + ' file inputs found' +
+            (fileInputs.length ? ' — attrs=' + JSON.stringify(fileInputs.map(f => f.attrs)).slice(0, 200) : ''));
 
           let coverNodeId = 0;
-          for (const nid of nodeIds) {
-            const res = await client.send('DOM.getAttributes', { nodeId: nid }).catch(() => ({ attributes: [] }));
-            const attrs = {};
-            for (let i = 0; i < res.attributes.length; i += 2) attrs[res.attributes[i]] = res.attributes[i+1];
-            log.info('  file input attrs: ' + JSON.stringify(attrs).slice(0, 120));
-            const nm = (attrs.name || attrs.id || '').toLowerCase();
-            const ac = (attrs.accept || '').toLowerCase();
+          for (const f of fileInputs) {
+            const nm = (f.attrs.name || f.attrs.id || '').toLowerCase();
+            const ac = (f.attrs.accept || '').toLowerCase();
             if (nm.includes('cover') || nm.includes('capa') || nm.includes('image') ||
                 ac.includes('image') || ac.includes('jpeg') || ac.includes('jpg') || ac.includes('png')) {
-              coverNodeId = nid; break;
+              coverNodeId = f.nodeId; break;
             }
           }
           // Last resort: use last file input (manuscript is first, cover is last)
-          if (!coverNodeId && nodeIds.length >= 2) coverNodeId = nodeIds[nodeIds.length - 1];
+          if (!coverNodeId && fileInputs.length >= 2) coverNodeId = fileInputs[fileInputs.length - 1].nodeId;
 
           if (coverNodeId) {
             await client.send('DOM.setFileInputFiles', { files: [ebook.coverPath], nodeId: coverNodeId });
