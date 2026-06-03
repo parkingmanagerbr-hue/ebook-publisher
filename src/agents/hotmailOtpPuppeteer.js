@@ -101,14 +101,17 @@ async function launchBrowser() {
 
 // ── Login to Outlook ───────────────────────────────────────────────────────────
 async function loginToOutlook(page, email, password) {
-  log.info('Hotmail: fazendo login em outlook.live.com...');
+  log.info('Hotmail: fazendo login em login.live.com...');
 
-  await page.goto('https://outlook.live.com/mail/0/inbox', {
+  // IMPORTANT: navigating to outlook.live.com/mail when unauthenticated redirects to
+  // the Microsoft 365 MARKETING page (no login form). Go straight to the Microsoft
+  // account sign-in endpoint, which always presents the email/loginfmt field.
+  await page.goto('https://login.live.com/login.srf?wa=wsignin1.0&rpsnv=13&ct=0&rver=7.0.6738.0&wp=MBI_SSL&wreply=https%3A%2F%2Foutlook.live.com%2Fowa%2F', {
     waitUntil: 'domcontentloaded', timeout: 30000,
   }).catch(() => {});
-  await sleep(2000);
+  await sleep(2500);
 
-  const url = page.url();
+  let url = page.url();
   // If already on inbox (session cookie worked), we're done
   if (url.includes('outlook.live.com/mail') && !url.includes('login') && !url.includes('login.live.com')) {
     log.info('Hotmail: sessão válida, já está logado');
@@ -118,12 +121,19 @@ async function loginToOutlook(page, email, password) {
   // Sign in page — may be at login.live.com/login.srf or login.microsoftonline.com
   log.info('Hotmail: página de login detectada: ' + url.slice(0, 80));
 
-  // Step 1: Enter email
+  // Step 1: Enter email — if the field isn't present, retry with the bare login URL once
   try {
     await page.waitForSelector('input[type="email"], input[name="loginfmt"]', { timeout: 15000 });
   } catch {
-    log.warn('Hotmail: campo de email não encontrado em 15s');
-    return false;
+    log.warn('Hotmail: campo de email não encontrado — tentando login.live.com direto');
+    await page.goto('https://login.live.com/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    await sleep(2500);
+    try {
+      await page.waitForSelector('input[type="email"], input[name="loginfmt"]', { timeout: 15000 });
+    } catch {
+      log.warn('Hotmail: campo de email não encontrado em 15s (2ª tentativa) — URL: ' + page.url().slice(0, 80));
+      return false;
+    }
   }
   await page.type('input[type="email"], input[name="loginfmt"]', email, { delay: 50 });
   await sleep(500);
