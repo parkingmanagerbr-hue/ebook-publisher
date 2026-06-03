@@ -1899,16 +1899,26 @@ async function publishToAmazon(ebook) {
     const reallyPublished = published && (leftSetup || onBookshelf) && notAuthPage;
     log.info('Amazon KDP done! buttonClicked=' + published + ' leftSetup=' + leftSetup +
              ' bookshelf=' + onBookshelf + ' published=' + reallyPublished + ' URL: ' + finalUrl.slice(0, 80));
-    // If still stuck on /pricing, scrape KDP inline validation errors to diagnose the block
-    if (!reallyPublished && finalUrl.includes('/pricing')) {
-      const validationErrors = await page.evaluate(() => {
-        const sel = '.a-alert-content, .a-form-error, [class*="error"], [role="alert"], .a-alert-error';
-        return Array.from(document.querySelectorAll(sel))
-          .map(el => (el.textContent || '').trim())
-          .filter(t => t.length > 3 && t.length < 200)
-          .slice(0, 10);
-      }).catch(() => []);
-      log.warn('Publish blocked on /pricing. KDP validation errors: ' + JSON.stringify(validationErrors));
+    // If publish didn't go through, KDP bounces back to the failing step (often
+    // /details or /pricing). Scrape inline validation errors AND the labels of any
+    // field flagged invalid, so we know which field blocks.
+    if (!reallyPublished && (finalUrl.includes('/pricing') || finalUrl.includes('/details') || finalUrl.includes('/title-setup/kindle/new'))) {
+      const diag = await page.evaluate(() => {
+        const text = el => (el.textContent || '').trim();
+        const sel = '.a-alert-content, .a-form-error, .a-color-error, [class*="error" i], [role="alert"], .a-alert-error';
+        const errors = Array.from(document.querySelectorAll(sel))
+          .map(text).filter(t => t.length > 3 && t.length < 200);
+        const flagged = Array.from(document.querySelectorAll('[aria-invalid="true"], .a-input-error input, .a-input-error textarea'))
+          .map(el => {
+            const lbl = el.closest('[class*="field" i], .a-row, fieldset');
+            return (el.getAttribute('name') || el.getAttribute('id') || el.placeholder || '') +
+                   (lbl ? ' | ' + text(lbl).slice(0, 80) : '');
+          }).filter(Boolean);
+        return { errors: [...new Set(errors)].slice(0, 12), flagged: [...new Set(flagged)].slice(0, 8) };
+      }).catch(() => ({ errors: [], flagged: [] }));
+      const step = finalUrl.includes('/pricing') ? 'pricing' : 'details';
+      log.warn('Publish blocked on /' + step + '. KDP errors: ' + JSON.stringify(diag.errors) +
+               ' | flagged fields: ' + JSON.stringify(diag.flagged));
     }
     await screenshot(page, 'step3_done');
 

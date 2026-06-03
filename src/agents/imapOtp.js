@@ -34,9 +34,14 @@ function cfg() {
   };
 }
 
-// Circuit breaker: after a hard auth failure, stop trying for 1h so we don't
-// hammer Outlook (repeated failed logins can lock the account).
+// Circuit breaker: after failures, stop trying for a while so we don't hammer
+// Outlook (repeated failed logins can lock the account; repeated timeouts waste
+// the whole publish loop). Trips on ANY error — auth failures block for 1h,
+// other errors (e.g. ETIMEOUT, "Command failed") block for 15min after a couple
+// of consecutive misses.
 let _authBlockedUntil = 0;
+let _consecutiveFailures = 0;
+let _lastBlockLog = 0;
 
 function isAvailable() {
   if (Date.now() < _authBlockedUntil) return false;
@@ -60,6 +65,15 @@ async function fetchOtp({ senderHint = 'cakto', subjectHints = ['código', 'code
   if (!ImapFlow) { log.warn('imapflow não instalado — pulando IMAP OTP'); return null; }
   const c = cfg();
   if (!c.pass) { log.warn('OTP_IMAP_PASSWORD não configurado — pulando IMAP OTP'); return null; }
+  // Circuit breaker open → don't hammer. Log at most once/minute.
+  if (Date.now() < _authBlockedUntil) {
+    if (Date.now() - _lastBlockLog > 60_000) {
+      _lastBlockLog = Date.now();
+      const mins = Math.ceil((_authBlockedUntil - Date.now()) / 60_000);
+      log.warn('IMAP OTP desativado (circuit breaker) por ~' + mins + 'min');
+    }
+    return null;
+  }
 
   const client = new ImapFlow({
     host: c.host, port: c.port, secure: true,
@@ -91,6 +105,7 @@ async function fetchOtp({ senderHint = 'cakto', subjectHints = ['código', 'code
         const date = env.date ? new Date(env.date).getTime() : 0;
         if (!best || date > best.date) best = { date, code };
       }
+      _consecutiveFailures = 0; // a clean run resets the breaker counter
       if (best) { log.info('IMAP OTP encontrado: ' + best.code + ' (de ' + new Date(best.date).toLocaleString('pt-BR') + ')'); return best.code; }
       log.info('IMAP: nenhuma mensagem com código correspondente');
       return null;
@@ -99,12 +114,19 @@ async function fetchOtp({ senderHint = 'cakto', subjectHints = ['código', 'code
     }
   } catch (err) {
     const msg = (err && err.message ? err.message : String(err));
-    // Hard auth failure (e.g. Outlook needs an app password) → trip breaker for 1h
-    if (/auth/i.test(msg) || /login/i.test(msg) || /credential/i.test(msg)) {
+    const code = (err && err.code) ? err.code : '';
+    _consecutiveFailures++;
+    // Hard auth failure (e.g. Outlook needs an app password) → trip breaker for 1h immediately.
+    if (/auth/i.test(msg) || /login/i.test(msg) || /credential/i.test(msg) || code === 'AUTHENTICATIONFAILED') {
       _authBlockedUntil = Date.now() + 3_600_000;
       log.warn('IMAP OTP auth falhou — desativando por 1h. Use uma APP PASSWORD em OTP_IMAP_PASSWORD. Detalhe: ' + msg.slice(0, 120));
+    } else if (_consecutiveFailures >= 2) {
+      // Any other repeated error (ETIMEOUT, "Command failed", network) → 15min cooldown
+      // so a single publish loop doesn't fire 60 doomed IMAP calls.
+      _authBlockedUntil = Date.now() + 900_000;
+      log.warn('IMAP OTP falhou ' + _consecutiveFailures + 'x (' + (code || msg.slice(0, 60)) + ') — desativando por 15min');
     } else {
-      log.warn('IMAP OTP erro: ' + msg.slice(0, 140));
+      log.warn('IMAP OTP erro: ' + (code ? code + ' ' : '') + msg.slice(0, 120));
     }
     return null;
   } finally {
