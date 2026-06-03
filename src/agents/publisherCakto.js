@@ -388,9 +388,21 @@ async function publishToCakto(ebook) {
           // (e.g. "Digite seu e-mail para login sem senha"). We must pick the password tab's
           // email field — it's the one WITHOUT "para" in the placeholder.
           const emailFields = fieldPositions.filter(f => f.type === 'email' || (f.type === 'text' && (f.placeholder.toLowerCase().includes('e-mail') || f.placeholder.toLowerCase().includes('email') || f.name === 'email')));
-          // Prefer the field without "para" (passwordless indicator); fallback to last field
-          const emailField = emailFields.find(f => !f.placeholder.toLowerCase().includes('para')) || emailFields[emailFields.length - 1] || null;
           const passField  = fieldPositions.find(f => f.type === 'password');
+          // Both tabs coexist in the DOM, so há 2 campos de email: o do "passwordless" e o do
+          // "login with password". O passwordless tem placeholder tipo "...for passwordless login"
+          // (EN) ou "...para login sem senha" (PT). Escolha estruturalmente: o campo de email
+          // imediatamente ACIMA do campo de senha pertence ao formulário correto (independe de idioma).
+          const _passwordlessRe = /para login|sem senha|passwordless|for passwordless|magic link/i;
+          let emailField = null;
+          if (passField) {
+            const above = emailFields.filter(f => f.y < passField.y).sort((a, b) => b.y - a.y);
+            emailField = above[0] || null;
+          }
+          if (!emailField) {
+            emailField = emailFields.find(f => !_passwordlessRe.test(f.placeholder))
+              || emailFields[emailFields.length - 1] || null;
+          }
           log.info(`Cakto: emailFields=${JSON.stringify(emailFields.map(f=>f.placeholder.slice(0,25)))} → escolhido: ${emailField ? emailField.placeholder.slice(0,30) : 'nenhum'}`);
 
           if (emailField) {
