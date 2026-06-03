@@ -1241,22 +1241,41 @@ async function publishToAmazon(ebook) {
     // Extended wait for SPA re-render (execution context may be briefly destroyed during React updates)
     await sleep(4000);
 
-    // Check for Step 1 validation errors that prevented the form from saving
+    // Check for Step 1 validation errors that prevented the form from saving.
+    // Capture BOTH the visible error text AND the specific field flagged invalid
+    // (with its nearest label), plus a full top-of-page screenshot — so we know
+    // exactly which Details field blocks the save instead of guessing.
     try {
-      const validationErrors = await page.evaluate(() => {
+      const step1diag = await page.evaluate(() => {
+        const text = el => (el.textContent || '').trim();
         const selectors = ['.a-alert-content', '.a-color-error', '[class*="error-message" i]',
-                           '.a-box-error', '[role="alert"]', '.a-alert-error'];
+                           '.a-box-error', '[role="alert"]', '.a-alert-error', '.a-form-error'];
         const errors = [];
         for (const sel of selectors) {
           document.querySelectorAll(sel).forEach(el => {
             const r = el.getBoundingClientRect();
-            const t = (el.textContent||'').trim();
+            const t = text(el);
             if (r.width > 0 && t.length > 3 && t.length < 300) errors.push(t.slice(0, 150));
           });
         }
-        return [...new Set(errors)]; // dedupe
+        // Fields flagged invalid — aria-invalid, .a-input-error wrappers, red-border inputs
+        const flagged = [];
+        document.querySelectorAll('[aria-invalid="true"], .a-input-error input, .a-input-error textarea, .a-input-error select').forEach(el => {
+          const wrap = el.closest('[class*="field" i], .a-row, fieldset, .a-section');
+          const lbl = wrap ? text(wrap).slice(0, 90) : '';
+          flagged.push((el.getAttribute('name') || el.getAttribute('id') || el.placeholder || el.tagName) + (lbl ? ' | ' + lbl : ''));
+        });
+        return { errors: [...new Set(errors)], flagged: [...new Set(flagged)], url: location.href };
       });
-      if (validationErrors.length > 0) log.warn('Step 1 validation errors: ' + JSON.stringify(validationErrors));
+      if (step1diag.errors.length > 0) log.warn('Step 1 validation errors: ' + JSON.stringify(step1diag.errors));
+      if (step1diag.flagged.length > 0) log.warn('Step 1 FLAGGED fields: ' + JSON.stringify(step1diag.flagged));
+      log.info('Step 1 post-save URL: ' + step1diag.url.slice(0, 90));
+      // If we are still on /details (book not saved), scroll to top and capture the form state
+      if (step1diag.url.includes('/details')) {
+        await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+        await sleep(600);
+        await screenshot(page, 'step1_after_save');
+      }
     } catch(e) { /* ignore */ }
 
     // ── Close any unexpected modal that opened during Step 1 (e.g., "Adicionar à série") ──
