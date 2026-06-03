@@ -1815,7 +1815,8 @@ async function publishToAmazon(ebook) {
 
     // Price in USD — KDP price inputs are type="text" and appear AFTER ~200 territory checkboxes
     // so selector-based fillField never reaches them (sliced at 25). Use evaluate to find all text inputs.
-    const priceUsd = Math.max(0.99, DEFAULT_PRICE).toFixed(2);
+    const kdpMinUsd = parseFloat(process.env.KDP_PRICE_USD || '0.99');
+    const priceUsd = Math.max(0.99, kdpMinUsd).toFixed(2);
 
     // Approach 1: look for inputs with ID/name containing "price" (KDP: data-digital-price-ATVPDKIKX0DER, etc.)
     const priceFilled = await page.evaluate((price) => {

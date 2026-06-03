@@ -17,13 +17,18 @@ const path   = require('path');
 const { createLogger } = require('../core/logger');
 const logger = createLogger('geminiImageAgent');
 
+// Chave dedicada a CAPAS/imagens (fora do pool de texto). Tentada PRIMEIRO
+// para que a geração de imagem não consuma cota das chaves de texto (_1.._5).
+const COVER_KEY = process.env.GEMINI_COVER_KEY || process.env.GEMINI_API_KEY_6;
+
 const GEMINI_KEYS = [
+  COVER_KEY,                       // dedicada a imagem — prioridade
   process.env.GEMINI_API_KEY,
   process.env.GEMINI_API_KEY_2,
   process.env.GEMINI_API_KEY_3,
   process.env.GEMINI_API_KEY_4,
   process.env.GEMINI_API_KEY_5,
-].filter(Boolean);
+].filter(Boolean).filter((k, i, arr) => arr.indexOf(k) === i); // dedup
 
 // Modelos a tentar em ordem — para em qualquer que retornar imagem válida
 // Atualizado junho/2026: gemini-2.0-flash-preview-image-generation foi descontinuado

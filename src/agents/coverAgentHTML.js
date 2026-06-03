@@ -376,12 +376,44 @@ CRITICAL RULES:
 Create a cover so stunning it makes people click "Buy Now" immediately.`;
 }
 
+// ─── Chave Gemini dedicada às CAPAS (fora do pool de texto _1.._5) ────────────
+// Usada PRIMEIRO para gerar o HTML da capa, poupando a cota das chaves de texto.
+// Se falhar (chave inválida/esgotada), cai no pool normal via generateText.
+const COVER_KEY = process.env.GEMINI_COVER_KEY || process.env.GEMINI_API_KEY_6;
+const COVER_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+
+async function _generateViaCoverKey(prompt) {
+  if (!COVER_KEY) return null;
+  try {
+    const axios = require('axios');
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${COVER_MODEL}:generateContent?key=${COVER_KEY}`;
+    const res = await axios.post(url, {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 6000, temperature: 0.9 },
+    }, { timeout: 60_000 });
+    const text = res.data?.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('') || '';
+    if (text.trim().length > 100) {
+      logger.info('🔑 Capa gerada com chave Gemini dedicada (GEMINI_COVER_KEY)');
+      return text;
+    }
+    return null;
+  } catch (e) {
+    const status = e?.response?.status;
+    logger.warn(`⚠️ Chave de capa dedicada falhou (${status || e.message}) — usando pool de texto`);
+    return null;
+  }
+}
+
 // ─── Gerar HTML da capa via AI ────────────────────────────────────────────────
 async function generateCoverHTML(title, subtitle, topic, category) {
   const prompt = buildViralHTMLPrompt(title, subtitle, topic, category);
   logger.info(`🎨 Gerando HTML viral para capa "${title}" [estilo: ${(VIRAL_STYLES[category] || VIRAL_STYLES.default)[0].style}]`);
-  const result = await generateText(prompt, '', { maxTokens: 6000 });
-  const raw = typeof result === 'string' ? result : (result?.text ?? '');
+  // Tenta primeiro a chave dedicada a capas; se falhar, pool de texto normal
+  let raw = await _generateViaCoverKey(prompt);
+  if (!raw) {
+    const result = await generateText(prompt, '', { maxTokens: 6000 });
+    raw = typeof result === 'string' ? result : (result?.text ?? '');
+  }
   const html = typeof raw === 'string' ? raw : String(raw || '');
 
   // Limpar possíveis blocos markdown
