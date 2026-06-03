@@ -506,39 +506,68 @@ async function fillField(page, selectors, value) {
 }
 
 // ── Fill description (CKEditor / contenteditable / textarea) ─────────────────
+// NOTE: Never use body.type(longText, {delay:10}) on CKEditor iframes —
+// a 4000-char description takes ~40s and causes the CKEditor iframe to refresh
+// mid-typing, leaving Puppeteer with a detached-frame error that breaks all
+// subsequent page.evaluate() and page.$$() calls.
+// Fix: use CKEditor JS API (setData) or execCommand (instantaneous, no frame issues).
 async function fillDescription(page, text) {
   const desc = String(text).slice(0, 4000);
 
-  // Try CKEditor iframe body
+  // Attempt 1: CKEditor JS API — set content directly via CKEDITOR.instances
+  try {
+    const set = await page.evaluate((t) => {
+      const ck = window.CKEDITOR || window.ckeditor;
+      if (!ck || !ck.instances) return false;
+      const keys = Object.keys(ck.instances);
+      if (keys.length === 0) return false;
+      ck.instances[keys[0]].setData('<p>' + t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</p>');
+      return 'ckeditor-api:' + keys[0];
+    }, desc).catch(() => false);
+    if (set) { log.info('Description via ' + set); return true; }
+  } catch {}
+
+  // Attempt 2: CKEditor iframe body via execCommand (instantaneous, no slow typing)
   try {
     const frames = page.frames();
     for (const frame of frames) {
+      let alive = false;
+      try { await frame.evaluate(() => true); alive = true; } catch {}
+      if (!alive) continue;
       try {
         const body = await frame.$('body[contenteditable="true"]');
         if (body) {
           await body.click({ clickCount: 3 });
-          await sleep(200);
-          await body.type(desc, { delay: 10 });
-          log.info('Description via CKEditor iframe');
+          await sleep(150);
+          await frame.evaluate((t) => {
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, t);
+          }, desc);
+          await sleep(300);
+          log.info('Description via CKEditor iframe (execCommand)');
           return true;
         }
       } catch {}
     }
   } catch {}
 
-  // Try contenteditable div
+  // Attempt 3: contenteditable div on main page
   try {
     const ce = await page.$('[contenteditable="true"]');
     if (ce) {
       await ce.click({ clickCount: 3 });
+      await sleep(150);
+      await page.evaluate((t) => {
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, t);
+      }, desc);
       await sleep(200);
-      await page.keyboard.type(desc, { delay: 10 });
-      log.info('Description via contenteditable');
+      log.info('Description via contenteditable (execCommand)');
       return true;
     }
   } catch {}
 
-  // Fallback: textarea
+  // Attempt 4: textarea (React-compatible native value setter)
   const filled = await fillField(page, [
     'textarea[id*="description" i]',
     'textarea[name*="description" i]',
@@ -951,7 +980,7 @@ async function publishToAmazon(ebook) {
     // Description
     const desc = (ebook.description || ('Guia completo sobre ' + ebook.title)).slice(0, 4000);
     await fillDescription(page, desc);
-    await sleep(400);
+    await sleep(1200); // let CKEditor settle — prevents detached-frame errors in category selection
 
     // Keywords (up to 7) — KDP IDs: #data-keywords-0 through #data-keywords-6
     const kw = (ebook.keywords || ebook.topic || ebook.title);
@@ -979,9 +1008,37 @@ async function publishToAmazon(ebook) {
 
       // Find the category chooser button — exclude toast notifications (idioma/language warnings)
       // and sidebar links (Adicionar à série etc). Button must be in main form area.
-      const allHandles = await page.$$('button, a, [role="button"], span.a-button-text');
+      // Use page.evaluate instead of page.$$ to stay within the main frame context and avoid
+      // detached-frame errors from CKEditor iframes still in Puppeteer's frame registry.
+      const catBtnPos = await page.evaluate(() => {
+        const sel = 'button, a, [role="button"], span.a-button-text';
+        const candidates = Array.from(document.querySelectorAll(sel));
+        for (const el of candidates) {
+          const t = (el.textContent || '').toLowerCase().trim();
+          const r = el.getBoundingClientRect();
+          const vis = r.width > 0 && r.height > 0 && r.height < 80;
+          const isToast = t.includes('idioma') || t.includes('language') || t.includes('série');
+          const isMainArea = r.x > 200;
+          const childCount = el.children.length;
+          if (vis && childCount <= 3 && isMainArea && !isToast &&
+              (t === 'adicionar categoria' || t === 'add a category' ||
+               t.includes('adicionar categoria') || t.includes('add a category') ||
+               (t.includes('escolha') && t.includes('categor')) ||
+               (t.includes('choose') && t.includes('categor')))) {
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2, t: t.slice(0, 50) };
+          }
+        }
+        return null;
+      }).catch(() => null);
       let catBtnClicked = false;
-      for (const h of allHandles) {
+      if (catBtnPos) {
+        await page.mouse.click(catBtnPos.x, catBtnPos.y);
+        catBtnClicked = true;
+        log.info('Category button clicked: "' + catBtnPos.t + '"');
+      }
+      // --- legacy handle-based loop removed (caused detached-frame crash) ---
+      // allHandles loop was replaced by page.evaluate above
+      if (false) for (const h of []) {
         let info;
         try {
           info = await h.evaluate(el => {
