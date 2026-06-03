@@ -459,20 +459,34 @@ async function publishToCakto(ebook) {
             try { fs.mkdirSync('/app/data', { recursive: true }); fs.writeFileSync(CAKTO_OTP_FILE, 'WAITING'); } catch {}
             let imapOtp = null;
             try { imapOtp = require('./imapOtp'); } catch {}
+            let hotmailPuppeteer = null;
+            try { hotmailPuppeteer = require('./hotmailOtpPuppeteer'); } catch {}
             const code2faSentAt = Date.now();
             const otpDeadline = Date.now() + 300_000; // 5 min
             while (Date.now() < otpDeadline) {
               await sleep(4000);
               try {
-                // Auto-fetch the code from the inbox via IMAP (preferred, unattended)
-                if (imapOtp && imapOtp.isAvailable && imapOtp.isAvailable()) {
-                  const fileState = (() => { try { return fs.readFileSync(CAKTO_OTP_FILE, 'utf8').trim(); } catch { return ''; } })();
-                  if (!/^\d{4,8}$/.test(fileState) && !fileState.startsWith('USED:')) {
-                    // only emails arriving after the 2FA challenge was triggered
-                    const fetched = await imapOtp.fetchOtp({ senderHint: 'cakto', maxAgeMs: Math.max(120_000, Date.now() - code2faSentAt + 120_000) }).catch(() => null);
+                const fileState = (() => { try { return fs.readFileSync(CAKTO_OTP_FILE, 'utf8').trim(); } catch { return ''; } })();
+                if (!/^\d{4,8}$/.test(fileState) && !fileState.startsWith('USED:')) {
+                  const ageMs = Math.max(120_000, Date.now() - code2faSentAt + 120_000);
+                  // Attempt 1: IMAP (fast, ~2s — only works when app password is configured)
+                  if (imapOtp && imapOtp.isAvailable && imapOtp.isAvailable()) {
+                    const fetched = await imapOtp.fetchOtp({ senderHint: 'cakto', maxAgeMs: ageMs }).catch(() => null);
                     if (fetched && /^\d{4,8}$/.test(fetched)) {
                       fs.writeFileSync(CAKTO_OTP_FILE, fetched);
                       log.info('Cakto 2FA: código obtido via IMAP: ' + fetched);
+                    }
+                  }
+                  // Attempt 2: Puppeteer Hotmail reader (headless browser — works without app password)
+                  if (hotmailPuppeteer && hotmailPuppeteer.isAvailable && hotmailPuppeteer.isAvailable()) {
+                    const fileStateNow = (() => { try { return fs.readFileSync(CAKTO_OTP_FILE, 'utf8').trim(); } catch { return ''; } })();
+                    if (!/^\d{4,8}$/.test(fileStateNow) && !fileStateNow.startsWith('USED:')) {
+                      log.info('Cakto 2FA: tentando obter código via Puppeteer Hotmail...');
+                      const fetched = await hotmailPuppeteer.fetchOtp({ maxAgeMs: ageMs }).catch(() => null);
+                      if (fetched && /^\d{4,8}$/.test(fetched)) {
+                        fs.writeFileSync(CAKTO_OTP_FILE, fetched);
+                        log.info('Cakto 2FA: código obtido via Puppeteer Hotmail: ' + fetched);
+                      }
                     }
                   }
                 }
