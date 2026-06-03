@@ -53,6 +53,8 @@ const PROVIDER_KEYS = {
     process.env.SAMBANOVA_API_KEY_4,
     process.env.SAMBANOVA_API_KEY_5,
     process.env.SAMBANOVA_API_KEY_6,
+    process.env.SAMBANOVA_API_KEY_7,
+    process.env.SAMBANOVA_API_KEY_8,
   ].filter(Boolean),
   groq:        [process.env.GROQ_API_KEY].filter(Boolean),
   deepseek:    [
@@ -64,6 +66,8 @@ const PROVIDER_KEYS = {
     process.env.HUGGINGFACE_API_KEY_2,
     process.env.HUGGINGFACE_API_KEY_3,
     process.env.HUGGINGFACE_API_KEY_4,
+    process.env.HUGGINGFACE_API_KEY_5,
+    process.env.HUGGINGFACE_API_KEY_6,
   ].filter(Boolean),
   pollinations: ['free'],
   ollamaVps:   ['vps'],
@@ -388,17 +392,18 @@ async function callDeepSeek(prompt, systemPrompt, apiKey) {
 }
 
 async function callHuggingFace(prompt, systemPrompt, apiKey) {
-  // NOTE: api-inference.huggingface.co and api.huggingface.co DNS broke on many VPS IPs.
-  // Use router.huggingface.co (which resolves) with supported model+provider combos.
-  // Validated working combos (as of June 2026): hf-inference only for specific free-tier models.
+  // NOTE: June 2026 audit — many routes permanently removed (410 Gone / 403 Forbidden):
+  //   together/Meta-Llama-3.1-70B-Instruct-Turbo        → 410
+  //   together/Qwen/Qwen2.5-72B-Instruct-Turbo          → 410
+  //   fireworks-ai/llama-v3p1-70b-instruct               → 410
+  //   nebius/Meta-Llama-3.1-70B-Instruct                 → 403
+  //   nebius/Qwen/Qwen2.5-72B-Instruct                   → 403
+  // Only hf-inference small models + cerebras-via-HF remain alive.
   const hfRouter = [
-    // hf-inference is the HF-hosted provider for free models
-    ["hf-inference", "Qwen/Qwen2.5-72B-Instruct"],
-    ["hf-inference", "mistralai/Mixtral-8x7B-Instruct-v0.1"],
-    ["hf-inference", "meta-llama/Meta-Llama-3-8B-Instruct"],
-    ["hf-inference", "mistralai/Mistral-7B-Instruct-v0.3"],
-    // cerebras provider on HF router
-    ["cerebras", "llama3.1-8b"],
+    // hf-inference free tier — small models (fast, limited quality)
+    ["hf-inference", "meta-llama/Llama-3.2-3B-Instruct"],
+    ["hf-inference", "HuggingFaceTB/SmolLM2-1.7B-Instruct"],
+    // cerebras provider on HF router (may overlap with direct Cerebras)
     ["cerebras", "llama3.3-70b"],
   ];
   for (const [provider, model] of hfRouter) {
@@ -422,9 +427,10 @@ async function callHuggingFace(prompt, systemPrompt, apiKey) {
 
 async function callPollinations(prompt, systemPrompt) {
   const model = process.env.POLLINATIONS_MODEL || "openai";
+  // Usar max_tokens reduzido para evitar ECONNRESET em respostas longas
   const r = await axios.post("https://text.pollinations.ai/openai",
-    { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
-    { headers: { "Content-Type": "application/json" }, timeout: 180_000 }
+    { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 2000, temperature: 0.7 },
+    { headers: { "Content-Type": "application/json" }, timeout: 120_000 }
   );
   return r.data.choices[0].message.content;
 }
@@ -472,6 +478,10 @@ function getErrorTTL(err) {
   if (status === 429 || msg.includes('429') || msg.includes('rate limit') || msg.includes('quota')) {
     // Distinguir quota diária de rate limit por minuto pelo corpo do erro
     const body = (JSON.stringify(err.response?.data || '') + msg).toLowerCase();
+    // Cerebras "queue_exceeded" → servidor com alta carga, tenta de novo em 5 min
+    if (body.includes('queue') && (body.includes('queue_exceeded') || body.includes('queue full') || body.includes('high traffic'))) {
+      return { hours: 5/60, reason: 'quota/rate-limit' }; // 5 minutos
+    }
     const isHardQuota = body.includes('daily') || body.includes('day') || body.includes('exceeded your current quota') || body.includes('per day');
     if (isHardQuota) {
       // Quota diária → degradar até próxima meia-noite UTC
@@ -484,7 +494,7 @@ function getErrorTTL(err) {
     return { hours: 1, reason: 'quota/rate-limit' };
   }
   if (status >= 500) return { hours: 0.5, reason: 'server-error' };
-  if (msg.includes('timeout') || msg.includes('econnrefused') || msg.includes('enotfound')) {
+  if (msg.includes('timeout') || msg.includes('econnrefused') || msg.includes('enotfound') || msg.includes('econnreset')) {
     return { hours: 0.25, reason: 'network' };
   }
   if (status === 401 || status === 403) return { hours: 24, reason: 'auth-error' };
