@@ -331,7 +331,7 @@ async function publishToCakto(ebook) {
             const pwTabClicked = await page.evaluate(() => {
               // Look for the EXACT tab element — must be a near-leaf node with short text
               // Priority: element whose own trimmed text is EXACTLY the tab label
-              const targets = ['login with password', 'entrar com senha'];
+              const targets = ['login com senha', 'entrar com senha', 'login with password'];
               const candidates = Array.from(document.querySelectorAll('a, button, [role="tab"], li'));
               for (const target of targets) {
                 // Exact match on own text (trim + normalize whitespace)
@@ -367,64 +367,85 @@ async function publishToCakto(ebook) {
             }
           } catch(tabErr) { log.warn('Tab click err: ' + tabErr.message.slice(0, 60)); }
 
-          // Fill email
-          const emailPos = await page.evaluate(() => {
-            const sel = ['input[type="email"]', 'input[name="email"]', 'input[id*="email" i]', 'input[placeholder*="e-mail" i]', 'input[placeholder*="email" i]'];
-            for (const s of sel) {
-              const el = document.querySelector(s);
-              if (el) { const r = el.getBoundingClientRect(); if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 }; }
-            }
-            return null;
+          // Fill email + password — find the VISIBLE inputs (by coordinates) after tab switch
+          // Note: both tabs share the DOM, so we must find the input that is actually visible/clickable
+          const fieldPositions = await page.evaluate(() => {
+            // Get ALL inputs and find the ones that are actually visible in the viewport
+            const allInputs = Array.from(document.querySelectorAll('input'));
+            const visible = allInputs
+              .map(el => {
+                const r = el.getBoundingClientRect();
+                return { type: el.type, name: el.name || '', placeholder: el.placeholder || '', x: r.left + r.width/2, y: r.top + r.height/2, w: r.width, h: r.height };
+              })
+              .filter(i => i.w > 50 && i.h > 15 && i.y > 50 && i.y < window.innerHeight - 50);
+            return visible;
           });
-          if (emailPos) {
-            await page.mouse.click(emailPos.x, emailPos.y, { clickCount: 3 });
+          log.info(`Cakto: campos visíveis: ${JSON.stringify(fieldPositions.map(f => f.type + '/' + f.placeholder.slice(0, 20)))}`);
+
+          // Find email and password among visible inputs
+          // IMPORTANT: Both tabs (passwordless + password) have email inputs visible in the DOM
+          // simultaneously. The passwordless tab's email has "para" in its placeholder
+          // (e.g. "Digite seu e-mail para login sem senha"). We must pick the password tab's
+          // email field — it's the one WITHOUT "para" in the placeholder.
+          const emailFields = fieldPositions.filter(f => f.type === 'email' || (f.type === 'text' && (f.placeholder.toLowerCase().includes('e-mail') || f.placeholder.toLowerCase().includes('email') || f.name === 'email')));
+          // Prefer the field without "para" (passwordless indicator); fallback to last field
+          const emailField = emailFields.find(f => !f.placeholder.toLowerCase().includes('para')) || emailFields[emailFields.length - 1] || null;
+          const passField  = fieldPositions.find(f => f.type === 'password');
+          log.info(`Cakto: emailFields=${JSON.stringify(emailFields.map(f=>f.placeholder.slice(0,25)))} → escolhido: ${emailField ? emailField.placeholder.slice(0,30) : 'nenhum'}`);
+
+          if (emailField) {
+            await page.mouse.click(emailField.x, emailField.y, { clickCount: 3 });
             await sleep(200);
             await page.keyboard.type(CAKTO_EMAIL, { delay: 30 });
-            await sleep(300);
-            log.info('Cakto email preenchido');
+            await sleep(200);
+            log.info('Cakto email preenchido (coordinate click)');
+          } else {
+            log.warn('Cakto: campo de email não encontrado nos campos visíveis');
           }
 
-          // Fill password
-          const passPos = await page.evaluate(() => {
-            const sel = ['input[type="password"]', 'input[name="password"]', 'input[id*="pass" i]'];
-            for (const s of sel) {
-              const el = document.querySelector(s);
-              if (el) { const r = el.getBoundingClientRect(); if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 }; }
-            }
-            return null;
-          });
-          if (passPos) {
-            await page.mouse.click(passPos.x, passPos.y, { clickCount: 3 });
+          if (passField) {
+            await page.mouse.click(passField.x, passField.y, { clickCount: 3 });
             await sleep(200);
             await page.keyboard.type(CAKTO_PASSWORD, { delay: 30 });
-            await sleep(300);
-            log.info('Cakto password preenchido');
+            await sleep(200);
+            log.info('Cakto password preenchido (coordinate click)');
+          } else {
+            log.warn('Cakto: campo de senha não encontrado nos campos visíveis');
           }
 
-          // Submit
-          const submitPos = await page.evaluate(() => {
-            const sel = ['button[type="submit"]', 'input[type="submit"]', 'button:not([type])'];
-            for (const s of sel) {
-              for (const el of Array.from(document.querySelectorAll(s))) {
-                const t = (el.textContent || el.value || '').toLowerCase();
+          // Submit — press Enter in the password field (avoids clicking wrong tab's submit button)
+          // Both tabs coexist in the DOM; querySelector('button[type=submit]') finds the FIRST
+          // (passwordless tab's button). Pressing Enter after typing in the password field
+          // submits the correct form natively.
+          if (passField) {
+            await page.keyboard.press('Enter');
+            log.info('Cakto submit via Enter (password field) — aguardando dashboard...');
+          } else {
+            // Fallback: find submit button NEAREST to the password field (lowest Y that's still below it)
+            const submitPos = await page.evaluate((passY) => {
+              const btns = Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"], button'));
+              // Filter visible buttons below the password field
+              const below = btns.filter(el => {
                 const r = el.getBoundingClientRect();
-                if (r.width > 0 && (t.includes('entrar') || t.includes('login') || t.includes('acessar') || t.includes('continuar') || t.includes('sign'))) {
-                  return { x: r.left + r.width/2, y: r.top + r.height/2 };
-                }
+                const t = (el.textContent || el.value || '').toLowerCase();
+                return r.width > 0 && r.top > passY && (t.includes('entrar') || t.includes('login') || t.includes('acessar') || t.includes('continuar') || t.includes('sign') || el.type === 'submit');
+              });
+              if (below.length > 0) {
+                // Pick the one closest (smallest Y diff) to the password field
+                below.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+                const r = below[0].getBoundingClientRect();
+                return { x: r.left + r.width/2, y: r.top + r.height/2, text: (below[0].textContent||'').trim().slice(0,30) };
               }
+              return null;
+            }, passField ? passField.y : 400);
+            if (submitPos) {
+              await page.mouse.click(submitPos.x, submitPos.y);
+              log.info('Cakto submit clicado (nearest btn: "' + submitPos.text + '") — aguardando dashboard...');
             }
-            // Fallback: first submit button
-            const btn = document.querySelector('button[type="submit"], input[type="submit"]');
-            if (btn) { const r = btn.getBoundingClientRect(); if (r.width > 0) return { x: r.left + r.width/2, y: r.top + r.height/2 }; }
-            return null;
-          });
-          if (submitPos) {
-            await page.mouse.click(submitPos.x, submitPos.y);
-            log.info('Cakto submit clicado — aguardando dashboard...');
-            await sleep(5000);
-            try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }); } catch {}
-            await sleep(3000);
           }
+          await sleep(5000);
+          try { await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }); } catch {}
+          await sleep(3000);
 
           currentUrl = page.url();
           log.info('URL após login: ' + currentUrl.slice(0, 100));
@@ -433,13 +454,28 @@ async function publishToCakto(ebook) {
           // ── Handle /sso-devices/ 2FA code page ──────────────────────────────────
           if (currentUrl.includes('/sso-devices') || currentUrl.includes('/login/device')) {
             log.info('Cakto 2FA: código de 6 dígitos enviado para o email. Aguardando...');
-            log.info('   Escreva o código: echo XXXXXX > /app/data/cakto_otp.txt');
+            log.info('   (auto: tentando ler código via IMAP) | manual: echo XXXXXX > /app/data/cakto_otp.txt');
             const CAKTO_OTP_FILE = '/app/data/cakto_otp.txt';
             try { fs.mkdirSync('/app/data', { recursive: true }); fs.writeFileSync(CAKTO_OTP_FILE, 'WAITING'); } catch {}
+            let imapOtp = null;
+            try { imapOtp = require('./imapOtp'); } catch {}
+            const code2faSentAt = Date.now();
             const otpDeadline = Date.now() + 300_000; // 5 min
             while (Date.now() < otpDeadline) {
               await sleep(4000);
               try {
+                // Auto-fetch the code from the inbox via IMAP (preferred, unattended)
+                if (imapOtp && imapOtp.isAvailable && imapOtp.isAvailable()) {
+                  const fileState = (() => { try { return fs.readFileSync(CAKTO_OTP_FILE, 'utf8').trim(); } catch { return ''; } })();
+                  if (!/^\d{4,8}$/.test(fileState) && !fileState.startsWith('USED:')) {
+                    // only emails arriving after the 2FA challenge was triggered
+                    const fetched = await imapOtp.fetchOtp({ senderHint: 'cakto', maxAgeMs: Math.max(120_000, Date.now() - code2faSentAt + 120_000) }).catch(() => null);
+                    if (fetched && /^\d{4,8}$/.test(fetched)) {
+                      fs.writeFileSync(CAKTO_OTP_FILE, fetched);
+                      log.info('Cakto 2FA: código obtido via IMAP: ' + fetched);
+                    }
+                  }
+                }
                 const otpTxt = fs.readFileSync(CAKTO_OTP_FILE, 'utf8').trim();
                 if (/^\d{4,8}$/.test(otpTxt)) {
                   fs.writeFileSync(CAKTO_OTP_FILE, 'USED:' + otpTxt);
