@@ -1844,10 +1844,26 @@ async function publishToAmazon(ebook) {
       target.dispatchEvent(new Event('input', { bubbles: true }));
       target.dispatchEvent(new Event('change', { bubbles: true }));
       target.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      // CRITICAL: commit the value so KDP fires the "Com base em Amazon.com" auto-conversion
+      // that populates all other marketplace prices. Without blur/focusout the other
+      // marketplaces stay empty and KDP blocks publish (page stuck on /pricing).
+      target.dispatchEvent(new Event('blur', { bubbles: true }));
+      target.dispatchEvent(new Event('focusout', { bubbles: true }));
+      target.blur();
       return 'filled: id=' + (target.id || target.name || 'unknown') + ' val=' + price;
     }, priceUsd).catch(e => 'error: ' + e.message);
     log.info('USD price: $' + priceUsd + ' result=' + priceFilled);
-    await sleep(800);
+    // Wait for KDP to auto-convert the US price into all other marketplaces
+    await sleep(4000);
+
+    // Verify auto-conversion populated other marketplaces; if not, the publish will be blocked.
+    const marketCount = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"]'))
+        .filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+      const filled = inputs.filter(el => (el.value || '').trim() !== '').length;
+      return { total: inputs.length, filled };
+    }).catch(() => ({ total: 0, filled: 0 }));
+    log.info('Price inputs after auto-conversion: ' + JSON.stringify(marketCount));
 
     // Log all visible text inputs for debugging
     const priceDebug = await page.evaluate(() => {
@@ -1883,6 +1899,17 @@ async function publishToAmazon(ebook) {
     const reallyPublished = published && (leftSetup || onBookshelf) && notAuthPage;
     log.info('Amazon KDP done! buttonClicked=' + published + ' leftSetup=' + leftSetup +
              ' bookshelf=' + onBookshelf + ' published=' + reallyPublished + ' URL: ' + finalUrl.slice(0, 80));
+    // If still stuck on /pricing, scrape KDP inline validation errors to diagnose the block
+    if (!reallyPublished && finalUrl.includes('/pricing')) {
+      const validationErrors = await page.evaluate(() => {
+        const sel = '.a-alert-content, .a-form-error, [class*="error"], [role="alert"], .a-alert-error';
+        return Array.from(document.querySelectorAll(sel))
+          .map(el => (el.textContent || '').trim())
+          .filter(t => t.length > 3 && t.length < 200)
+          .slice(0, 10);
+      }).catch(() => []);
+      log.warn('Publish blocked on /pricing. KDP validation errors: ' + JSON.stringify(validationErrors));
+    }
     await screenshot(page, 'step3_done');
 
     // Save updated session
