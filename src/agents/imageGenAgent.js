@@ -400,12 +400,22 @@ async function generateWithFalAI(prompt, width, height, apiKey) {
 // ═══════════════════════════════════════════════════
 // 4. POLLINATIONS.AI — grátis, sem chave, usa FLUX
 // ═══════════════════════════════════════════════════
+// Cooldown when Pollinations queue is full (402/429). Queue-full is GLOBAL across
+// all models, so once we hit it we skip Pollinations entirely for a short window
+// instead of burning minutes on escalating retries per illustration.
+let _pollinationsCooldownUntil = 0;
+const POLLINATIONS_COOLDOWN_MS = 5 * 60 * 1000;
+
 async function generateWithPollinations(prompt, width, height) {
-  const models = ['flux', 'flux-pro', 'turbo'];
+  if (Date.now() < _pollinationsCooldownUntil) {
+    throw new Error('Pollinations em cooldown (fila cheia recentemente)');
+  }
+  const models = ['flux', 'turbo']; // flux-pro raramente disponível no free tier
   let lastErr;
   for (const model of models) {
-    // Rate limit (402): aguarda e tenta de novo até 3x
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    // Single short retry on rate limit. Queue-full does not clear in seconds, so
+    // we do at most ONE 6s wait — not an escalating 8/16/24s loop.
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const encoded = encodeURIComponent(prompt);
         const seed = Math.floor(Math.random() * 999999);
@@ -423,13 +433,15 @@ async function generateWithPollinations(prompt, width, height) {
         lastErr = e;
         const status = e.response?.status;
         if (status === 402 || status === 429) {
-          const wait = attempt * 8000; // 8s, 16s, 24s
-          logger.warn(`   Pollinations/${model} rate limit (${status}), aguardando ${wait/1000}s...`);
-          await new Promise(r => setTimeout(r, wait));
-        } else {
-          logger.warn(`   Pollinations/${model} falhou: ${e.message?.slice(0, 80)}`);
-          break; // erro diferente de rate limit → tenta próximo model
+          // Queue full is global — set cooldown and bail out of ALL models fast.
+          _pollinationsCooldownUntil = Date.now() + POLLINATIONS_COOLDOWN_MS;
+          logger.warn(`   Pollinations fila cheia (${status}) — cooldown ${POLLINATIONS_COOLDOWN_MS/60000}min, abortando`);
+          throw lastErr;
         }
+        // Non-rate-limit error: single quick retry, then next model
+        logger.warn(`   Pollinations/${model} falhou: ${e.message?.slice(0, 80)}`);
+        if (attempt === 1) { await new Promise(r => setTimeout(r, 2000)); continue; }
+        break;
       }
     }
   }
