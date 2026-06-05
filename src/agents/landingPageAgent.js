@@ -36,6 +36,34 @@ const NGINX_DATA_PATH = process.env.NGINX_DATA_PATH   || '/opt/platform/data/vel
 const NGINX_CONF_PATH = process.env.NGINX_CONF_PATH   || '/opt/platform/nginx/sites';
 const IS_VPS        = process.env.RUNNING_ON_VPS === 'true' || fs.existsSync('/app/data');
 
+// Vercel / Netlify tokens (obter em: vercel.com/account/tokens | app.netlify.com/user/applications)
+// Adicionar ao ebook-publisher.env:
+//   VERCEL_TOKEN=<token>          (vercel.com/account/tokens)
+//   NETLIFY_TOKEN=<personal-access-token>  (app.netlify.com/user/applications/oauth)
+//   NETLIFY_SITE_ID=<site-id>     (apenas se quiser publicar num site Netlify existente)
+const VERCEL_TOKEN  = process.env.VERCEL_TOKEN  || '';
+const NETLIFY_TOKEN = process.env.NETLIFY_TOKEN || '';
+
+// Threshold: se loadavg(1min) / nCPUs > LOAD_THRESHOLD → usar cloud deploy (Vercel/Netlify)
+const LOAD_THRESHOLD = parseFloat(process.env.VPS_LOAD_THRESHOLD || '0.70');
+const N_CPUS = parseInt(process.env.VPS_CPU_COUNT || '6', 10);
+
+function getVpsLoad() {
+  try {
+    const raw = fs.readFileSync('/proc/loadavg', 'utf8').trim().split(' ');
+    return parseFloat(raw[0]) / N_CPUS; // normalize by CPU count → 0..1+
+  } catch (_) { return 0; }
+}
+
+function isVpsOverloaded() {
+  const load = getVpsLoad();
+  if (load > LOAD_THRESHOLD) {
+    log.warn('[Deploy] VPS sobrecarregado (load=' + load.toFixed(2) + ' > ' + LOAD_THRESHOLD + ') → usando cloud deploy');
+    return true;
+  }
+  return false;
+}
+
 // Gemini API keys (rotate through them)
 const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY,
@@ -334,6 +362,144 @@ async function createCloudflareSubdomain(subdomain) {
   });
 }
 
+// ── Deploy to Vercel (serverless, free tier) ──────────────────────────────────
+async function deployToVercel(slug, html, subdomain) {
+  // Uses Vercel Deployments API v13 — uploads a single static file
+  const projectName = slug.slice(0, 52); // Vercel project name max 52 chars
+  const body = JSON.stringify({
+    name: projectName,
+    files: [{ file: 'index.html', data: Buffer.from(html).toString('base64'), encoding: 'base64' }],
+    projectSettings: { framework: null },
+    target: 'production',
+  });
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.vercel.com',
+      path: '/v13/deployments',
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + VERCEL_TOKEN,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(d);
+          if (j.url) {
+            const deployUrl = 'https://' + j.url;
+            log.info('[Vercel] Deployed: ' + deployUrl + ' (project: ' + projectName + ')');
+            resolve({ url: deployUrl, provider: 'vercel', project: projectName });
+          } else {
+            reject(new Error('Vercel deploy failed: ' + JSON.stringify(j).slice(0, 200)));
+          }
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── Deploy to Netlify (static hosting, free tier) ────────────────────────────
+async function deployToNetlify(slug, html) {
+  // Uses Netlify Deploy API — creates a new site or deploys to existing
+  const siteId = process.env.NETLIFY_SITE_ID || null;
+  const apiPath = siteId ? `/api/v1/sites/${siteId}/deploys` : '/api/v1/sites';
+  const boundary = 'NETLIFY_DEPLOY_' + Date.now();
+
+  // Netlify zip deploy: POST zip with index.html
+  const { execSync } = require('child_process');
+  const tmpDir = '/tmp/netlify_' + slug;
+  const zipPath = '/tmp/netlify_' + slug + '.zip';
+  try {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'index.html'), html, 'utf8');
+    execSync(`cd ${tmpDir} && zip -q ${zipPath} index.html`, { timeout: 15000 });
+    const zipContent = fs.readFileSync(zipPath);
+
+    return new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: 'api.netlify.com',
+        path: apiPath,
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + NETLIFY_TOKEN,
+          'Content-Type': 'application/zip',
+          'Content-Length': zipContent.length,
+        },
+      }, res => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => {
+          try {
+            const j = JSON.parse(d);
+            const deployUrl = j.ssl_url || j.url || j.deploy_ssl_url;
+            if (deployUrl) {
+              log.info('[Netlify] Deployed: ' + deployUrl);
+              resolve({ url: deployUrl, provider: 'netlify', siteId: j.site_id });
+            } else {
+              reject(new Error('Netlify deploy failed: ' + JSON.stringify(j).slice(0, 200)));
+            }
+          } catch (e) { reject(e); }
+        });
+      });
+      req.on('error', reject);
+      req.write(zipContent);
+      req.end();
+    });
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(zipPath, { force: true }); } catch (_) {}
+  }
+}
+
+// ── Smart deploy: VPS if healthy, cloud if overloaded ────────────────────────
+async function smartDeploy(slug, html, subdomain) {
+  const overloaded = isVpsOverloaded();
+
+  if (!overloaded && IS_VPS) {
+    // VPS healthy → deploy local (nginx) + DNS
+    deployToFilesystem(slug, html);
+    try { await createCloudflareSubdomain(subdomain); } catch (e) {
+      log.warn('[Deploy] CF DNS error: ' + e.message);
+    }
+    return { url: 'https://' + subdomain, provider: 'vps' };
+  }
+
+  // VPS overloaded → try Vercel first, Netlify as fallback
+  log.info('[Deploy] Routing to cloud deploy (slug=' + slug + ')');
+
+  if (VERCEL_TOKEN) {
+    try {
+      const r = await deployToVercel(slug, html, subdomain);
+      // Still create CF DNS even for cloud deploys (CNAME to vercel deployment) — best-effort
+      try { await createCloudflareSubdomain(subdomain); } catch (_) {}
+      return r;
+    } catch (e) {
+      log.warn('[Vercel] falhou: ' + e.message.slice(0, 120) + ' — tentando Netlify...');
+    }
+  }
+
+  if (NETLIFY_TOKEN) {
+    try {
+      return await deployToNetlify(slug, html);
+    } catch (e) {
+      log.warn('[Netlify] falhou: ' + e.message.slice(0, 120) + ' — caindo para VPS local');
+    }
+  }
+
+  // Final fallback: VPS regardless of load
+  log.warn('[Deploy] Sem tokens cloud disponíveis ou todos falharam → forçando deploy local');
+  if (IS_VPS) deployToFilesystem(slug, html);
+  try { await createCloudflareSubdomain(subdomain); } catch (_) {}
+  return { url: 'https://' + subdomain, provider: 'vps-fallback' };
+}
+
 // ── Deploy to VPS filesystem ───────────────────────────────────────────────────
 function deployToFilesystem(slug, html) {
   const webRoot = path.join(NGINX_DATA_PATH, slug);
@@ -380,38 +546,25 @@ function deployToFilesystem(slug, html) {
   }
 }
 
-// ── Deploy single product landing page ───────────────────────────────────────
+// ── Deploy single product landing page (with smart VPS/cloud routing) ────────
 async function deployLandingPage(product) {
   log.info('[LP] Gerando LP para: "' + product.product_name.slice(0, 50) + '"');
-
   const { html, slug, subdomain, canonicalUrl } = await generateHtml(product);
 
-  // Create Cloudflare subdomain
-  try {
-    const cfResult = await createCloudflareSubdomain(subdomain);
-    if (!cfResult.success) {
-      log.warn('[LP] CF DNS falhou para ' + subdomain + ' — continuando mesmo assim');
-    }
-  } catch (cfErr) {
-    log.warn('[LP] CF DNS error: ' + cfErr.message);
-  }
-
-  // Deploy HTML
+  let deployResult;
   if (IS_VPS) {
-    deployToFilesystem(slug, html);
+    deployResult = await smartDeploy(slug, html, subdomain);
   } else {
-    // Local dev: save to ./data/landing_pages/
     const localDir = path.join(process.cwd(), 'data', 'landing_pages', slug);
     fs.mkdirSync(localDir, { recursive: true });
     fs.writeFileSync(path.join(localDir, 'index.html'), html, 'utf8');
-    log.info('[LP] (dev) HTML salvo em: ' + path.join(localDir, 'index.html'));
+    log.info('[LP] (dev) HTML salvo em: ' + localDir);
+    deployResult = { url: 'file://' + localDir, provider: 'local' };
   }
 
-  // Update DB
-  const landingPageUrl = 'https://' + subdomain;
+  const landingPageUrl = deployResult.url;
   updateLandingPageUrl(product.id, landingPageUrl);
-  log.info('[LP] Deployed: ' + landingPageUrl);
-
+  log.info('[LP] Deployed via ' + deployResult.provider + ': ' + landingPageUrl);
   return { landingPageUrl, slug, subdomain };
 }
 
@@ -494,28 +647,27 @@ Return ONLY the complete HTML, no markdown, no explanations, no \`\`\`html.`;
   return { html, slug, subdomain, canonicalUrl, langConfig };
 }
 
-// Deploy one language version of a landing page
+// Deploy one language version of a landing page — smart (VPS or cloud)
 async function deployLandingPageLang(product, langConfig) {
   const { html, slug, subdomain, canonicalUrl } = await generateHtmlMultilang(product, langConfig);
 
-  try { await createCloudflareSubdomain(subdomain); } catch (cfErr) {
-    log.warn('[LP][' + langConfig.code + '] CF DNS error: ' + cfErr.message);
-  }
-
+  let deployResult;
   if (IS_VPS) {
-    deployToFilesystem(slug, html);
+    // Smart deploy: VPS if healthy, Vercel/Netlify if overloaded
+    deployResult = await smartDeploy(slug, html, subdomain);
   } else {
+    // Local dev: just save file
     const localDir = path.join(process.cwd(), 'data', 'landing_pages', slug);
     fs.mkdirSync(localDir, { recursive: true });
     fs.writeFileSync(path.join(localDir, 'index.html'), html, 'utf8');
+    deployResult = { url: 'file://' + localDir, provider: 'local' };
   }
 
-  const landingPageUrl = 'https://' + subdomain;
-  // Only update main PT landing_page_url in DB (language variants tracked separately)
+  const landingPageUrl = deployResult.url;
   if (langConfig.code === 'pt') updateLandingPageUrl(product.id, landingPageUrl);
 
-  log.info('[LP][' + langConfig.code + '] Deployed: ' + landingPageUrl);
-  return { landingPageUrl, slug, subdomain, lang: langConfig.code };
+  log.info('[LP][' + langConfig.code + '] Deployed via ' + deployResult.provider + ': ' + landingPageUrl);
+  return { landingPageUrl, slug, subdomain, lang: langConfig.code, provider: deployResult.provider };
 }
 
 // ── Generate all landing pages (10 languages per product) ────────────────────
