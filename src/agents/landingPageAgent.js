@@ -415,30 +415,138 @@ async function deployLandingPage(product) {
   return { landingPageUrl, slug, subdomain };
 }
 
-// ── Generate all landing pages ────────────────────────────────────────────────
+// ── 10 línguas de publicação (§ genia.md — idiomas do autonomous agent) ───────
+const LANGUAGES = [
+  { code: 'pt', lang: 'pt-BR', label: 'Português',  prefix: '' },       // sem prefix = slug principal
+  { code: 'en', lang: 'en',    label: 'English',     prefix: 'en-' },
+  { code: 'es', lang: 'es',    label: 'Español',     prefix: 'es-' },
+  { code: 'fr', lang: 'fr',    label: 'Français',    prefix: 'fr-' },
+  { code: 'de', lang: 'de',    label: 'Deutsch',     prefix: 'de-' },
+  { code: 'it', lang: 'it',    label: 'Italiano',    prefix: 'it-' },
+  { code: 'pl', lang: 'pl',    label: 'Polski',      prefix: 'pl-' },
+  { code: 'nl', lang: 'nl',    label: 'Nederlands',  prefix: 'nl-' },
+  { code: 'ja', lang: 'ja',    label: '日本語',       prefix: 'ja-' },
+  { code: 'zh', lang: 'zh-CN', label: '中文',         prefix: 'zh-' },
+];
+
+// Generate HTML in a specific language (reuses callGemini with language instruction)
+async function generateHtmlMultilang(product, langConfig) {
+  const baseSlug = makeSlug(product.product_name);
+  const slug = langConfig.prefix + baseSlug;
+  const subdomain = slug + '.' + BASE_DOMAIN;
+  const canonicalUrl = 'https://' + subdomain;
+  const price = product.price ? 'R$ ' + product.price.toFixed(2).replace('.', ',') : '';
+
+  const isPortuguese = langConfig.code === 'pt';
+  const languageInstruction = isPortuguese
+    ? 'em português brasileiro'
+    : `in ${langConfig.label} (${langConfig.lang}). Translate ALL text including benefits, FAQ, testimonials, and CTAs to ${langConfig.label}.`;
+
+  const prompt = `Create a complete affiliate product landing page ${languageInstruction}.
+
+Product name: "${product.product_name}"
+Category: ${product.category || 'General'}
+${price ? 'Price: ' + price : ''}
+Affiliate link: ${product.affiliate_link}
+Canonical URL: ${canonicalUrl}
+Platform: ${product.platform}
+Language: ${langConfig.lang}
+
+MANDATORY REQUIREMENTS:
+1. Complete valid HTML (<!DOCTYPE html> to </html>)
+2. Inline CSS ONLY (no external CSS, no CDN, no frameworks)
+3. Mobile-first responsive design
+4. SEO: title (60 chars max), meta description (155 chars max), canonical, Open Graph tags, schema.org Product JSON-LD
+5. <html lang="${langConfig.lang}">
+6. Page sections (all in ${langConfig.label}):
+   - Hero: compelling headline + CTA button "Buy Now" / equivalent in ${langConfig.label}
+   - Benefits: 5 bullet points with emoji icons
+   - "Who is this for?" section with 3 profiles
+   - 3 testimonials (fictional — add small disclosure)
+   - FAQ: 5 relevant Q&As
+   - Final CTA + big button
+   - Footer: affiliate disclosure in ${langConfig.label}
+7. All purchase links → ${product.affiliate_link}
+8. No external images (use CSS gradients and emojis only)
+9. Affiliate disclosure visible in small font
+
+Return ONLY the complete HTML, no markdown, no explanations, no \`\`\`html.`;
+
+  let html = '';
+  for (let attempt = 0; attempt < Math.min(3, GEMINI_KEYS.length + 1); attempt++) {
+    try {
+      if (attempt > 0) await sleep(2000);
+      const raw = await callGemini(prompt);
+      html = raw.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+      if (html.includes('<!DOCTYPE') || html.includes('<html')) break;
+      html = '<!DOCTYPE html>' + html;
+      break;
+    } catch (e) {
+      log.warn('[LP][' + langConfig.code + '] Gemini attempt ' + (attempt + 1) + ' failed: ' + e.message.slice(0, 80));
+    }
+  }
+
+  if (!html) {
+    const price2 = product.price ? 'R$ ' + product.price.toFixed(2).replace('.', ',') : 'Ver preço';
+    html = generateFallbackHtml({ ...product }, canonicalUrl, price2);
+  }
+
+  return { html, slug, subdomain, canonicalUrl, langConfig };
+}
+
+// Deploy one language version of a landing page
+async function deployLandingPageLang(product, langConfig) {
+  const { html, slug, subdomain, canonicalUrl } = await generateHtmlMultilang(product, langConfig);
+
+  try { await createCloudflareSubdomain(subdomain); } catch (cfErr) {
+    log.warn('[LP][' + langConfig.code + '] CF DNS error: ' + cfErr.message);
+  }
+
+  if (IS_VPS) {
+    deployToFilesystem(slug, html);
+  } else {
+    const localDir = path.join(process.cwd(), 'data', 'landing_pages', slug);
+    fs.mkdirSync(localDir, { recursive: true });
+    fs.writeFileSync(path.join(localDir, 'index.html'), html, 'utf8');
+  }
+
+  const landingPageUrl = 'https://' + subdomain;
+  // Only update main PT landing_page_url in DB (language variants tracked separately)
+  if (langConfig.code === 'pt') updateLandingPageUrl(product.id, landingPageUrl);
+
+  log.info('[LP][' + langConfig.code + '] Deployed: ' + landingPageUrl);
+  return { landingPageUrl, slug, subdomain, lang: langConfig.code };
+}
+
+// ── Generate all landing pages (10 languages per product) ────────────────────
 async function generateLandingPages() {
-  log.info('[LP] Iniciando geração de landing pages...');
+  log.info('[LP] Iniciando geração de landing pages (10 idiomas por produto)...');
   const products = getProductsWithLinks();
   log.info('[LP] ' + products.length + ' produtos com affiliate_link encontrados');
 
   const deployed = [];
   for (const product of products) {
-    // Skip if already deployed
-    if (product.landing_page_url) {
-      log.info('[LP] Já deployado: ' + product.product_name.slice(0, 40) + ' → ' + product.landing_page_url);
-      continue;
-    }
-    try {
-      const result = await deployLandingPage(product);
-      deployed.push({ product: product.product_name, ...result });
-      await sleep(1500); // Rate limit Gemini API
-    } catch (e) {
-      log.error('[LP] Erro em "' + product.product_name.slice(0, 40) + '": ' + e.message);
+    log.info('[LP] Produto: "' + product.product_name.slice(0, 50) + '" [' + product.platform + ']');
+
+    for (const langConfig of LANGUAGES) {
+      const baseSlug = langConfig.prefix + makeSlug(product.product_name);
+      // Skip PT if already has landing_page_url (other langs always regenerate to fill gaps)
+      if (langConfig.code === 'pt' && product.landing_page_url) {
+        log.info('[LP][pt] Já deployado → ' + product.landing_page_url);
+        continue;
+      }
+      try {
+        const result = await deployLandingPageLang(product, langConfig);
+        deployed.push({ product: product.product_name, lang: langConfig.code, ...result });
+        await sleep(2000); // Rate-limit Gemini across 10 calls per product
+      } catch (e) {
+        log.error('[LP][' + langConfig.code + '] Erro em "' + product.product_name.slice(0, 40) + '": ' + e.message);
+      }
     }
   }
 
-  log.info('[LP] Concluído: ' + deployed.length + ' landing pages criadas');
+  log.info('[LP] Concluído: ' + deployed.length + ' landing pages criadas (' + Math.round(deployed.length / 10) + ' produtos × 10 idiomas)');
   return deployed;
 }
 
-module.exports = { generateLandingPages, deployLandingPage };
+module.exports = { generateLandingPages, deployLandingPage, deployLandingPageLang, LANGUAGES };
