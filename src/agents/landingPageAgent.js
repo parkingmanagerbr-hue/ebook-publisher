@@ -44,21 +44,24 @@ const IS_VPS        = process.env.RUNNING_ON_VPS === 'true' || fs.existsSync('/a
 const VERCEL_TOKEN  = process.env.VERCEL_TOKEN  || '';
 const NETLIFY_TOKEN = process.env.NETLIFY_TOKEN || '';
 
-// Threshold: se loadavg(1min) / nCPUs > LOAD_THRESHOLD → usar cloud deploy (Vercel/Netlify)
+// FORCE_CLOUD_DEPLOY=true → sempre usa Vercel/Netlify, NUNCA publica no VPS.
+// VPS_LOAD_THRESHOLD=0.70 → fallback automático quando load > threshold.
+const FORCE_CLOUD = process.env.FORCE_CLOUD_DEPLOY === 'true';
 const LOAD_THRESHOLD = parseFloat(process.env.VPS_LOAD_THRESHOLD || '0.70');
 const N_CPUS = parseInt(process.env.VPS_CPU_COUNT || '6', 10);
 
 function getVpsLoad() {
   try {
     const raw = fs.readFileSync('/proc/loadavg', 'utf8').trim().split(' ');
-    return parseFloat(raw[0]) / N_CPUS; // normalize by CPU count → 0..1+
+    return parseFloat(raw[0]) / N_CPUS;
   } catch (_) { return 0; }
 }
 
 function isVpsOverloaded() {
+  if (FORCE_CLOUD) return true; // sempre cloud quando FORCE_CLOUD_DEPLOY=true
   const load = getVpsLoad();
   if (load > LOAD_THRESHOLD) {
-    log.warn('[Deploy] VPS sobrecarregado (load=' + load.toFixed(2) + ' > ' + LOAD_THRESHOLD + ') → usando cloud deploy');
+    log.warn('[Deploy] VPS load=' + load.toFixed(2) + ' > ' + LOAD_THRESHOLD + ' → cloud deploy');
     return true;
   }
   return false;
