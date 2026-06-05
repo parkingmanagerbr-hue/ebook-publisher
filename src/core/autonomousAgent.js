@@ -387,7 +387,40 @@ async function loop() {
   // Aguardar 15s antes do primeiro ciclo (servidor terminar de inicializar)
   await sleep(15_000);
 
+  // ─── Affiliate pipeline — runs once per day via runAffiliateAgent's own sentinel ──
+  // Schedule: check every loop iteration; runAffiliateAgent() skips if ran recently
+  let _lastAffiliateCheck = 0;
+  const AFFILIATE_CHECK_INTERVAL_MS = 60 * 60 * 1000; // check every hour (agent self-throttles to 24h)
+
   while (state.enabled) {
+    // ── Run affiliate pipeline once per day ──────────────────────────────────
+    if (Date.now() - _lastAffiliateCheck > AFFILIATE_CHECK_INTERVAL_MS) {
+      _lastAffiliateCheck = Date.now();
+      try {
+        const { runAffiliateAgent } = require('../agents/affiliateAgent');
+        const { generateLandingPages } = require('../agents/landingPageAgent');
+        const { buildBacklinks } = require('../agents/backlinkAgent');
+
+        setState({ currentStep: 'affiliate:discover' });
+        logger.info('[affiliate] Executando runAffiliateAgent...');
+        await runAffiliateAgent().catch(e => logger.warn('[affiliate] runAffiliateAgent: ' + e.message));
+
+        setState({ currentStep: 'affiliate:landing_pages' });
+        logger.info('[affiliate] Gerando landing pages...');
+        await generateLandingPages().catch(e => logger.warn('[affiliate] generateLandingPages: ' + e.message));
+
+        setState({ currentStep: 'affiliate:backlinks' });
+        logger.info('[affiliate] Construindo backlinks...');
+        await buildBacklinks().catch(e => logger.warn('[affiliate] buildBacklinks: ' + e.message));
+
+        setState({ currentStep: null });
+        logger.info('[affiliate] Pipeline de afiliados concluído');
+      } catch (e) {
+        logger.warn('[affiliate] Pipeline error: ' + e.message);
+        setState({ currentStep: null });
+      }
+    }
+
     // Publicar ebooks ready — drena TODA a fila antes de gerar novos
     // (sem pausa entre batches: 5 a 5 até zerar)
     let readyPublished = 0;
