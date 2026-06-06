@@ -307,17 +307,28 @@ router.get('/status', (req, res) => {
     const errors    = db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status='error'").get().n;
     const pending   = db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status IN ('processing','ready')").get().n;
 
-    // Last 10 ebooks
-    const last10 = db.prepare("SELECT id, title, status, hotmart_url, cakto_url, NULL as amazon_url, ai_provider, created_at, published_at FROM ebooks ORDER BY created_at DESC LIMIT 20").all();
+    // Receita / vendas reais (somatório do banco)
+    const agg = db.prepare("SELECT COALESCE(SUM(revenue),0) rev, COALESCE(SUM(sales_count),0) sales FROM ebooks").get();
+
+    // Últimos 20 e-books — com capa, preço, IDs de produto e links de loja
+    const last10 = db.prepare(
+      "SELECT id, title, subtitle, topic, status, price, sales_count, revenue, " +
+      "cover_path, pdf_path, hotmart_url, hotmart_product_id, cakto_url, cakto_product_id, " +
+      "ai_provider, created_at, published_at FROM ebooks ORDER BY created_at DESC LIMIT 20"
+    ).all().map(e => ({
+      ...e,
+      amazon_url: null,
+      // converte caminho absoluto da capa em URL web servida por /covers
+      coverUrl: e.cover_path ? '/covers/' + path.basename(e.cover_path) : null,
+    }));
 
     // Recent errors (last 5)
     const recentErrors = db.prepare("SELECT id, title, created_at FROM ebooks WHERE status='error' ORDER BY created_at DESC LIMIT 5").all();
 
-    // AI state from file
+    // AI state from file (portável: usa data/ local, com fallback Docker)
     let aiState = null;
-    const aiStatePath = '/app/data/ai_state.json';
-    if (fs2.existsSync(aiStatePath)) {
-      try { aiState = JSON.parse(fs2.readFileSync(aiStatePath, 'utf8')); } catch(_) {}
+    for (const p of [path.join(__dirname, '../../data/ai_state.json'), '/app/data/ai_state.json']) {
+      if (fs2.existsSync(p)) { try { aiState = JSON.parse(fs2.readFileSync(p, 'utf8')); break; } catch(_) {} }
     }
     // Live AI provider status
     let aiProviders = {};
@@ -326,8 +337,9 @@ router.get('/status', (req, res) => {
       aiProviders = getStatus();
     } catch(_) {}
 
-    // Sessions
-    const sessionsDir = '/app/data/sessions';
+    // Sessions (portável: data/sessions local, com fallback Docker)
+    let sessionsDir = path.join(__dirname, '../../data/sessions');
+    if (!fs2.existsSync(sessionsDir) && fs2.existsSync('/app/data/sessions')) sessionsDir = '/app/data/sessions';
     const sessions = { hotmart: false, cakto: false, amazon: false };
     if (fs2.existsSync(sessionsDir)) {
       const files = fs2.readdirSync(sessionsDir);
@@ -342,6 +354,8 @@ router.get('/status', (req, res) => {
       uptimeHuman: _formatUptime(uptimeSec),
       timestamp: new Date().toISOString(),
       ebooks: { total, published, errors, pending, last20: last10 },
+      revenue: agg.rev,
+      sales: agg.sales,
       recentErrors,
       aiState,
       aiProviders,
@@ -359,5 +373,100 @@ function _formatUptime(sec) {
   const s = Math.floor(sec % 60);
   return (d > 0 ? d + 'd ' : '') + h + 'h ' + m + 'm ' + s + 's';
 }
+
+// ─── Afiliados & Landing Pages ────────────────────────────────────────────────
+
+function getAffiliateDb() {
+  const db = getDb();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS affiliate_products (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform         TEXT NOT NULL,
+      product_id       TEXT,
+      product_name     TEXT NOT NULL,
+      product_url      TEXT,
+      affiliate_link   TEXT,
+      category         TEXT,
+      price            REAL,
+      commission_pct   REAL,
+      landing_page_url TEXT,
+      created_at       TEXT DEFAULT (datetime('now')),
+      UNIQUE(platform, product_id)
+    )
+  `);
+  return db;
+}
+
+// GET /api/affiliate-products
+router.get('/affiliate-products', requireAuth, (req, res) => {
+  try {
+    const db = getAffiliateDb();
+    const products = db.prepare(
+      'SELECT * FROM affiliate_products ORDER BY created_at DESC'
+    ).all();
+    res.json({ ok: true, total: products.length, products });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/affiliate-products/discover
+router.post('/affiliate-products/discover', requireAuth, (req, res) => {
+  res.json({ ok: true, message: 'Descoberta de afiliados iniciada em background' });
+  setImmediate(async () => {
+    try {
+      const { runAffiliateAgent } = require('../agents/affiliateAgent');
+      await runAffiliateAgent();
+    } catch (e) { console.error('[api] affiliate discover error:', e.message); }
+  });
+});
+
+// GET /api/landing-pages
+router.get('/landing-pages', requireAuth, (req, res) => {
+  try {
+    const db = getAffiliateDb();
+    const withLp = db.prepare(
+      "SELECT * FROM affiliate_products WHERE landing_page_url IS NOT NULL AND landing_page_url != '' ORDER BY created_at DESC"
+    ).all();
+    const pending = db.prepare(
+      "SELECT COUNT(*) as n FROM affiliate_products WHERE affiliate_link IS NOT NULL AND (landing_page_url IS NULL OR landing_page_url = '')"
+    ).get().n;
+
+    const byDeploy = { vercel: 0, netlify: 0, vps: 0 };
+    const baseDomain = process.env.BASE_DOMAIN || 'veloxisit.com.br';
+    for (const p of withLp) {
+      const url = p.landing_page_url || '';
+      if (url.includes('vercel'))        byDeploy.vercel++;
+      else if (url.includes('netlify'))  byDeploy.netlify++;
+      else if (url.includes(baseDomain)) byDeploy.vps++;
+    }
+
+    res.json({ ok: true, total: withLp.length, pending, pages: withLp, byDeploy });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/landing-pages/generate
+router.post('/landing-pages/generate', requireAuth, (req, res) => {
+  res.json({ ok: true, message: 'Geração de landing pages iniciada em background' });
+  setImmediate(async () => {
+    try {
+      const { generateLandingPages } = require('../agents/landingPageAgent');
+      await generateLandingPages();
+    } catch (e) { console.error('[api] landing-pages/generate error:', e.message); }
+  });
+});
+
+// POST /api/backlinks/build
+router.post('/backlinks/build', requireAuth, (req, res) => {
+  res.json({ ok: true, message: 'Build de backlinks iniciado em background' });
+  setImmediate(async () => {
+    try {
+      const { buildBacklinks } = require('../agents/backlinkAgent');
+      await buildBacklinks();
+    } catch (e) { console.error('[api] backlinks/build error:', e.message); }
+  });
+});
 
 module.exports = router;

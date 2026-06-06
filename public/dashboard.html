@@ -220,6 +220,10 @@ tr:hover td{background:rgba(99,102,241,.03)}
     <span class="nav-icon">🤝</span> Afiliados
     <span class="nav-badge" style="background:var(--purple)">50%</span>
   </div>
+  <div class="nav-item" onclick="showSection('landing-pages')" id="nav-landing-pages">
+    <span class="nav-icon">🌐</span> Landing Pages
+    <span class="nav-badge green" id="nav-badge-lp">0</span>
+  </div>
   <div class="nav-section">Controle</div>
   <div class="nav-item" onclick="showSection('publish')" id="nav-publish">
     <span class="nav-icon">🚀</span> Publicar
@@ -614,6 +618,91 @@ tr:hover td{background:rgba(99,102,241,.03)}
 
 
     <!-- ══════════════════════════════════════════════════
+         LANDING PAGES
+    ══════════════════════════════════════════════════════ -->
+    <div id="section-landing-pages" class="section-hidden">
+
+      <!-- Stats cards -->
+      <div class="three-col" style="margin-bottom:20px">
+        <div class="stat-card green">
+          <div class="stat-label">Pages Publicadas</div>
+          <div class="stat-value" id="lp-stat-total">—</div>
+          <div class="stat-sub">com URL ativa</div>
+        </div>
+        <div class="stat-card yellow">
+          <div class="stat-label">Aguardando Deploy</div>
+          <div class="stat-value" id="lp-stat-pending">—</div>
+          <div class="stat-sub">link de afiliado sem LP</div>
+        </div>
+        <div class="stat-card accent">
+          <div class="stat-label">Deploy</div>
+          <div class="stat-value" id="lp-stat-deploy">—</div>
+          <div class="stat-sub" id="lp-stat-deploy-sub">vercel / netlify / vps</div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="two-col" style="margin-bottom:20px">
+        <div class="card">
+          <div class="card-title">🚀 Gerar Landing Pages</div>
+          <p style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:14px">
+            Para cada produto de afiliado com link cadastrado, gera uma landing page
+            HTML completa via Gemini (SEO + CTA + schema.org) e faz deploy automático
+            em Vercel → Netlify → VPS (fallback em cascata).
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="triggerLandingPages()">
+              🌐 Gerar &amp; Publicar Landing Pages
+            </button>
+            <button class="btn btn-outline" onclick="triggerAffiliateDiscover()">
+              🔍 Descobrir Produtos Afiliados
+            </button>
+            <button class="btn btn-outline" onclick="triggerBacklinks()">
+              🔗 Build Backlinks Hub
+            </button>
+          </div>
+          <div id="lp-action-status" style="margin-top:10px;font-size:12px;color:var(--text3)"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">⚙️ Configuração de Deploy</div>
+          <div style="font-size:12px;color:var(--text2);line-height:1.8">
+            <div>Deploy em nuvem: <span class="badge" id="lp-force-cloud-badge">—</span></div>
+            <div>Base Domain: <code style="background:var(--bg3);padding:1px 6px;border-radius:4px;font-size:11px" id="lp-base-domain">—</code></div>
+            <div style="margin-top:10px;color:var(--text3);font-size:11px;line-height:1.6">
+              Configure <code style="background:var(--bg3);padding:1px 6px;border-radius:4px">FORCE_CLOUD_DEPLOY</code>,
+              <code style="background:var(--bg3);padding:1px 6px;border-radius:4px">VERCEL_TOKEN</code> e
+              <code style="background:var(--bg3);padding:1px 6px;border-radius:4px">NETLIFY_TOKEN</code>
+              no <code style="background:var(--bg3);padding:1px 6px;border-radius:4px">.env</code> do VPS.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Landing pages list -->
+      <div class="section-label">Landing Pages Publicadas</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Produto</th>
+              <th style="width:80px">Plataforma</th>
+              <th style="width:90px">Categoria</th>
+              <th style="width:80px">Comissão</th>
+              <th>URL da Landing Page</th>
+              <th style="width:100px">Link Afiliado</th>
+              <th style="width:80px">Criado</th>
+            </tr>
+          </thead>
+          <tbody id="lp-tbody">
+            <tr><td colspan="7" style="text-align:center;color:var(--text3);padding:24px">
+              Carregando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div><!-- /section-landing-pages -->
+
+
+    <!-- ══════════════════════════════════════════════════
          PUBLICAR
     ══════════════════════════════════════════════════════ -->
     <div id="section-publish" class="section-hidden">
@@ -794,7 +883,7 @@ function loadPublicStatus() {
     setText('stat-ready', pend);
     setText('stat-inprogress', inprog);
     setText('stat-errors', err);
-    setText('stat-revenue', fmtMoney((pub * 4.99)));
+    setText('stat-revenue', fmtMoney(typeof d.revenue === 'number' ? d.revenue : (pub * 29.90)));
     setText('nav-badge-ebooks', total);
 
     // Update meta
@@ -1257,15 +1346,16 @@ function startAffiliateSetup() {
 // ═══════════════════════════════════════════════════════
 //  Sections navigation
 // ═══════════════════════════════════════════════════════
-var SECTIONS = ['overview','ebooks','stores','affiliates','publish','logs','ai'];
+var SECTIONS = ['overview','ebooks','stores','affiliates','landing-pages','publish','logs','ai'];
 var SECTION_TITLES = {
-  overview:   'Dashboard',
-  ebooks:     'Catálogo de E-books',
-  stores:     'Lojas & Sessões',
-  affiliates: 'Sistema de Afiliados',
-  publish:    'Publicação & Controle',
-  logs:       'Console de Logs',
-  ai:         'AI Providers',
+  overview:       'Dashboard',
+  ebooks:         'Catálogo de E-books',
+  stores:         'Lojas & Sessões',
+  affiliates:     'Sistema de Afiliados',
+  'landing-pages':'Landing Pages de Afiliados',
+  publish:        'Publicação & Controle',
+  logs:           'Console de Logs',
+  ai:             'AI Providers',
 };
 
 function showSection(name) {
@@ -1276,9 +1366,81 @@ function showSection(name) {
     if(nav) nav.className = 'nav-item' + (s === name ? ' active' : '');
   });
   setText('section-title', SECTION_TITLES[name] || name);
-  if(name === 'ebooks')     loadEbooks();
-  if(name === 'stores')     loadStoresRecent();
-  if(name === 'ai')         loadAiStatus();
+  if(name === 'ebooks')         loadEbooks();
+  if(name === 'stores')         loadStoresRecent();
+  if(name === 'ai')             loadAiStatus();
+  if(name === 'landing-pages')  loadLandingPages();
+}
+
+// ═══════════════════════════════════════════════════════
+//  Landing Pages
+// ═══════════════════════════════════════════════════════
+function loadLandingPages() {
+  apiFetch(API + '/landing-pages').then(function(d) {
+    if(!d.ok) return;
+    setText('lp-stat-total',   d.total   || 0);
+    setText('lp-stat-pending', d.pending || 0);
+    var dep = d.byDeploy || {};
+    setText('lp-stat-deploy', (dep.vercel||0) + ' / ' + (dep.netlify||0) + ' / ' + (dep.vps||0));
+    setText('lp-stat-deploy-sub', 'vercel / netlify / vps');
+    setText('nav-badge-lp', d.total || 0);
+
+    var rows = (d.pages || []).map(function(p) {
+      var lpLink = p.landing_page_url
+        ? '<a href="'+p.landing_page_url+'" target="_blank" style="color:var(--green);font-size:11px">'+p.landing_page_url.replace(/^https?:\/\//,'').slice(0,40)+'…</a>'
+        : '<span style="color:var(--text3)">—</span>';
+      var affLink = p.affiliate_link
+        ? '<a href="'+p.affiliate_link+'" target="_blank" class="store-link hm">Link</a>'
+        : '<span style="color:var(--text3)">—</span>';
+      var platBadge = '<span class="badge badge-'+(p.platform==='hotmart'?'yellow':p.platform==='cakto'?'blue':'gray')+'">'+p.platform+'</span>';
+      return '<tr>'
+        +'<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(p.product_name)+'</td>'
+        +'<td>'+platBadge+'</td>'
+        +'<td style="color:var(--text3);font-size:11px">'+escHtml(p.category||'—')+'</td>'
+        +'<td style="color:var(--purple);font-weight:700">'+(p.commission_pct?p.commission_pct+'%':'—')+'</td>'
+        +'<td>'+lpLink+'</td>'
+        +'<td>'+affLink+'</td>'
+        +'<td style="color:var(--text3);font-size:11px">'+fmtDateShort(p.created_at)+'</td>'
+        +'</tr>';
+    }).join('');
+    setHtml('lp-tbody', rows || '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:24px">Nenhuma landing page ainda. Clique em "Gerar &amp; Publicar Landing Pages".</td></tr>');
+  }).catch(function() {
+    setHtml('lp-tbody', '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:24px">Erro ao carregar dados.</td></tr>');
+  });
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function triggerLandingPages() {
+  setText('lp-action-status', '⏳ Gerando landing pages em background...');
+  apiFetch(API + '/landing-pages/generate', 'POST').then(function(d) {
+    setText('lp-action-status', '✅ ' + (d.message || 'Iniciado! Acompanhe nos logs.'));
+    appendLog({level:'info',store:'landing',message:'Landing pages: geração iniciada'});
+  }).catch(function() {
+    setText('lp-action-status', '⚠️ Erro ao iniciar. Verifique os logs.');
+  });
+}
+
+function triggerAffiliateDiscover() {
+  setText('lp-action-status', '⏳ Descobrindo produtos de afiliados...');
+  apiFetch(API + '/affiliate-products/discover', 'POST').then(function(d) {
+    setText('lp-action-status', '✅ ' + (d.message || 'Descoberta iniciada!'));
+    appendLog({level:'info',store:'affiliate',message:'Descoberta de afiliados iniciada'});
+  }).catch(function() {
+    setText('lp-action-status', '⚠️ Erro. Verifique os logs.');
+  });
+}
+
+function triggerBacklinks() {
+  setText('lp-action-status', '⏳ Construindo hub de backlinks...');
+  apiFetch(API + '/backlinks/build', 'POST').then(function(d) {
+    setText('lp-action-status', '✅ ' + (d.message || 'Backlinks iniciado!'));
+    appendLog({level:'info',store:'backlinks',message:'Build de backlinks iniciado'});
+  }).catch(function() {
+    setText('lp-action-status', '⚠️ Erro. Verifique os logs.');
+  });
 }
 
 // ═══════════════════════════════════════════════════════
