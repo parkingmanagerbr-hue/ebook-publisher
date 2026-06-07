@@ -37,7 +37,8 @@ const HUB_SUBDOMAIN = 'afiliados.' + BASE_DOMAIN;
 const HUB_SLUG      = 'afiliados';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
-const DB_PATH = process.env.AFFILIATE_DB_PATH || '/app/data/db/ebooks.db';
+const _defaultDbDir2 = fs.existsSync('/app/data') ? '/app/data/db' : path.join(__dirname, '../../data/db');
+const DB_PATH = process.env.AFFILIATE_DB_PATH || path.join(_defaultDbDir2, 'ebooks.db');
 
 let _db;
 function getDb() {

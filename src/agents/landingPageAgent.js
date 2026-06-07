@@ -86,7 +86,8 @@ function getGeminiKey() {
 }
 
 // ── DB ────────────────────────────────────────────────────────────────────────
-const DB_PATH = process.env.AFFILIATE_DB_PATH || '/app/data/db/ebooks.db';
+const _defaultDbDir = fs.existsSync('/app/data') ? '/app/data/db' : path.join(__dirname, '../../data/db');
+const DB_PATH = process.env.AFFILIATE_DB_PATH || path.join(_defaultDbDir, 'ebooks.db');
 
 let _db;
 function getDb() {

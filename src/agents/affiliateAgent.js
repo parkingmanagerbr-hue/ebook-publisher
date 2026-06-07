@@ -29,7 +29,10 @@ try {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── DB setup ──────────────────────────────────────────────────────────────────
-const DB_PATH = process.env.AFFILIATE_DB_PATH || '/app/data/db/ebooks.db';
+const { resolveSessionFile } = require('../core/sessionPath');
+// Resolve DB path portável (Docker vs dev local)
+const _defaultDbDir = fs.existsSync('/app/data') ? '/app/data/db' : path.join(__dirname, '../../data/db');
+const DB_PATH = process.env.AFFILIATE_DB_PATH || path.join(_defaultDbDir, 'ebooks.db');
 
 let _db;
 function getDb() {
@@ -153,7 +156,7 @@ async function clickByText(page, texts, timeoutMs = 10000) {
 }
 
 // ── HOTMART affiliate discovery ───────────────────────────────────────────────
-const HOTMART_SESSION_FILE = process.env.HOTMART_SESSION_FILE || '/app/data/sessions/hotmart.json';
+const HOTMART_SESSION_FILE = resolveSessionFile('hotmart', 'HOTMART_SESSION_FILE');
 const HOTMART_CATEGORIES   = ['Negócios e Carreira', 'Saúde e Esportes', 'Desenvolvimento Pessoal'];
 
 async function runHotmartAffiliate() {
@@ -330,7 +333,7 @@ async function runHotmartAffiliate() {
 }
 
 // ── CAKTO affiliate discovery ─────────────────────────────────────────────────
-const CAKTO_SESSION_FILE = process.env.CAKTO_SESSION_FILE || '/app/data/sessions/cakto.json';
+const CAKTO_SESSION_FILE = resolveSessionFile('cakto', 'CAKTO_SESSION_FILE');
 
 async function runCaktoAffiliate() {
   log.info('[Cakto] Iniciando busca de afiliados...');
@@ -491,7 +494,7 @@ async function runCaktoAffiliate() {
 }
 
 // ── AMAZON Associates affiliate discovery ────────────────────────────────────
-const AMAZON_SESSION_FILE = process.env.AMAZON_SESSION_FILE || '/app/data/sessions/amazon.json';
+const AMAZON_SESSION_FILE = resolveSessionFile('amazon', 'AMAZON_SESSION_FILE');
 const AMAZON_CATEGORIES = [
   { name: 'Livros', url: 'https://www.amazon.com.br/best-sellers-books-br/zgbs/livros' },
   { name: 'Eletronicos', url: 'https://www.amazon.com.br/gp/bestsellers/electronics' },
