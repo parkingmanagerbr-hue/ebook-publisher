@@ -136,18 +136,24 @@ async function generatePDF(ebook, coverPath) {
 
   const category = detectCategory(ebook.topic || '');
 
-  // Pré-gerar ilustrações dos capítulos SEQUENCIALMENTE (evita rate limit do Pollinations)
-  logger.info(`🖼️  Pré-gerando ilustrações para ${ebook.chapters.length} capítulos (sequencial)...`);
+  // Pré-gerar ilustrações dos capítulos (pular com SKIP_ILLUSTRATIONS=true para maior velocidade)
+  // Padrão: pular (true) — só gerar se explicitamente SKIP_ILLUSTRATIONS=false
+  const skipIllustrations = process.env.SKIP_ILLUSTRATIONS !== 'false';
   const illustrationPaths = new Array(ebook.chapters.length).fill(null);
-  for (let i = 0; i < ebook.chapters.length; i++) {
-    const ch = ebook.chapters[i];
-    logger.info(`   [${i+1}/${ebook.chapters.length}] Ilustração: "${ch.title}"`);
-    illustrationPaths[i] = await generateChapterIllustration(ch.title, ebook.topic || '', category);
-    // Pequena pausa entre requests para não bater rate limit
-    if (i < ebook.chapters.length - 1) await new Promise(r => setTimeout(r, 1500));
+  if (!skipIllustrations) {
+    logger.info(`🖼️  Pré-gerando ilustrações para ${ebook.chapters.length} capítulos (sequencial)...`);
+    for (let i = 0; i < ebook.chapters.length; i++) {
+      const ch = ebook.chapters[i];
+      logger.info(`   [${i+1}/${ebook.chapters.length}] Ilustração: "${ch.title}"`);
+      illustrationPaths[i] = await generateChapterIllustration(ch.title, ebook.topic || '', category);
+      // Pequena pausa entre requests para não bater rate limit
+      if (i < ebook.chapters.length - 1) await new Promise(r => setTimeout(r, 1500));
+    }
+    const successCount = illustrationPaths.filter(Boolean).length;
+    logger.info(`✅ ${successCount}/${ebook.chapters.length} ilustrações geradas`);
+  } else {
+    logger.info(`⚡ SKIP_ILLUSTRATIONS=true — pulando ilustrações para geração rápida`);
   }
-  const successCount = illustrationPaths.filter(Boolean).length;
-  logger.info(`✅ ${successCount}/${ebook.chapters.length} ilustrações geradas`);
 
   const filename = `ebook_${Date.now()}.pdf`;
   const outputPath = path.join(PDFS_DIR, filename);

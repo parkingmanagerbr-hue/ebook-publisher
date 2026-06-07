@@ -148,11 +148,11 @@ async function runPipeline(topicOverride = null, language = null) {
     }
 
     // ===== 5. PUBLICAR =====
+    let results = {};
     if (process.env.AUTO_PUBLISH !== 'false') {
       logger.info('\n🚀 ETAPA 4: Publicando nas plataformas...');
 
       const publishData = { ...ebookData, pdfPath, coverPath };
-      const results = {};
 
       // Cakto — isolado: exceção não mata o pipeline
       if (process.env.AUTO_PUBLISH_CAKTO !== 'false' &&
@@ -235,7 +235,7 @@ async function runPipeline(topicOverride = null, language = null) {
     logger.info(`   💰 Preço: R$ 4,99`);
     logger.info('='.repeat(60));
 
-    return { success: true, ebookId, title: ebook.title, pdfPath, coverPath };
+    return { success: true, ebookId, title: ebook.title, pdfPath, coverPath, publishResults: results };
 
   } catch (err) {
     logger.error(`❌ Pipeline falhou: ${err.message}`);

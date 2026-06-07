@@ -55,7 +55,7 @@ async function generateOutline(topic, language = 'pt-BR') {
   - Main title (max 60 chars) — in ${lang.nativeName}
   - Descriptive subtitle (max 100 chars) — in ${lang.nativeName}
   - Sales description (150-200 words, focused on benefits and transformation) — in ${lang.nativeName}
-  - 7-9 chapters with attractive names — in ${lang.nativeName}
+  - 5-7 chapters with attractive names — in ${lang.nativeName}
   - For each chapter: name + 4-5 sections/topics — in ${lang.nativeName}
 
   Respond ONLY in valid JSON in this format (all text values must be in ${lang.nativeName}):
@@ -164,8 +164,9 @@ async function generateFullEbook(topic, language = 'pt-BR') {
   for (const chapter of outline.chapters) {
     const content = await generateChapter(chapter, outline.title, language);
     chapters.push({ ...chapter, content });
-    // Pequeno delay para não throttling
-    await new Promise(r => setTimeout(r, 1000));
+    // Delay entre capítulos para reduzir pressão de rate limit
+    // 5s dá mais respiração quando só 2 chaves Cerebras estão disponíveis
+    await new Promise(r => setTimeout(r, 5000));
   }
 
   // 4. Conclusão

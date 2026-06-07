@@ -6,14 +6,18 @@
   "scripts": {
     "start": "node src/index.js",
     "server": "node src/server.js",
+    "mega": "node megaAgent.js",
     "full": "node -e \"require('child_process').spawn('node',['src/index.js'],{stdio:'inherit',detached:true}).unref(); require('./src/server')\"",
     "example": "node src/index.js --example",
     "research": "node src/index.js --only=research",
     "write": "node src/index.js --only=write",
     "publish": "node src/index.js --only=publish",
-    "dashboard": "node src/dashboard.js",
+    "dashboard": "node src/server.js",
     "setup:hotmart": "node scripts/setup-hotmart.js",
-    "setup:cakto": "node scripts/setup-cakto.js"
+    "setup:cakto": "node scripts/setup-cakto.js",
+    "setup:sessions": "node scripts/autoRenewSessions.js",
+    "trending": "node scripts/trendingInjector.js",
+    "renew": "node scripts/autoRenewSessions.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",

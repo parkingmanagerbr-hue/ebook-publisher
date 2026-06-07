@@ -213,12 +213,17 @@ server.listen(PORT, async () => {
     logger.info('Session watcher started');
   } catch (e) { logger.warn('sessionAgent: ' + e.message); }
 
-  // Autonomous agent
-  try {
-    const agent = require('./core/autonomousAgent');
-    agent.loop();
-    logger.info('Autonomous agent started (24/7 mode)');
-  } catch (e) { logger.error('Failed to start autonomous agent: ' + e.message); }
+  // Autonomous agent — só inicia se NÃO estiver em modo dashboard-only.
+  // (megaAgent.js é o loop de publicação ativo; evitar dois loops simultâneos.)
+  if (process.env.DASHBOARD_ONLY === '1') {
+    logger.info('DASHBOARD_ONLY=1 — autonomous agent NÃO iniciado (megaAgent é o loop ativo)');
+  } else {
+    try {
+      const agent = require('./core/autonomousAgent');
+      agent.loop();
+      logger.info('Autonomous agent started (24/7 mode)');
+    } catch (e) { logger.error('Failed to start autonomous agent: ' + e.message); }
+  }
 });
 
 module.exports = app;

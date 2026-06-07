@@ -62,18 +62,50 @@ function getVoice(language) {
 let _cliPath = null;
 function findEdgeTtsCli() {
   if (_cliPath !== null) return _cliPath;
+  const isWin = process.platform === 'win32';
+  const { execSync } = require('child_process');
+
+  // Windows: tentar caminhos específicos + scripts Python
+  if (isWin) {
+    const winCandidates = [
+      'edge-tts',
+      'edge-tts.exe',
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'Scripts', 'edge-tts.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'Scripts', 'edge-tts.exe'),
+      path.join(process.env.APPDATA || '', '..', 'Local', 'Programs', 'Python', 'Python312', 'Scripts', 'edge-tts.exe'),
+    ];
+    for (const p of winCandidates) {
+      try {
+        execSync(`"${p}" --version`, { stdio: 'pipe', timeout: 5000 });
+        _cliPath = p;
+        return p;
+      } catch { /* try next */ }
+    }
+    // Tentar via python -m edge_tts (Windows usa 'python' não 'python3')
+    for (const py of ['python', 'py', 'python3']) {
+      try {
+        execSync(`${py} -m edge_tts --version`, { stdio: 'pipe', timeout: 5000 });
+        _cliPath = `__python_module__:${py}`;
+        return _cliPath;
+      } catch { /* try next */ }
+    }
+    _cliPath = null;
+    return null;
+  }
+
+  // Linux/Mac: busca tradicional
   const candidates = ['/usr/local/bin/edge-tts', '/usr/bin/edge-tts', 'edge-tts'];
   for (const p of candidates) {
     try {
-      require('child_process').execSync(`which ${p} 2>/dev/null || ${p} --version 2>/dev/null`, { stdio: 'pipe' });
+      execSync(`which ${p} 2>/dev/null || ${p} --version 2>/dev/null`, { stdio: 'pipe' });
       _cliPath = p;
       return p;
     } catch { /* try next */ }
   }
   // Tentar via python3 -m edge_tts
   try {
-    require('child_process').execSync('python3 -m edge_tts --version 2>/dev/null', { stdio: 'pipe' });
-    _cliPath = '__python_module__';
+    execSync('python3 -m edge_tts --version 2>/dev/null', { stdio: 'pipe' });
+    _cliPath = '__python_module__:python3';
     return _cliPath;
   } catch { /* not available */ }
   _cliPath = null;
@@ -101,10 +133,12 @@ async function synthesizeChunk(text, language = 'en', retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       await new Promise((resolve, reject) => {
-        const args = cli === '__python_module__'
+        const isPyModule = cli.startsWith('__python_module__');
+        const pyBin = cli.includes(':') ? cli.split(':')[1] : 'python3';
+        const args = isPyModule
           ? ['-m', 'edge_tts', '--voice', voice, '--text', cleanText, '--write-media', tmpFile]
           : ['--voice', voice, '--text', cleanText, '--write-media', tmpFile];
-        const bin = cli === '__python_module__' ? 'python3' : cli;
+        const bin = isPyModule ? pyBin : cli;
 
         const proc = spawn(bin, args, { timeout: 60_000 });
         let stderr = '';
