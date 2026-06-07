@@ -1,10 +1,26 @@
 version: '3.8'
 
+# ============================================================
+# GENIA EbookPublisher — Docker Compose (desenvolvimento local)
+# ============================================================
+# Uso rápido:
+#   docker compose up -d               # dashboard + megaAgent juntos
+#   docker compose up -d dashboard     # só o dashboard
+#   docker compose up -d mega-agent    # só o loop de geração
+#
+# Primeiro deploy:
+#   cp .env.example .env               # editar com suas chaves
+#   node scripts/setup-hotmart.js      # exportar sessão Hotmart
+#   node scripts/setup-cakto.js        # exportar sessão Cakto
+#   docker compose up -d
+
 services:
-  ebook-publisher:
+
+  # ── Dashboard + API (porta 3100) ────────────────────────────
+  dashboard:
     build: .
     image: genia/ebook-publisher:latest
-    container_name: ebook-publisher
+    container_name: ebook-dashboard
     restart: unless-stopped
     ports:
       - "3100:3100"
@@ -14,28 +30,53 @@ services:
       - NODE_ENV=production
       - DASHBOARD_PORT=3100
       - HEADLESS=true
+      - DASHBOARD_ONLY=1          # só o servidor web; megaAgent roda separado
     volumes:
-      # Dados persistentes (PDFs, capas, banco de dados)
-      - ebook_pdfs:/app/data/pdfs
-      - ebook_covers:/app/data/covers
-      - ebook_db:/app/data
+      - ebook_data:/app/data
       - ebook_logs:/app/logs
-    shm_size: '256mb'   # Necessário para o Chromium/Puppeteer
+      - ./data/sessions:/app/data/sessions   # sessões como bind mount (fácil de atualizar)
+    shm_size: '256mb'
     cap_add:
-      - SYS_ADMIN        # Necessário para Puppeteer sandbox
+      - SYS_ADMIN
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.ebook-publisher.rule=Host(`publisher.${DOMAIN:-localhost}`)"
       - "traefik.http.routers.ebook-publisher.tls=true"
       - "traefik.http.routers.ebook-publisher.tls.certresolver=letsencrypt"
       - "traefik.http.services.ebook-publisher.loadbalancer.server.port=3100"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3100/api/status',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── MegaAgent — Loop infinito de geração e publicação ───────
+  mega-agent:
+    build: .
+    image: genia/ebook-publisher:latest
+    container_name: ebook-mega-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - HEADLESS=true
+      - MEGA_ONLY=1               # só o megaAgent; sem servidor web
+      - SKIP_ILLUSTRATIONS=true   # geração mais rápida
+    volumes:
+      - ebook_data:/app/data
+      - ebook_logs:/app/logs
+      - ./data/sessions:/app/data/sessions   # compartilha sessões com dashboard
+    shm_size: '512mb'             # mega-agent usa mais Puppeteer (publisher)
+    cap_add:
+      - SYS_ADMIN
+    depends_on:
+      dashboard:
+        condition: service_healthy
 
 volumes:
-  ebook_pdfs:
-    driver: local
-  ebook_covers:
-    driver: local
-  ebook_db:
+  ebook_data:
     driver: local
   ebook_logs:
     driver: local

@@ -1,16 +1,20 @@
 version: '3.8'
 
 # ============================================================
-# Deploy de Produção — GENIA EbookPublisher na VPS
+# GENIA EbookPublisher — Deploy de Produção na VPS
 # ============================================================
 # Uso:
 #   cd /home/deploy/ebook-publisher-work
-#   docker compose -f docker-compose.production.yml pull ebook-publisher
-#   docker compose -f docker-compose.production.yml up -d ebook-publisher
+#   docker compose -f docker-compose.production.yml pull
+#   docker compose -f docker-compose.production.yml up -d
+#   docker image prune -f
 #
-# Proxy: nginx em platform_internal, conf em /opt/platform/nginx/sites/16-ebook-publisher.conf
+# Proxy: nginx em platform_internal
+# Sessões: /home/deploy/ebook-publisher-work/data/sessions/ (bind mount)
 
 services:
+
+  # ── Dashboard + API ─────────────────────────────────────────
   ebook-publisher:
     image: ghcr.io/parkingmanagerbr-hue/ebook-publisher:latest
     container_name: platform-ebook-publisher-1
@@ -21,23 +25,52 @@ services:
       - NODE_ENV=production
       - DASHBOARD_PORT=3100
       - HEADLESS=true
+      - DASHBOARD_ONLY=1
+      - RUNNING_ON_VPS=true
     volumes:
-      - ebook_pdfs:/app/data/pdfs
-      - ebook_covers:/app/data/covers
-      - ebook_db:/app/data
+      - ebook_data:/app/data
       - ebook_logs:/app/logs
+      - ./data/sessions:/app/data/sessions
     shm_size: '256mb'
     cap_add:
       - SYS_ADMIN
     networks:
       - platform_internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3100/api/status',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── MegaAgent — Loop de geração + publicação ────────────────
+  ebook-mega-agent:
+    image: ghcr.io/parkingmanagerbr-hue/ebook-publisher:latest
+    container_name: platform-ebook-mega-agent-1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - HEADLESS=true
+      - MEGA_ONLY=1
+      - SKIP_ILLUSTRATIONS=true
+      - RUNNING_ON_VPS=true
+    volumes:
+      - ebook_data:/app/data
+      - ebook_logs:/app/logs
+      - ./data/sessions:/app/data/sessions
+    shm_size: '512mb'
+    cap_add:
+      - SYS_ADMIN
+    networks:
+      - platform_internal
+    depends_on:
+      ebook-publisher:
+        condition: service_healthy
 
 volumes:
-  ebook_pdfs:
-    driver: local
-  ebook_covers:
-    driver: local
-  ebook_db:
+  ebook_data:
     driver: local
   ebook_logs:
     driver: local

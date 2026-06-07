@@ -1,6 +1,6 @@
 FROM node:20-bookworm-slim
 
-# Instalar dependências do sistema (Puppeteer + Canvas + PDFKit)
+# Instalar dependências do sistema (Puppeteer + Canvas + PDFKit + Edge TTS)
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -18,34 +18,41 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/* && \
-    pip3 install --break-system-packages edge-tts 2>/dev/null || pip3 install edge-tts
+    pip3 install --break-system-packages edge-tts 2>/dev/null || pip3 install edge-tts || true
 
-# Dizer ao Puppeteer para usar o Chromium instalado pelo sistema
+# Puppeteer usa o Chromium instalado pelo sistema (não baixa o próprio)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
-    CHROMIUM_FLAGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
+    CHROMIUM_FLAGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage" \
+    NODE_ENV=production
 
 WORKDIR /app
 
-# Copiar package.json primeiro (cache de camadas)
+# Copiar package.json primeiro (melhor uso do cache de camadas)
 COPY package*.json ./
 
-# Instalar dependências (sem devDependencies)
+# Instalar dependências Node (sem devDependencies)
 RUN npm install --omit=dev
 
 # Copiar código fonte
-COPY src/ ./src/
-COPY public/ ./public/
-COPY scripts/ ./scripts/
+COPY src/        ./src/
+COPY public/     ./public/
+COPY scripts/    ./scripts/
+COPY megaAgent.js ./
+COPY start.sh    ./
+
+# Tornar entrypoint executável
+RUN chmod +x start.sh
 
 # Criar diretórios de dados com permissões corretas
-RUN mkdir -p data/pdfs data/covers logs && \
+RUN mkdir -p data/pdfs data/covers data/sessions data/audiobooks data/db logs && \
     chmod -R 777 data logs
 
 EXPOSE 3100
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3100/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+# Healthcheck — verifica /api/status (endpoint público, sem auth)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3100/api/status',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
 
-CMD ["node", "src/server.js"]
+# Entrypoint com suporte a DASHBOARD_ONLY / MEGA_ONLY / FULL
+CMD ["sh", "start.sh"]

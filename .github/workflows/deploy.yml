@@ -6,6 +6,9 @@ on:
     paths:
       - 'src/**'
       - 'public/**'
+      - 'scripts/**'
+      - 'megaAgent.js'
+      - 'start.sh'
       - 'package*.json'
       - 'Dockerfile'
 
@@ -57,8 +60,8 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /opt/platform
-            docker compose -f docker-compose.production.yml pull ebook-publisher
-            docker compose -f docker-compose.production.yml up -d ebook-publisher
+            cd /home/deploy/ebook-publisher-work
+            docker compose -f docker-compose.production.yml pull
+            docker compose -f docker-compose.production.yml up -d ebook-publisher ebook-mega-agent
             docker image prune -f
-            echo "✅ EbookPublisher deployed"
+            echo "✅ EbookPublisher + MegaAgent deployed"

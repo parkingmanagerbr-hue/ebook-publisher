@@ -6,6 +6,9 @@ on:
     paths:
       - 'src/**'
       - 'public/**'
+      - 'scripts/**'
+      - 'megaAgent.js'
+      - 'start.sh'
       - 'package.json'
       - 'package-lock.json'
       - 'Dockerfile'
