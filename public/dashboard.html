@@ -812,7 +812,13 @@ tr:hover td{background:rgba(99,102,241,.03)}
 // ═══════════════════════════════════════════════════════
 //  State & Config
 // ═══════════════════════════════════════════════════════
-var TOKEN = localStorage.getItem('publisher_token') || localStorage.getItem('auth_token') || '';
+// Suporta todas as chaves de token usadas historicamente
+var TOKEN = localStorage.getItem('genia_token') ||
+            localStorage.getItem('publisher_token') ||
+            localStorage.getItem('auth_token') || '';
+
+// Redirecionar para login se não autenticado
+if (!TOKEN) { window.location.href = '/login'; }
 var API   = '/api';
 var _allEbooks = [];
 var _logEntries = [];

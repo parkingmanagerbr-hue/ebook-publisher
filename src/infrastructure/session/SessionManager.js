@@ -7,7 +7,10 @@
 const fs   = require('fs');
 const path = require('path');
 
-const SESSIONS_DIR = process.env.SESSIONS_DIR || '/app/data/sessions';
+// Resolve sessions directory: env var > Docker path (/app/data) > local dev path
+const SESSIONS_DIR = process.env.SESSIONS_DIR ||
+  (require('fs').existsSync('/app/data') ? '/app/data/sessions'
+    : require('path').join(__dirname, '../../../data/sessions'));
 
 // Session TTL in ms (Hotmart ~48h, Cakto uses cookie expiry, Amazon ~30 days)
 const SESSION_TTL = {
