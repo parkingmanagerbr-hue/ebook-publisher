@@ -1,10 +1,44 @@
+# ── Node ─────────────────────────────────────────────────
 node_modules/
+
+# ── Segredos e configuração ───────────────────────────────
 .env
+.env.local
+
+# ── Dados gerados (PDFs, capas, banco) ───────────────────
 data/pdfs/
 data/covers/
+data/audiobooks/
 data/metrics.db
+data/metrics.db-shm
+data/metrics.db-wal
 data/ai_state.json
+data/gutenberg_state.json
+data/sessions/
+data/db/
+data/genia/
+
+# ── Logs ─────────────────────────────────────────────────
 logs/
 *.log
-.DS_Store
+
+# ── Screenshots de debug ──────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+!public/**/*.png
+!public/**/*.jpg
+
+# ── Arquivos temporários Windows ─────────────────────────
 Thumbs.db
+.DS_Store
+commit_msg.txt
+commit*.bat
+do_commit.bat
+push.bat
+extract_google_log*.txt
+
+# ── Python cache ─────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
