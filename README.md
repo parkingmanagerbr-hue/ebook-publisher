@@ -155,6 +155,21 @@ Depois configure as sessões:
 npm run setup:sessions  # ou: node scripts/setup-web-sessions.js
 ```
 
+### Geração de imagens (capas)
+
+A capa é gerada automaticamente com fallback chain:
+
+| Variável | Serviço | Qualidade | Custo |
+|----------|---------|-----------|-------|
+| `GEMINI_API_KEY` | Gemini Imagen 4 | ⭐⭐⭐⭐ | Grátis |
+| `HIGGSFIELD_API_KEY` (até `_6`) | FLUX Pro Kontext Max | ⭐⭐⭐⭐⭐ | Pago |
+| `HUGGINGFACE_API_KEY` (até `_6`) | FLUX.1-schnell | ⭐⭐⭐ | Grátis (limite) |
+| `FAL_AI_API_KEY` | FLUX/schnell | ⭐⭐⭐ | Free tier |
+| `TOGETHER_API_KEY` | FLUX.1-schnell | ⭐⭐⭐ | Free tier |
+| `CF_ACCOUNT_ID` + `CF_API_TOKEN` | Cloudflare AI | ⭐⭐⭐ | Grátis |
+| — | Pollinations.ai | ⭐⭐ | Sempre grátis (fallback) |
+| — | Canvas puro | ⭐ | Sempre disponível (último recurso) |
+
 ### Audiobooks (opcional)
 
 ```env
