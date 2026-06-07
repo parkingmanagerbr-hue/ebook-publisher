@@ -19,7 +19,7 @@ const GENIA_DIR   = path.join(DATA_DIR, 'genia');
 const GENIA_FILE  = path.join(GENIA_DIR, 'web_ebook_state.json');
 const SESS_DIR    = path.join(DATA_DIR, 'sessions');
 
-// Limites mensais por conta (conservadores — ajuste via env)
+// Limites mensais por conta (ajuste via env)
 const LIMITS = {
   gamma:       parseInt(process.env.GAMMA_MONTHLY_LIMIT       || '8'),
   piktochart:  parseInt(process.env.PIKTOCHART_MONTHLY_LIMIT  || '5'),
@@ -27,15 +27,12 @@ const LIMITS = {
   visme:       parseInt(process.env.VISME_MONTHLY_LIMIT       || '5'),
 };
 
-// Contas Gmail em ordem de prioridade (mais recursos primeiro)
-const GMAIL_ACCOUNTS = [
-  'mrovariz@gmail.com',
-  'parkingmanagerbr@gmail.com',
-  'whatsiahub@gmail.com',
-  'contosfolks@gmail.com',
-  'cortes30vs@gmail.com',
-  'estoriasdeamor90@gmail.com',
-];
+// Contas Gmail lidas do .env — separadas por vírgula
+// Ex: GMAIL_ACCOUNTS=conta1@gmail.com,conta2@gmail.com
+const GMAIL_ACCOUNTS = (process.env.GMAIL_ACCOUNTS || '')
+  .split(',')
+  .map(e => e.trim())
+  .filter(Boolean);
 
 // Serviços em ordem de prioridade
 const SERVICE_PRIORITY = ['gamma', 'piktochart', 'ebookmaker', 'visme'];

@@ -787,11 +787,11 @@ tr:hover td{background:rgba(99,102,241,.03)}
       </div>
       <div class="two-col">
         <div class="card">
-          <div class="card-title">⚙️ Capacidade Total</div>
+          <div class="card-title">⚙️ Capacidade Total de LLM</div>
           <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--text2)">
             <div>Gemini (5 chaves): <b style="color:var(--green)">75 RPM / 7.500 RPD</b></div>
             <div>Cerebras (6 chaves): <b style="color:var(--green)">360 RPM</b></div>
-            <div>SambaNova (6 chaves): <b style="color:var(--green)">2.400 RPM</b></div>
+            <div>SambaNova (8 chaves): <b style="color:var(--green)">3.200 RPM</b></div>
             <div>HuggingFace (4 chaves): <b style="color:var(--text2)">40 RPM</b></div>
             <div>DeepSeek (2 chaves): <b style="color:var(--text2)">120 RPM</b></div>
             <div>Ollama VPS: <b style="color:var(--text3)">fallback sem limite</b></div>
@@ -802,6 +802,25 @@ tr:hover td{background:rgba(99,102,241,.03)}
           <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Se um provider estiver com erro, você pode resetar o estado para tentá-lo novamente.</p>
           <button class="btn btn-outline btn-sm" onclick="resetAI()">Resetar Todos os Providers</button>
         </div>
+      </div>
+
+      <!-- Web Ebook Credits -->
+      <div class="section-label" style="margin-top:20px">🌐 Créditos Mensais — Serviços Web de Ebook</div>
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div style="font-size:12px;color:var(--text2)">
+            Gamma, Piktochart, ebookmaker.ai e Visme geram ebooks gratuitos via contas Google.<br>
+            Esgotados → pipeline normal (LLM + PDFKit, ilimitado).
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0">
+            <button class="btn btn-outline btn-sm" onclick="loadWebCredits()">↻ Atualizar</button>
+            <button class="btn btn-outline btn-sm" onclick="resetWebCredits()">Reset Mês</button>
+          </div>
+        </div>
+        <div id="web-credits-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+          <div style="color:var(--text3);font-size:12px">Carregando...</div>
+        </div>
+        <div id="web-credits-accounts" style="margin-top:12px;font-size:11px;color:var(--text3)"></div>
       </div>
     </div><!-- /section-ai -->
 
@@ -1253,6 +1272,52 @@ function loadStoresRecent() {
 // ═══════════════════════════════════════════════════════
 //  AI status
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+//  Web Ebook Credits
+// ═══════════════════════════════════════════════════════
+function loadWebCredits() {
+  apiFetch(API + '/web-credits').then(function(d) {
+    if(!d.ok) return;
+    var grid = $('web-credits-grid');
+    if(!grid) return;
+
+    var svcs = d.services || {};
+    var svcNames = { gamma:'Gamma.app', piktochart:'Piktochart', ebookmaker:'ebookmaker.ai', visme:'Visme' };
+    var html = Object.keys(svcs).map(function(svc) {
+      var s = svcs[svc];
+      var pct = s.total > 0 ? Math.round(s.used / s.total * 100) : 0;
+      var color = s.exhausted ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
+      return '<div style="background:var(--bg3);border-radius:8px;padding:12px">' +
+        '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">' + (svcNames[svc]||svc) + '</div>' +
+        '<div style="font-size:22px;font-weight:800;color:' + color + '">' + s.remaining + '</div>' +
+        '<div style="font-size:10px;color:var(--text3);margin-bottom:6px">restantes de ' + s.total + ' este mês</div>' +
+        '<div style="height:4px;background:var(--border2);border-radius:2px;overflow:hidden">' +
+          '<div style="height:100%;width:' + pct + '%;background:' + color + ';border-radius:2px;transition:width .5s"></div>' +
+        '</div>' +
+        '</div>';
+    }).join('');
+    grid.innerHTML = html || '<div style="color:var(--text3);font-size:12px">Nenhum serviço configurado (GMAIL_ACCOUNTS vazio no .env)</div>';
+
+    // Contas resumo
+    var accEl = $('web-credits-accounts');
+    if(accEl) {
+      accEl.textContent = d.accounts + ' conta(s) Gmail configurada(s) | Mês: ' + (d.month||'—') +
+        (d.exhausted ? ' | ⚠️ Todos os créditos esgotados — usando pipeline normal' : '');
+    }
+  }).catch(function() {
+    var grid = $('web-credits-grid');
+    if(grid) grid.innerHTML = '<div style="color:var(--text3);font-size:12px">Serviço não disponível (GMAIL_ACCOUNTS não configurado)</div>';
+  });
+}
+
+function resetWebCredits() {
+  if(!confirm('Resetar contadores mensais dos serviços web?\n(Use apenas se tiver certeza que o mês virou ou os créditos foram renovados pelas plataformas.)')) return;
+  apiFetch(API + '/web-credits/reset', 'POST').then(function(d) {
+    appendLog({level:'info',store:'web-credits',message:'✅ Créditos resetados: ' + (d.message||'OK')});
+    loadWebCredits();
+  }).catch(function() { appendLog({level:'error',store:'web-credits',message:'Erro ao resetar créditos'}); });
+}
+
 function loadAiStatus() {
   apiFetch(API + '/ai-status').then(function(d) {
     if(!d.ok) return;
@@ -1374,7 +1439,7 @@ function showSection(name) {
   setText('section-title', SECTION_TITLES[name] || name);
   if(name === 'ebooks')         loadEbooks();
   if(name === 'stores')         loadStoresRecent();
-  if(name === 'ai')             loadAiStatus();
+  if(name === 'ai')             { loadAiStatus(); loadWebCredits(); }
   if(name === 'landing-pages')  loadLandingPages();
 }
 

@@ -458,6 +458,34 @@ router.post('/landing-pages/generate', requireAuth, (req, res) => {
   });
 });
 
+// GET /api/web-credits — Estado dos créditos de serviços web de ebook
+router.get('/web-credits', requireAuth, (req, res) => {
+  try {
+    const { getSummary, isAllExhausted, GMAIL_ACCOUNTS, LIMITS } = require('../agents/webEbookAgents/creditTracker');
+    const summary = getSummary();
+    res.json({
+      ok:           true,
+      exhausted:    isAllExhausted(),
+      accounts:     GMAIL_ACCOUNTS.length,
+      monthlyTotal: GMAIL_ACCOUNTS.length * Object.values(LIMITS).reduce((s, v) => s + v, 0),
+      ...summary,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/web-credits/reset — Força reset mensal dos créditos
+router.post('/web-credits/reset', requireAuth, (req, res) => {
+  try {
+    const { resetMonthly } = require('../agents/webEbookAgents/creditTracker');
+    const state = resetMonthly();
+    res.json({ ok: true, message: 'Créditos mensais resetados', month: state.month });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/backlinks/build
 router.post('/backlinks/build', requireAuth, (req, res) => {
   res.json({ ok: true, message: 'Build de backlinks iniciado em background' });

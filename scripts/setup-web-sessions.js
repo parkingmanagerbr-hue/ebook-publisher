@@ -35,15 +35,16 @@ const GENIA_DIR = path.join(__dirname, '../data/genia');
 fs.mkdirSync(SESS_DIR, { recursive: true });
 fs.mkdirSync(GENIA_DIR, { recursive: true });
 
-// Gmail accounts a configurar em ordem de prioridade
-const GMAIL_ACCOUNTS = [
-  'mrovariz@gmail.com',
-  'parkingmanagerbr@gmail.com',
-  'whatsiahub@gmail.com',
-  'contosfolks@gmail.com',
-  'cortes30vs@gmail.com',
-  'estoriasdeamor90@gmail.com',
-];
+// Gmail accounts lidas do .env (GMAIL_ACCOUNTS=a@gmail.com,b@gmail.com)
+// Fallback para lista vazia — script pedirá que configure o .env
+const GMAIL_ACCOUNTS = (process.env.GMAIL_ACCOUNTS || '')
+  .split(',').map(e => e.trim()).filter(Boolean);
+
+if (!GMAIL_ACCOUNTS.length) {
+  console.error('\n❌ Nenhuma conta Gmail configurada.');
+  console.error('   Adicione no .env: GMAIL_ACCOUNTS=conta1@gmail.com,conta2@gmail.com\n');
+  process.exit(1);
+}
 
 // Serviços a configurar
 const SERVICES = {
