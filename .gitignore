@@ -5,6 +5,9 @@ node_modules/
 .env
 .env.local
 
+# ── Estado interno GENIA ─────────────────────────────────
+.genia/
+
 # ── Dados gerados (PDFs, capas, banco) ───────────────────
 data/pdfs/
 data/covers/

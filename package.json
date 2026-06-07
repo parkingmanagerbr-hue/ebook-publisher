@@ -15,6 +15,7 @@
     "dashboard": "node src/server.js",
     "setup:hotmart": "node scripts/setup-hotmart.js",
     "setup:cakto": "node scripts/setup-cakto.js",
+    "setup:web": "node scripts/setup-web-sessions.js",
     "setup:sessions": "node scripts/autoRenewSessions.js",
     "trending": "node scripts/trendingInjector.js",
     "renew": "node scripts/autoRenewSessions.js"
