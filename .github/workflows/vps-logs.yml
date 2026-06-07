@@ -4,15 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       lines:
-        description: 'Number of log lines'
+        description: 'Número de linhas de log'
         required: false
         default: '100'
       since:
-        description: 'Since (e.g. 10m, 1h)'
+        description: 'Desde quando (ex: 10m, 1h, 30m)'
         required: false
         default: '15m'
+      container:
+        description: 'Container (dashboard | mega-agent | both)'
+        required: false
+        default: 'both'
       redeploy:
-        description: 'Force redeploy before fetching logs (true/false)'
+        description: 'Forçar redeploy antes de buscar logs (true/false)'
         required: false
         default: 'false'
 
@@ -20,7 +24,7 @@ jobs:
   logs:
     runs-on: ubuntu-latest
     steps:
-      - name: Login to GHCR (for pull)
+      - name: Login to GHCR (para pull)
         if: ${{ inputs.redeploy == 'true' }}
         uses: docker/login-action@v3
         with:
@@ -28,7 +32,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Redeploy on VPS
+      - name: Redeploy no VPS
         if: ${{ inputs.redeploy == 'true' }}
         uses: appleboy/ssh-action@v1
         with:
@@ -38,30 +42,58 @@ jobs:
           script: |
             echo "=== PULLING LATEST IMAGE ==="
             docker pull ghcr.io/parkingmanagerbr-hue/ebook-publisher:latest
-            echo "=== FORCE RECREATE ==="
+            echo "=== FORCE RECREATE (dashboard + mega-agent) ==="
             cd /home/deploy/ebook-publisher-work
-            docker compose -f docker-compose.production.yml up -d --force-recreate ebook-publisher
-            echo "=== WAITING 10s FOR STARTUP ==="
-            sleep 10
+            docker compose -f docker-compose.production.yml up -d --force-recreate ebook-publisher ebook-mega-agent
+            echo "=== AGUARDANDO 15s PARA INICIALIZAÇÃO ==="
+            sleep 15
 
-      - name: Fetch logs from VPS
+      - name: Buscar logs do VPS
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            echo "=== CONTAINER STATUS ==="
-            docker ps --filter name=ebook-publisher --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+            LINES="${{ inputs.lines }}"
+            SINCE="${{ inputs.since }}"
+            CONTAINER="${{ inputs.container }}"
+
+            echo "========================================================"
+            echo "  STATUS DOS CONTAINERS"
+            echo "========================================================"
+            docker ps \
+              --filter name=ebook-publisher \
+              --filter name=ebook-mega-agent \
+              --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}\t{{.Image}}" 2>/dev/null
             echo ""
-            echo "=== IMAGE INFO ==="
+
+            echo "========================================================"
+            echo "  VERSÃO DA IMAGEM"
+            echo "========================================================"
             IMG=$(docker inspect platform-ebook-publisher-1 --format '{{.Image}}' 2>/dev/null)
             echo "Image SHA: $IMG"
-            docker inspect $IMG --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || echo "(no revision label)"
-            docker inspect $IMG --format '{{index .Config.Labels "org.opencontainers.image.created"}}' 2>/dev/null || echo "(no created label)"
+            docker inspect $IMG --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null | head -c 12 || echo "(sem label de revisão)"
+            docker inspect $IMG --format '{{index .Config.Labels "org.opencontainers.image.created"}}' 2>/dev/null || echo ""
             echo ""
-            echo "=== VERIFY CODE VERSION ==="
-            docker exec platform-ebook-publisher-1 grep -m1 "up to 120s\|up to 30s\|proceeding anyway\|Still loading after" /app/src/agents/publisherHotmartAffiliate.js 2>/dev/null || echo "grep failed"
-            echo ""
-            echo "=== LOGS (last ${{ inputs.lines }} lines, since ${{ inputs.since }}) ==="
-            docker logs platform-ebook-publisher-1 --tail ${{ inputs.lines }} --since ${{ inputs.since }} 2>&1
+
+            # Dashboard
+            if [ "$CONTAINER" = "dashboard" ] || [ "$CONTAINER" = "both" ]; then
+              echo "========================================================"
+              echo "  LOGS — platform-ebook-publisher-1 (dashboard)"
+              echo "  últimas $LINES linhas | desde $SINCE"
+              echo "========================================================"
+              docker logs platform-ebook-publisher-1 \
+                --tail "$LINES" --since "$SINCE" 2>&1 || echo "(container não encontrado)"
+              echo ""
+            fi
+
+            # MegaAgent
+            if [ "$CONTAINER" = "mega-agent" ] || [ "$CONTAINER" = "both" ]; then
+              echo "========================================================"
+              echo "  LOGS — platform-ebook-mega-agent-1 (geração/publicação)"
+              echo "  últimas $LINES linhas | desde $SINCE"
+              echo "========================================================"
+              docker logs platform-ebook-mega-agent-1 \
+                --tail "$LINES" --since "$SINCE" 2>&1 || echo "(container não encontrado)"
+            fi

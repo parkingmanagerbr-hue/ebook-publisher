@@ -741,9 +741,10 @@ tr:hover td{background:rgba(99,102,241,.03)}
             <label class="form-label">Tópico específico (opcional)</label>
             <input class="form-control" id="force-topic" placeholder="Ex: Marketing Digital...">
           </div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-primary" onclick="triggerAgent()">⚡ Forçar Ciclo</button>
             <button class="btn btn-outline" onclick="pauseAgent()" id="btn-pause-agent">⏸ Pausar</button>
+            <button class="btn btn-outline btn-sm" onclick="syncSales()" title="Puxa vendas reais do Cakto e Hotmart e atualiza métricas">📊 Sync Vendas</button>
           </div>
           <div id="agent-control-status" style="margin-top:10px;font-size:12px;color:var(--text3)"></div>
         </div>
@@ -1347,6 +1348,13 @@ function resetAI() {
 // ═══════════════════════════════════════════════════════
 //  Agent controls
 // ═══════════════════════════════════════════════════════
+function syncSales() {
+  appendLog({level:'info',store:'agent',message:'📊 Sincronizando vendas das plataformas...'});
+  apiFetch(API + '/agent/sync-sales', 'POST')
+    .then(function(d) { appendLog({level:'info',store:'agent',message:'✅ ' + (d.message||'Sincronização iniciada')}); })
+    .catch(function() { appendLog({level:'warn',store:'agent',message:'⚠️ Erro ao sincronizar vendas'}); });
+}
+
 function triggerAgent() {
   var topic = ($('force-topic') && $('force-topic').value.trim()) || null;
   apiFetch(API + '/agent/trigger', 'POST', { topic: topic }).then(function(d) {

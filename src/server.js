@@ -213,6 +213,19 @@ server.listen(PORT, async () => {
     logger.info('Session watcher started');
   } catch (e) { logger.warn('sessionAgent: ' + e.message); }
 
+  // Sincronização de vendas reais (Cakto + Hotmart) a cada 6 horas
+  try {
+    const cron = require('node-cron');
+    cron.schedule('0 */6 * * *', async () => {
+      logger.info('📊 [cron] Sincronizando vendas das plataformas...');
+      try {
+        const { syncSalesFromPlatforms } = require('./agents/learningAgent');
+        await syncSalesFromPlatforms();
+      } catch (e) { logger.warn('syncSales cron: ' + e.message); }
+    });
+    logger.info('Sales sync cron: a cada 6h');
+  } catch (e) { logger.warn('Sales sync cron setup: ' + e.message); }
+
   // Autonomous agent — só inicia se NÃO estiver em modo dashboard-only.
   // (megaAgent.js é o loop de publicação ativo; evitar dois loops simultâneos.)
   if (process.env.DASHBOARD_ONLY === '1') {

@@ -144,11 +144,167 @@ function generateInsight(topicScores, allEbooks, stats) {
   return `Com ${stats.totalSales} vendas acumuladas, o sistema está aprendendo. Próximo foco: ${topTopic.topic}.`;
 }
 
+// ─── Sincronização real de vendas via APIs das plataformas ──────────────────
+
+async function fetchCaktoSales(cookieStr) {
+  const https = require('https');
+  return new Promise((resolve) => {
+    const req = https.get(
+      'https://api.cakto.com.br/api/sales/?limit=200&ordering=-created_at',
+      {
+        headers: {
+          Cookie: cookieStr,
+          Accept: 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+        },
+      },
+      (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => {
+          try { resolve(JSON.parse(d)); }
+          catch { resolve(null); }
+        });
+      }
+    );
+    req.on('error', () => resolve(null));
+    req.setTimeout(15000, () => { req.destroy(); resolve(null); });
+  });
+}
+
+async function fetchHotmartSales(jwt) {
+  if (!jwt) return null;
+  const https = require('https');
+  return new Promise((resolve) => {
+    const req = https.get(
+      'https://api-sec-vlc.hotmart.com/payment/api/v1/sales/history?page=0&max=200',
+      {
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+        },
+      },
+      (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => {
+          try { resolve(JSON.parse(d)); }
+          catch { resolve(null); }
+        });
+      }
+    );
+    req.on('error', () => resolve(null));
+    req.setTimeout(15000, () => { req.destroy(); resolve(null); });
+  });
+}
+
 async function syncSalesFromPlatforms() {
-  // TODO: Integrar com APIs da Cakto/Hotmart para puxar métricas reais
-  // Por enquanto, simula uma verificação
-  logger.info('Sincronizando métricas de vendas das plataformas...');
-  // Quando Cakto/Hotmart tiverem APIs abertas, buscar aqui
+  logger.info('🔄 Sincronizando métricas de vendas das plataformas...');
+  const fs   = require('fs');
+  const path = require('path');
+  const db   = getDb();
+
+  let syncedCakto = 0, syncedHotmart = 0;
+
+  // ── Cakto ──────────────────────────────────────────────────────────────────
+  try {
+    const SESS_DIR  = process.env.SESSIONS_DIR ||
+      (fs.existsSync('/app/data') ? '/app/data/sessions' : path.join(__dirname, '../../data/sessions'));
+    const caktoFile = path.join(SESS_DIR, 'cakto.json');
+    if (fs.existsSync(caktoFile)) {
+      const session   = JSON.parse(fs.readFileSync(caktoFile, 'utf8'));
+      const cookieStr = (session.cookies || []).map(c => `${c.name}=${c.value}`).join('; ');
+      const data      = await fetchCaktoSales(cookieStr);
+
+      if (data?.results && Array.isArray(data.results)) {
+        // data.results: [{ id, status, total_price, product_name, ... }]
+        const approved = data.results.filter(s => s.status === 'approved' || s.status === 'complete');
+        // Agrupar por offer/product_name e somar vendas
+        const byProduct = {};
+        for (const sale of approved) {
+          const key = (sale.product_name || sale.offer_name || '').slice(0, 60);
+          if (!key) continue;
+          if (!byProduct[key]) byProduct[key] = { sales: 0, revenue: 0 };
+          byProduct[key].sales++;
+          byProduct[key].revenue += parseFloat(sale.producer_net || sale.total_price || 0);
+        }
+
+        // Buscar ebook por título (correspondência aproximada)
+        const allEbooks = db.prepare('SELECT id, title, cakto_url FROM ebooks WHERE status = ?').all('published');
+        for (const [productName, stats] of Object.entries(byProduct)) {
+          const ebook = allEbooks.find(e =>
+            e.title && (
+              e.title.toLowerCase().slice(0, 30) === productName.toLowerCase().slice(0, 30) ||
+              productName.toLowerCase().includes(e.title.toLowerCase().slice(0, 20))
+            )
+          );
+          if (!ebook) continue;
+          // Só atualiza se os dados mudaram (evita writes desnecessários)
+          const current = db.prepare('SELECT sales_count, revenue FROM ebooks WHERE id = ?').get(ebook.id);
+          if (current && current.sales_count < stats.sales) {
+            db.prepare('UPDATE ebooks SET sales_count = ?, revenue = ? WHERE id = ?')
+              .run(stats.sales, stats.revenue, ebook.id);
+            syncedCakto++;
+          }
+        }
+        logger.info(`  ✅ Cakto: ${approved.length} vendas aprovadas | ${syncedCakto} ebooks atualizados`);
+      }
+    }
+  } catch (e) {
+    logger.warn(`  ⚠️  Cakto sync erro: ${e.message.slice(0, 80)}`);
+  }
+
+  // ── Hotmart ────────────────────────────────────────────────────────────────
+  try {
+    const SESS_DIR     = process.env.SESSIONS_DIR ||
+      (fs.existsSync('/app/data') ? '/app/data/sessions' : path.join(__dirname, '../../data/sessions'));
+    const hotmartFile  = path.join(SESS_DIR, 'hotmart.json');
+    if (fs.existsSync(hotmartFile)) {
+      const session = JSON.parse(fs.readFileSync(hotmartFile, 'utf8'));
+      const jwt     = session.localStorage?.token;
+      if (jwt) {
+        const data = await fetchHotmartSales(jwt);
+        const items = data?.items || data?.data || [];
+        if (items.length > 0) {
+          const approved = items.filter(s => s.purchase?.status === 'APPROVED');
+          const byProduct = {};
+          for (const sale of approved) {
+            const name = (sale.product?.name || '').slice(0, 60);
+            if (!name) continue;
+            if (!byProduct[name]) byProduct[name] = { sales: 0, revenue: 0 };
+            byProduct[name].sales++;
+            byProduct[name].revenue += parseFloat(sale.purchase?.price?.value || 0);
+          }
+
+          const allEbooks = db.prepare('SELECT id, title FROM ebooks WHERE hotmart_product_id IS NOT NULL').all();
+          for (const [productName, stats] of Object.entries(byProduct)) {
+            const ebook = allEbooks.find(e =>
+              e.title && e.title.toLowerCase().slice(0, 30) === productName.toLowerCase().slice(0, 30)
+            );
+            if (!ebook) continue;
+            const current = db.prepare('SELECT sales_count FROM ebooks WHERE id = ?').get(ebook.id);
+            if (current && current.sales_count < stats.sales) {
+              db.prepare('UPDATE ebooks SET sales_count = ?, revenue = revenue + ? WHERE id = ?')
+                .run(stats.sales, stats.revenue, ebook.id);
+              syncedHotmart++;
+            }
+          }
+          logger.info(`  ✅ Hotmart: ${approved.length} vendas aprovadas | ${syncedHotmart} ebooks atualizados`);
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn(`  ⚠️  Hotmart sync erro: ${e.message.slice(0, 80)}`);
+  }
+
+  if (syncedCakto + syncedHotmart > 0) {
+    logger.info(`📈 Métricas de vendas atualizadas: ${syncedCakto} Cakto + ${syncedHotmart} Hotmart`);
+  } else {
+    logger.info('   Sem atualizações de vendas neste ciclo.');
+  }
+
+  return { syncedCakto, syncedHotmart };
 }
 
 module.exports = { runLearningCycle, syncSalesFromPlatforms };

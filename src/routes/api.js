@@ -289,6 +289,18 @@ router.post('/agent/trigger', requireAuth, (req, res) => {
   }
 });
 
+// POST /api/agent/sync-sales — Sincronizar vendas das plataformas agora
+router.post('/agent/sync-sales', requireAuth, (req, res) => {
+  res.json({ ok: true, message: 'Sincronização de vendas iniciada em background' });
+  setImmediate(async () => {
+    try {
+      const { syncSalesFromPlatforms } = require('../agents/learningAgent');
+      const result = await syncSalesFromPlatforms();
+      console.info('[api] sync-sales concluído:', result);
+    } catch (e) { console.error('[api] sync-sales erro:', e.message); }
+  });
+});
+
 
 // ─── Public Status Route (no auth required) ──────────────────────────────────
 
