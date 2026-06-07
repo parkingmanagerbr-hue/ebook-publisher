@@ -9,19 +9,35 @@
  * @param {import('better-sqlite3').Database} db
  */
 function runMigrations(db) {
-  // Ensure amazon columns exist (added in v2)
+  // Ensure all columns exist (idempotent — safe to run on any DB version)
   const cols = db.pragma('table_info(ebooks)').map(c => c.name);
 
+  // v2: Amazon KDP columns
   if (!cols.includes('amazon_product_id')) {
     db.exec("ALTER TABLE ebooks ADD COLUMN amazon_product_id TEXT");
   }
   if (!cols.includes('amazon_url')) {
     db.exec("ALTER TABLE ebooks ADD COLUMN amazon_url TEXT");
   }
-
-  // ml_score column on ebooks for PriorityScorer caching
+  // v2.1: Amazon ASIN (separate from product_id for clarity)
+  if (!cols.includes('amazon_asin')) {
+    db.exec("ALTER TABLE ebooks ADD COLUMN amazon_asin TEXT");
+  }
+  // v2.2: ML score cache on ebook row
   if (!cols.includes('ml_score')) {
     db.exec("ALTER TABLE ebooks ADD COLUMN ml_score REAL DEFAULT 0");
+  }
+  // v2.3: AI provider used for generation
+  if (!cols.includes('ai_provider')) {
+    db.exec("ALTER TABLE ebooks ADD COLUMN ai_provider TEXT");
+  }
+  // v2.4: Language of the ebook
+  if (!cols.includes('language')) {
+    db.exec("ALTER TABLE ebooks ADD COLUMN language TEXT DEFAULT 'pt-BR'");
+  }
+  // v2.5: Word count
+  if (!cols.includes('word_count')) {
+    db.exec("ALTER TABLE ebooks ADD COLUMN word_count INTEGER DEFAULT 0");
   }
 
   // publishing_queue table
@@ -38,6 +54,26 @@ function runMigrations(db) {
       FOREIGN KEY (ebook_id) REFERENCES ebooks(id)
     );
     CREATE INDEX IF NOT EXISTS idx_queue_status ON publishing_queue(status, platform);
+  `);
+
+  // affiliate_products table (used by affiliateAgent + landingPageAgent)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS affiliate_products (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform         TEXT NOT NULL,
+      product_id       TEXT,
+      product_name     TEXT NOT NULL,
+      product_url      TEXT,
+      affiliate_link   TEXT,
+      category         TEXT,
+      price            REAL,
+      commission_pct   REAL,
+      landing_page_url TEXT,
+      created_at       TEXT DEFAULT (datetime('now')),
+      UNIQUE(platform, product_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_affiliate_platform ON affiliate_products(platform);
+    CREATE INDEX IF NOT EXISTS idx_affiliate_lp ON affiliate_products(landing_page_url);
   `);
 }
 

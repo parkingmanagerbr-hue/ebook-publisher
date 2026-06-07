@@ -48,11 +48,13 @@ class Ebook {
 
     // Flatten platform data from DB columns
     this.hotmartProductId = props.hotmartProductId || props.hotmart_product_id || null;
-    this.hotmartUrl       = props.hotmartUrl || props.hotmart_url || null;
-    this.caktoProductId   = props.caktoProductId || props.cakto_product_id || null;
-    this.caktoUrl         = props.caktoUrl || props.cakto_url || null;
-    this.amazonProductId  = props.amazonProductId || props.amazon_product_id || null;
-    this.amazonUrl        = props.amazonUrl || props.amazon_url || null;
+    this.hotmartUrl       = props.hotmartUrl       || props.hotmart_url        || null;
+    this.caktoProductId   = props.caktoProductId   || props.cakto_product_id   || null;
+    this.caktoUrl         = props.caktoUrl         || props.cakto_url          || null;
+    // Amazon: uses ASIN as canonical product identifier
+    this.amazonAsin       = props.amazonAsin       || props.amazon_asin        || props.amazonProductId || props.amazon_product_id || null;
+    this.amazonProductId  = this.amazonAsin; // alias for backwards compat
+    this.amazonUrl        = props.amazonUrl        || props.amazon_url         || null;
   }
 
   /** @returns {boolean} */
@@ -79,7 +81,7 @@ class Ebook {
   markPublished(platform, productId, url) {
     if (platform === 'hotmart') { this.hotmartProductId = productId; this.hotmartUrl = url; }
     if (platform === 'cakto')   { this.caktoProductId = productId;   this.caktoUrl = url; }
-    if (platform === 'amazon')  { this.amazonProductId = productId;  this.amazonUrl = url; }
+    if (platform === 'amazon')  { this.amazonAsin = productId; this.amazonProductId = productId; this.amazonUrl = url; }
 
     if (this.publishedCount() > 0) {
       this.status = 'published';
@@ -112,6 +114,7 @@ class Ebook {
       hotmartUrl:      this.hotmartUrl,
       caktoProductId:  this.caktoProductId,
       caktoUrl:        this.caktoUrl,
+      amazonAsin:      this.amazonAsin,
       amazonProductId: this.amazonProductId,
       amazonUrl:       this.amazonUrl,
       publishedCount:  this.publishedCount(),
@@ -119,30 +122,34 @@ class Ebook {
   }
 
   /**
-   * Factory from raw DB row
+   * Factory from raw DB row — maps all snake_case columns to camelCase props
    * @param {Object} row
    * @returns {Ebook}
    */
   static fromDbRow(row) {
     return new Ebook({
-      id:              row.id,
-      topic:           row.topic,
-      title:           row.title,
-      subtitle:        row.subtitle,
-      description:     row.description,
-      coverPath:       row.cover_path,
-      pdfPath:         row.pdf_path,
-      status:          row.status,
-      price:           row.price,
-      salesCount:      row.sales_count,
-      revenue:         row.revenue,
-      aiProvider:      row.ai_provider,
-      createdAt:       row.created_at,
-      publishedAt:     row.published_at,
+      id:               row.id,
+      topic:            row.topic,
+      title:            row.title,
+      subtitle:         row.subtitle,
+      description:      row.description,
+      coverPath:        row.cover_path,
+      pdfPath:          row.pdf_path,
+      status:           row.status,
+      price:            row.price,
+      salesCount:       row.sales_count,
+      revenue:          row.revenue,
+      aiProvider:       row.ai_provider,
+      createdAt:        row.created_at,
+      publishedAt:      row.published_at,
       hotmartProductId: row.hotmart_product_id,
-      hotmartUrl:      row.hotmart_url,
-      caktoProductId:  row.cakto_product_id,
-      caktoUrl:        row.cakto_url,
+      hotmartUrl:       row.hotmart_url,
+      caktoProductId:   row.cakto_product_id,
+      caktoUrl:         row.cakto_url,
+      amazonAsin:       row.amazon_asin || row.amazon_product_id,
+      amazonUrl:        row.amazon_url,
+      language:         row.language,
+      wordCount:        row.word_count,
     });
   }
 }

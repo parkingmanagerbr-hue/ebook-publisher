@@ -80,7 +80,8 @@ class EbookRepository extends IEbookRepository {
   }
 
   async markPublished(id, platform, productId, url) {
-    const colId  = `${platform}_product_id`;
+    // Amazon uses 'amazon_asin' as the canonical ID field; other platforms use '{platform}_product_id'
+    const colId  = platform === 'amazon' ? 'amazon_asin' : `${platform}_product_id`;
     const colUrl = `${platform}_url`;
     this.db.prepare(`
       UPDATE ebooks
@@ -92,12 +93,15 @@ class EbookRepository extends IEbookRepository {
 
   async getStats() {
     const total   = this.db.prepare("SELECT COUNT(*) as n FROM ebooks").get().n;
+    const published = this.db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status = 'published'").get().n;
     const hotmart = this.db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE hotmart_product_id IS NOT NULL AND hotmart_product_id != ''").get().n;
     const cakto   = this.db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE cakto_product_id IS NOT NULL AND cakto_product_id != ''").get().n;
-    const amazon  = this.db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE amazon_product_id IS NOT NULL AND amazon_product_id != ''").get().n || 0;
-    const pending = this.db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE pdf_path IS NOT NULL AND (hotmart_product_id IS NULL OR cakto_product_id IS NULL)").get().n;
+    const amazon  = this.db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE (amazon_asin IS NOT NULL AND amazon_asin != '') OR (amazon_url IS NOT NULL AND amazon_url != '')").get().n;
+    const pending = this.db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status IN ('ready','pending') AND pdf_path IS NOT NULL").get().n;
+    const errors  = this.db.prepare("SELECT COUNT(*) as n FROM ebooks WHERE status = 'error'").get().n;
     const revenue = this.db.prepare("SELECT COALESCE(SUM(revenue),0) as r FROM ebooks").get().r;
-    return { total, hotmart, cakto, amazon, pending, revenue };
+    const sales   = this.db.prepare("SELECT COALESCE(SUM(sales_count),0) as s FROM ebooks").get().s;
+    return { total, published, hotmart, cakto, amazon, pending, errors, revenue, sales };
   }
 }
 
