@@ -25,14 +25,15 @@ const sleep     = ms => new Promise(r => setTimeout(r, ms));
 
 let log;
 try {
-  const L = require('../core/Logger');
-  log = L.createLogger ? L.createLogger('hotmailOtp') : null;
-} catch {}
-if (!log) log = {
-  info:  (...a) => console.log('[hotmailOtp]',  ...a),
-  warn:  (...a) => console.warn('[hotmailOtp]', ...a),
-  error: (...a) => console.error('[hotmailOtp]', ...a),
-};
+  const { createLogger } = require('../core/logger');
+  log = createLogger('hotmailOtp');
+} catch {
+  log = {
+    info:  (...a) => console.log('[hotmailOtp]',  ...a),
+    warn:  (...a) => console.warn('[hotmailOtp]', ...a),
+    error: (...a) => console.error('[hotmailOtp]', ...a),
+  };
+}
 
 // ── Config ────────────────────────────────────────────────────────────────────
 function cfg() {

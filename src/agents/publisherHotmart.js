@@ -23,8 +23,8 @@ const DEFAULT_PRICE = process.env.HOTMART_PRICE || '4,99';
 
 let log;
 try {
-  const L = require('../core/Logger');
-  log = L.createLogger ? L.createLogger('hotmart') : { info: console.log, warn: console.warn, error: console.error };
+  const { createLogger } = require('../core/logger');
+  log = createLogger('hotmart');
 } catch(e) {
   log = { info: (...a) => console.log('[hotmart]', ...a), warn: (...a) => console.warn('[hotmart]', ...a), error: (...a) => console.error('[hotmart]', ...a) };
 }

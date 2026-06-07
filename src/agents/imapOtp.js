@@ -16,14 +16,17 @@
 let ImapFlow;
 try { ({ ImapFlow } = require('imapflow')); } catch { ImapFlow = null; }
 
-const L = (() => {
-  try { const m = require('../utils/logger'); return m.createLogger ? m.createLogger('imapOtp') : null; } catch { return null; }
-})();
-const log = L || {
-  info: (...a) => console.log('[imapOtp]', ...a),
-  warn: (...a) => console.warn('[imapOtp]', ...a),
-  error: (...a) => console.error('[imapOtp]', ...a),
-};
+let log;
+try {
+  const { createLogger } = require('../core/logger');
+  log = createLogger('imapOtp');
+} catch {
+  log = {
+    info:  (...a) => console.log('[imapOtp]',  ...a),
+    warn:  (...a) => console.warn('[imapOtp]', ...a),
+    error: (...a) => console.error('[imapOtp]', ...a),
+  };
+}
 
 function cfg() {
   return {

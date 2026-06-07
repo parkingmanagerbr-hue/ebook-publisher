@@ -14,8 +14,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let log;
 try {
-  const L = require('../core/Logger');
-  log = L.createLogger ? L.createLogger('cakto') : { info: console.log, warn: console.warn, error: console.error };
+  const { createLogger } = require('../core/logger');
+  log = createLogger('cakto');
 } catch(e) {
   log = { info: (...a) => console.log('[cakto]', ...a), warn: (...a) => console.warn('[cakto]', ...a), error: (...a) => console.error('[cakto]', ...a) };
 }
