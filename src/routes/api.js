@@ -497,6 +497,26 @@ router.post('/affiliate-products/discover', requireAuth, (req, res) => {
   });
 });
 
+// POST /api/affiliate-products/:id/generate-lp — Gera LP para produto específico
+router.post('/affiliate-products/:id/generate-lp', requireAuth, (req, res) => {
+  const id = parseInt(req.params.id);
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+  res.json({ ok: true, message: 'Geração de landing page iniciada em background', id });
+  setImmediate(async () => {
+    try {
+      const db = getAffiliateDb();
+      const product = db.prepare('SELECT * FROM affiliate_products WHERE id = ?').get(id);
+      if (!product) return console.error('[api] Produto não encontrado:', id);
+      if (!product.affiliate_link) return console.error('[api] Produto sem affiliate_link:', id);
+
+      const { deployLandingPage } = require('../agents/landingPageAgent');
+      const result = await deployLandingPage(product);
+      console.info('[api] LP gerada:', result.landingPageUrl);
+    } catch (e) { console.error('[api] generate-lp error:', e.message); }
+  });
+});
+
 // GET /api/landing-pages
 router.get('/landing-pages', requireAuth, (req, res) => {
   try {

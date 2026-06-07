@@ -232,7 +232,30 @@ async function publishReadyEbooks() {
     if (results.amazon?.asin) statusUpdate.amazonAsin = results.amazon.asin;
     if (results.amazon?.url) statusUpdate.amazonUrl = results.amazon.url;
     updateEbookStatus(ebook.id, anyOk ? 'published' : 'ready', statusUpdate);
-    if (anyOk) published++;
+    if (anyOk) {
+      published++;
+      // Auto-configurar programa de afiliados no ebook recém publicado
+      setImmediate(async () => {
+        try {
+          const hotmartId = results.hotmart?.hotmartProductId || results.hotmart?.productId || ebook.hotmart_product_id;
+          const caktoId   = results.cakto?.caktoProductId || results.cakto?.productId || ebook.cakto_product_id;
+          if (hotmartId && process.env.AUTO_PUBLISH_HOTMART !== 'false') {
+            const { setupSingleAffiliate: hmAffiliate } = require('../agents/publisherHotmartAffiliate');
+            await hmAffiliate(hotmartId, { commission: 50, autoApprove: true }).catch(e =>
+              logger.warn('[affiliate-auto] Hotmart ' + hotmartId + ': ' + e.message.slice(0, 80))
+            );
+          }
+          if (caktoId && process.env.AUTO_PUBLISH_CAKTO !== 'false') {
+            const { setupSingleAffiliate: caktoAffiliate } = require('../agents/publisherCaktoAffiliate');
+            await caktoAffiliate(caktoId, { commission: 50, autoApprove: true }).catch(e =>
+              logger.warn('[affiliate-auto] Cakto ' + caktoId + ': ' + e.message.slice(0, 80))
+            );
+          }
+        } catch (e) {
+          logger.warn('[affiliate-auto] erro (nao critico): ' + e.message.slice(0, 80));
+        }
+      });
+    }
     await new Promise(r => setTimeout(r, 5000));
   }
   logger.info('[publish-ready] Concluido: ' + published + '/' + readyEbooks.length + ' publicados');

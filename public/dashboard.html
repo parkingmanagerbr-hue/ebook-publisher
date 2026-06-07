@@ -1393,6 +1393,17 @@ function resetAI() {
 // ═══════════════════════════════════════════════════════
 //  Agent controls
 // ═══════════════════════════════════════════════════════
+function generateLpFor(id) {
+  var btn = event && event.target;
+  if(btn) btn.textContent = '...';
+  apiFetch(API + '/affiliate-products/' + id + '/generate-lp', 'POST')
+    .then(function(d) {
+      appendLog({level:'info',store:'affiliates',message:'LP: ' + (d.message||'Gerando...')});
+      setTimeout(loadAffiliateStats, 5000);
+    })
+    .catch(function() { appendLog({level:'warn',store:'affiliates',message:'Erro ao gerar LP'}); });
+}
+
 function syncSales() {
   appendLog({level:'info',store:'agent',message:'📊 Sincronizando vendas das plataformas...'});
   apiFetch(API + '/agent/sync-sales', 'POST')
@@ -1501,12 +1512,15 @@ function loadAffiliateStats() {
           : '<span style="color:var(--text3);font-size:11px">sem LP</span>';
         var platBadge = '<span class="badge badge-'+(p.platform==='hotmart'?'yellow':p.platform==='cakto'?'blue':'gray')+'">'+p.platform+'</span>';
         var affHref = (p.affiliate_link||'#').replace(/"/g,'%22');
+        var genLpBtn = (!p.landing_page_url && p.affiliate_link)
+          ? '<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="generateLpFor('+p.id+')" title="Gerar Landing Page">LP</button>'
+          : '';
         return '<tr>' +
           '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(p.product_name)+'</td>' +
           '<td>'+platBadge+'</td>' +
           '<td style="color:var(--yellow);font-weight:700">'+(p.click_count||0)+'</td>' +
           '<td style="color:var(--purple)">'+(p.commission_pct?p.commission_pct+'%':'—')+'</td>' +
-          '<td>'+lpLink+'</td>' +
+          '<td>'+lpLink+genLpBtn+'</td>' +
           '<td><a href="'+affHref+'" target="_blank" class="btn btn-outline btn-sm">Link</a></td>' +
           '</tr>';
       }).join('');
