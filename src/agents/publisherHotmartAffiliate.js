@@ -20,7 +20,8 @@ const puppeteer = require('puppeteer');
 const { createLogger } = require('../core/logger');
 const log = createLogger('hotmart-affiliate');
 
-const SESSION_FILE = process.env.HOTMART_SESSION_FILE || '/app/data/sessions/hotmart.json';
+const { resolveSessionFile } = require('../core/sessionPath');
+const SESSION_FILE = resolveSessionFile('hotmart', 'HOTMART_SESSION_FILE');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── JWT expiry extension (no signature verification — SPA trusts its own tokens) ──

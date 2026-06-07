@@ -21,7 +21,8 @@ try {
 }
 
 const BASE_URL        = 'https://app.cakto.com.br';
-const SESSION_FILE    = process.env.CAKTO_SESSION_FILE || '/app/data/sessions/cakto.json';
+const { resolveSessionFile } = require('../core/sessionPath');
+const SESSION_FILE    = resolveSessionFile('cakto', 'CAKTO_SESSION_FILE');
 const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR   || '/app/data/landing_screenshots';
 const LOGS_DIR        = '/app/data/logs';
 const DEFAULT_PRICE   = parseFloat(process.env.EBOOK_PRICE || '4.99');

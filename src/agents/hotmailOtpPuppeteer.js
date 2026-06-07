@@ -40,7 +40,7 @@ function cfg() {
   return {
     email:    process.env.HOTMAIL_EMAIL    || process.env.CAKTO_EMAIL    || 'mrovariz@hotmail.com',
     password: process.env.HOTMAIL_PASSWORD || process.env.CAKTO_PASSWORD || '',
-    session:  process.env.HOTMAIL_SESSION_FILE || '/app/data/sessions/hotmail.json',
+    session:  process.env.HOTMAIL_SESSION_FILE || require('../core/sessionPath').resolveSessionFile('hotmail', 'HOTMAIL_SESSION_FILE'),
   };
 }
 

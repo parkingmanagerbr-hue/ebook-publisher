@@ -14,7 +14,8 @@ const https = require('https');
 const { createLogger } = require('../core/logger');
 const log = createLogger('cakto-affiliate');
 
-const SESSION_FILE = process.env.CAKTO_SESSION_FILE || '/app/data/sessions/cakto.json';
+const { resolveSessionFile } = require('../core/sessionPath');
+const SESSION_FILE = resolveSessionFile('cakto', 'CAKTO_SESSION_FILE');
 // 32-char hex fake CSRF token — passes Django's pre-4.0 CSRF validation
 const FAKE_CSRF = 'abcdef1234567890abcdef1234567890';
 const sleep = ms => new Promise(r => setTimeout(r, ms));

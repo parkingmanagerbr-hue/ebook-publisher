@@ -17,7 +17,8 @@ const fs = require('fs');
 const path = require('path');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const SESSION_FILE = process.env.HOTMART_SESSION_FILE || '/app/data/sessions/hotmart.json';
+const { resolveSessionFile } = require('../core/sessionPath');
+const SESSION_FILE = resolveSessionFile('hotmart', 'HOTMART_SESSION_FILE');
 const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR || '/app/data/landing_screenshots';
 const DEFAULT_PRICE = process.env.HOTMART_PRICE || '4,99';
 

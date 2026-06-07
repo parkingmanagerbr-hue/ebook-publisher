@@ -27,7 +27,8 @@ const NEW_TITLE_URLS  = [
   'https://kdp.amazon.com/en_US/title-setup/kindle/new',
   'https://kdp.amazon.com/pt_BR/title-setup/kindle/new',
 ];
-const SESSION_FILE    = process.env.AMAZON_SESSION_FILE || '/app/data/sessions/amazon.json';
+const { resolveSessionFile } = require('../core/sessionPath');
+const SESSION_FILE    = resolveSessionFile('amazon', 'AMAZON_SESSION_FILE');
 const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR   || '/app/data/landing_screenshots';
 const LOGS_DIR        = '/app/data/logs';
 const AUTHOR_NAME     = process.env.KDP_AUTHOR_NAME || process.env.AUTHOR_NAME || 'GENIA Publishing';
