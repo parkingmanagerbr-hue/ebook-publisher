@@ -422,6 +422,70 @@ router.get('/affiliate-products', requireAuth, (req, res) => {
   }
 });
 
+// GET /api/affiliate-stats — Resumo de clicks e produtos por plataforma
+router.get('/affiliate-stats', requireAuth, (req, res) => {
+  try {
+    const db = getAffiliateDb();
+    const byPlatform = db.prepare(`
+      SELECT platform,
+             COUNT(*) as total_products,
+             SUM(CASE WHEN affiliate_link IS NOT NULL THEN 1 ELSE 0 END) as with_link,
+             SUM(CASE WHEN landing_page_url IS NOT NULL THEN 1 ELSE 0 END) as with_lp,
+             COALESCE(SUM(click_count), 0) as total_clicks
+      FROM affiliate_products GROUP BY platform
+    `).all();
+
+    const topClicked = db.prepare(`
+      SELECT product_name, platform, click_count, landing_page_url, affiliate_link
+      FROM affiliate_products WHERE click_count > 0 ORDER BY click_count DESC LIMIT 10
+    `).all();
+
+    const recentClicks = (() => {
+      try {
+        return db.prepare(`
+          SELECT ap.product_name, ac.platform, ac.clicked_at
+          FROM affiliate_clicks ac
+          JOIN affiliate_products ap ON ap.id = ac.product_id
+          ORDER BY ac.clicked_at DESC LIMIT 20
+        `).all();
+      } catch { return []; }
+    })();
+
+    res.json({ ok: true, byPlatform, topClicked, recentClicks });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/go/:id — Redirect de afiliado com tracking (sem auth — público)
+router.get('/go/:id', (req, res) => {
+  try {
+    const db = getAffiliateDb();
+    const product = db.prepare('SELECT * FROM affiliate_products WHERE id = ?').get(req.params.id);
+    if (!product || !product.affiliate_link) {
+      return res.status(404).send('Link não encontrado');
+    }
+
+    // Registra click
+    const crypto = require('crypto');
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    const ipHash = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
+
+    db.prepare('UPDATE affiliate_products SET click_count = click_count + 1 WHERE id = ?').run(product.id);
+    try {
+      db.prepare(`
+        INSERT INTO affiliate_clicks (product_id, platform, referer, user_agent, ip_hash)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(product.id, product.platform, req.get('referer') || '', (req.get('user-agent') || '').slice(0, 200), ipHash);
+    } catch (_) {}
+
+    // Redirect para o link de afiliado
+    res.redirect(302, product.affiliate_link);
+  } catch (e) {
+    res.status(500).send('Erro: ' + e.message);
+  }
+});
+
 // POST /api/affiliate-products/discover
 router.post('/affiliate-products/discover', requireAuth, (req, res) => {
   res.json({ ok: true, message: 'Descoberta de afiliados iniciada em background' });

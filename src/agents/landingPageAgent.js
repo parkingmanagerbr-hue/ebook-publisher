@@ -182,11 +182,21 @@ async function callGemini(prompt) {
 }
 
 // ── Generate landing page HTML ────────────────────────────────────────────────
+// Tracking URL — redireciona via /api/go/:id antes de ir ao affiliate_link
+// Permite contar clicks mesmo quando LP é no Vercel/Netlify
+function getTrackingUrl(product) {
+  const BASE_URL = process.env.TRACKING_BASE_URL ||
+    (process.env.DOMAIN ? 'https://' + process.env.DOMAIN : '');
+  return BASE_URL ? BASE_URL + '/api/go/' + product.id : product.affiliate_link;
+}
+
 async function generateHtml(product) {
   const slug = makeSlug(product.product_name);
   const subdomain = slug + '.' + BASE_DOMAIN;
   const canonicalUrl = 'https://' + subdomain;
   const price = product.price ? 'R$ ' + product.price.toFixed(2).replace('.', ',') : 'Confira o preço';
+  // Use tracking URL for click counting
+  product = { ...product, affiliate_link: getTrackingUrl(product) };
 
   const prompt = `Crie uma landing page HTML completa em português brasileiro para um produto de afiliado.
 
@@ -588,6 +598,8 @@ const LANGUAGES = [
 
 // Generate HTML in a specific language (reuses callGemini with language instruction)
 async function generateHtmlMultilang(product, langConfig) {
+  // Use tracking URL for click counting
+  product = { ...product, affiliate_link: getTrackingUrl(product) };
   const baseSlug = makeSlug(product.product_name);
   const slug = langConfig.prefix + baseSlug;
   const subdomain = slug + '.' + BASE_DOMAIN;

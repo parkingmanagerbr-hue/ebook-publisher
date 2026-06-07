@@ -523,97 +523,142 @@ tr:hover td{background:rgba(99,102,241,.03)}
          AFILIADOS
     ══════════════════════════════════════════════════════ -->
     <div id="section-affiliates" class="section-hidden">
-      <div class="affiliate-card" style="margin-bottom:20px">
-        <div class="affiliate-title">
-          🤝 Sistema de Afiliados — Hotmart
-          <div class="commission-badge">50% comissão</div>
-        </div>
-        <p class="affiliate-desc">
-          O Hotmart possui um sistema nativo de afiliados. Ao ativar para cada e-book, qualquer pessoa pode se cadastrar como afiliado
-          e receber <strong>50% do valor líquido</strong> de cada venda que realizar. O produtor fica com os outros 50%.
-          Com 71 e-books a R$4,99, isso significa que afiliados recebem ~R$2,00 por venda e você também.
-        </p>
-        <div class="affiliate-steps">
-          <div class="affiliate-step">
-            <div class="affiliate-step-num">1</div>
-            <div class="affiliate-step-title">Automação Puppeteer</div>
-            <div class="affiliate-step-desc">Script navega em cada produto no Hotmart → aba Afiliados → ativa programa → define 50% comissão.</div>
-          </div>
-          <div class="affiliate-step">
-            <div class="affiliate-step-num">2</div>
-            <div class="affiliate-step-title">Link de Afiliado</div>
-            <div class="affiliate-step-desc">Cada afiliado recebe um link único tipo <code style="font-size:10px">hotmart.com/product/XXXXX?ref=AFILIADO</code> para divulgar.</div>
-          </div>
-          <div class="affiliate-step">
-            <div class="affiliate-step-num">3</div>
-            <div class="affiliate-step-title">Hotmart Club</div>
-            <div class="affiliate-step-desc">Acesse: Afiliados → Mercado de Afiliados. Aprove afiliados manualmente ou deixe aprovação automática.</div>
-          </div>
-          <div class="affiliate-step">
-            <div class="affiliate-step-num">4</div>
-            <div class="affiliate-step-title">Pagamentos</div>
-            <div class="affiliate-step-desc">O Hotmart processa os repasses automaticamente no prazo estipulado (7–30 dias após venda confirmada).</div>
-          </div>
-        </div>
+
+      <!-- Tabs -->
+      <div style="display:flex;gap:4px;margin-bottom:20px;background:var(--bg3);padding:4px;border-radius:10px;width:fit-content">
+        <button class="btn btn-primary btn-sm" id="aff-tab-produtor" onclick="showAffTab('produtor')" style="border-radius:7px">&#x1F451; Como Produtor</button>
+        <button class="btn btn-outline btn-sm" id="aff-tab-afiliado" onclick="showAffTab('afiliado')" style="border-radius:7px">&#x1F517; Como Afiliado</button>
       </div>
 
-      <div class="two-col">
-        <div class="card">
-          <div class="card-title">🤖 Ativar Afiliados em Lote (Automático)</div>
-          <p style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.6">
-            O agente vai navegar em cada produto publicado no Hotmart e configurar o programa de afiliados com 50% de comissão.
-            Este processo leva ~2 min por produto (71 produtos ≈ 2h30m no total).
+      <!-- ABA PRODUTOR -->
+      <div id="aff-panel-produtor">
+        <div class="affiliate-card" style="margin-bottom:20px">
+          <div class="affiliate-title">
+            &#x1F451; Seus Produtos como Produtor &mdash; Ative o Programa de Afiliados
+            <div class="commission-badge">50% comiss&atilde;o</div>
+          </div>
+          <p class="affiliate-desc">
+            Ao ativar o programa de afiliados nos seus e-books, qualquer pessoa pode se cadastrar e divulgar seus produtos recebendo
+            <strong>50% do valor l&iacute;quido</strong> por venda. Voc&ecirc; fica com os outros 50% &mdash; vendas extras sem esfor&ccedil;o.
           </p>
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-            <label style="font-size:12px;color:var(--text2)">Comissão:</label>
-            <input type="number" id="aff-commission" value="50" min="10" max="80" step="5"
-              style="width:70px;padding:6px 10px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:13px;font-weight:700">
-            <span style="color:var(--text3);font-size:12px">% por venda líquida</span>
+          <div class="affiliate-steps">
+            <div class="affiliate-step">
+              <div class="affiliate-step-num">1</div>
+              <div class="affiliate-step-title">Ativa&ccedil;&atilde;o Autom&aacute;tica</div>
+              <div class="affiliate-step-desc">Agente navega em cada produto no Hotmart/Cakto &rarr; aba Afiliados &rarr; ativa programa &rarr; define comiss&atilde;o.</div>
+            </div>
+            <div class="affiliate-step">
+              <div class="affiliate-step-num">2</div>
+              <div class="affiliate-step-title">Link de Afiliado</div>
+              <div class="affiliate-step-desc">Cada afiliado recebe link &uacute;nico <code style="font-size:10px">hotmart.com/product/X?ref=AFILIADO</code> para divulgar.</div>
+            </div>
+            <div class="affiliate-step">
+              <div class="affiliate-step-num">3</div>
+              <div class="affiliate-step-title">Aprova&ccedil;&atilde;o</div>
+              <div class="affiliate-step-desc">Configure aprova&ccedil;&atilde;o autom&aacute;tica. Hotmart Club e Cakto gerenciam os afiliados cadastrados.</div>
+            </div>
+            <div class="affiliate-step">
+              <div class="affiliate-step-num">4</div>
+              <div class="affiliate-step-title">Repasse Autom&aacute;tico</div>
+              <div class="affiliate-step-desc">Plataformas processam pagamentos. Afiliados recebem em 7&ndash;30 dias ap&oacute;s venda confirmada.</div>
+            </div>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
-            <input type="checkbox" id="aff-auto-approve" checked>
-            <label for="aff-auto-approve" style="font-size:12px;color:var(--text2)">Aprovação automática de afiliados</label>
-          </div>
-          <button class="btn btn-primary" onclick="startAffiliateSetup()">
-            🚀 Ativar Afiliados em Todos os Produtos
-          </button>
-          <div id="aff-status" style="margin-top:12px;font-size:12px;color:var(--text3)"></div>
         </div>
-
-        <div class="card">
-          <div class="card-title">📊 Como Funciona</div>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <div style="display:flex;align-items:flex-start;gap:10px">
-              <span style="font-size:20px">💰</span>
-              <div>
-                <div style="font-size:12px;font-weight:600;margin-bottom:2px">Cálculo do Repasse</div>
-                <div style="font-size:11px;color:var(--text3);line-height:1.5">Preço R$4,99 → Taxa Hotmart ~10% → Valor líquido ≈ R$4,50 → Afiliado recebe R$2,25 → Você recebe R$2,25</div>
-              </div>
+        <div class="two-col">
+          <div class="card">
+            <div class="card-title">&#x1F916; Ativar Afiliados em Lote</div>
+            <p style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.6">
+              Configura automaticamente o programa de afiliados em todos os produtos publicados no Hotmart e Cakto.
+            </p>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+              <label style="font-size:12px;color:var(--text2)">Comiss&atilde;o:</label>
+              <input type="number" id="aff-commission" value="50" min="10" max="80" step="5"
+                style="width:70px;padding:6px 10px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:13px;font-weight:700">
+              <span style="color:var(--text3);font-size:12px">% por venda l&iacute;quida</span>
             </div>
-            <div style="display:flex;align-items:flex-start;gap:10px">
-              <span style="font-size:20px">🔗</span>
-              <div>
-                <div style="font-size:12px;font-weight:600;margin-bottom:2px">Link do Afiliado</div>
-                <div style="font-size:11px;color:var(--text3);line-height:1.5">Afiliado acessa Hotmart → Busca seus produtos → Pede para se afiliar → Recebe link único para divulgar.</div>
-              </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+              <input type="checkbox" id="aff-auto-approve" checked>
+              <label for="aff-auto-approve" style="font-size:12px;color:var(--text2)">Aprova&ccedil;&atilde;o autom&aacute;tica de afiliados</label>
             </div>
-            <div style="display:flex;align-items:flex-start;gap:10px">
-              <span style="font-size:20px">🏦</span>
-              <div>
-                <div style="font-size:12px;font-weight:600;margin-bottom:2px">Saque</div>
-                <div style="font-size:11px;color:var(--text3);line-height:1.5">Afiliados configuram conta bancária no próprio Hotmart. Saques após período de garantia (7 dias padrão).</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-primary" onclick="startAffiliateSetup('all')">&#x1F680; Hotmart + Cakto</button>
+              <button class="btn btn-outline btn-sm" onclick="startAffiliateSetup('hotmart')">&#x1F525; S&oacute; Hotmart</button>
+              <button class="btn btn-outline btn-sm" onclick="startAffiliateSetup('cakto')">&#x1F4B3; S&oacute; Cakto</button>
+            </div>
+            <div id="aff-status" style="margin-top:12px;font-size:12px;color:var(--text3)"></div>
+          </div>
+          <div class="card">
+            <div class="card-title">&#x1F4CA; Repasse por Venda</div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.9">
+              <div>&#x1F4B0; <b>Pre&ccedil;o:</b> R$4,99</div>
+              <div>&#x1F4C9; Taxa Hotmart (~10%): R$0,50</div>
+              <div>&#x1F7F0; Valor l&iacute;quido: ~R$4,49</div>
+              <div>&#x1F91D; Afiliado (50%): R$2,25</div>
+              <div>&#x2705; Voc&ecirc; (50%): <b style="color:var(--green)">R$2,25 por venda</b></div>
+              <div style="margin-top:10px;color:var(--text3);font-size:11px">
+                Com 100 e-books &times; 1 venda/m&ecirc;s cada: ~R$225/m&ecirc;s extra via afiliados.
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="card" style="margin-top:20px">
-        <div class="card-title">📋 Produtos com Afiliados Configurados</div>
-        <div id="aff-products-list" style="color:var(--text3);font-size:12px">
-          Após ativar o programa, a lista aparecerá aqui com o status de cada produto.
+      <!-- ABA AFILIADO -->
+      <div id="aff-panel-afiliado" style="display:none">
+        <div class="three-col" style="margin-bottom:20px">
+          <div class="stat-card accent">
+            <div class="stat-label">Produtos Descobertos</div>
+            <div class="stat-value" id="aff-stat-total">&#x2014;</div>
+            <div class="stat-sub">com link de afiliado</div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-label">Clicks Totais</div>
+            <div class="stat-value" id="aff-stat-clicks">&#x2014;</div>
+            <div class="stat-sub">via landing pages</div>
+          </div>
+          <div class="stat-card yellow">
+            <div class="stat-label">Landing Pages Ativas</div>
+            <div class="stat-value" id="aff-stat-lps">&#x2014;</div>
+            <div class="stat-sub">Vercel / Netlify / VPS</div>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-title">&#x2699;&#xFE0F; Pipeline de Afiliados</div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.6">
+            Descobre produtos de alta comiss&atilde;o nos marketplaces, gera landing pages em 10 idiomas e constroi um hub de backlinks.
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <button class="btn btn-primary" onclick="triggerAffiliateDiscover()">&#x1F50D; Descobrir Produtos</button>
+            <button class="btn btn-outline" onclick="triggerLandingPages()">&#x1F310; Gerar Landing Pages</button>
+            <button class="btn btn-outline" onclick="triggerBacklinks()">&#x1F517; Build Backlinks Hub</button>
+          </div>
+          <div id="aff-pipeline-status" style="font-size:11px;color:var(--text3)">
+            Fluxo: Descoberta &rarr; Link de Afiliado &rarr; Landing Page (10 idiomas) &rarr; Hub de Backlinks
+          </div>
+        </div>
+        <div id="aff-by-platform" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px">
+          <div style="color:var(--text3);font-size:12px">Carregando...</div>
+        </div>
+        <div class="section-label">&#x1F3C6; Top Produtos por Clicks</div>
+        <div class="table-wrap" style="margin-bottom:20px">
+          <table>
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th style="width:80px">Plataforma</th>
+                <th style="width:70px">Clicks</th>
+                <th style="width:80px">Comiss&atilde;o</th>
+                <th>Landing Page</th>
+                <th style="width:80px">A&ccedil;&otilde;es</th>
+              </tr>
+            </thead>
+            <tbody id="aff-products-tbody">
+              <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Clique em "Descobrir Produtos" para iniciar.</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
+
     </div><!-- /section-affiliates -->
 
 
@@ -1407,18 +1452,93 @@ function enableAmazon() {
 // ═══════════════════════════════════════════════════════
 //  Affiliates
 // ═══════════════════════════════════════════════════════
-function startAffiliateSetup() {
-  var commission = parseInt(($('aff-commission') && $('aff-commission').value) || '50');
+// ═══════════════════════════════════════════════════════
+//  Afiliados — tabs e dados
+// ═══════════════════════════════════════════════════════
+function showAffTab(tab) {
+  var p = document.getElementById('aff-panel-produtor');
+  var a = document.getElementById('aff-panel-afiliado');
+  if(p) p.style.display = tab === 'produtor' ? '' : 'none';
+  if(a) a.style.display = tab === 'afiliado' ? '' : 'none';
+  var btnP = $('aff-tab-produtor'), btnA = $('aff-tab-afiliado');
+  if(btnP) { btnP.className = 'btn btn-sm ' + (tab==='produtor'?'btn-primary':'btn-outline'); btnP.style.borderRadius='7px'; }
+  if(btnA) { btnA.className = 'btn btn-sm ' + (tab==='afiliado'?'btn-primary':'btn-outline'); btnA.style.borderRadius='7px'; }
+  if(tab === 'afiliado') loadAffiliateStats();
+}
+
+function loadAffiliateStats() {
+  apiFetch(API + '/affiliate-stats').then(function(d) {
+    if(!d.ok) return;
+    var totalProducts = 0, totalClicks = 0, totalLps = 0;
+    (d.byPlatform||[]).forEach(function(p) {
+      totalProducts += (p.with_link||0);
+      totalClicks   += (p.total_clicks||0);
+      totalLps      += (p.with_lp||0);
+    });
+    setText('aff-stat-total',  totalProducts);
+    setText('aff-stat-clicks', totalClicks);
+    setText('aff-stat-lps',    totalLps);
+
+    var platColors = { hotmart:'var(--yellow)', cakto:'var(--accent3)', amazon:'var(--blue)' };
+    var platIcons  = { hotmart:'&#x1F525;', cakto:'&#x1F4B3;', amazon:'&#x1F4E6;' };
+    var platHtml = (d.byPlatform||[]).map(function(p) {
+      var c = platColors[p.platform] || 'var(--text2)';
+      return '<div style="background:var(--bg3);border-radius:8px;padding:14px;border-top:3px solid '+c+'">' +
+        '<div style="font-size:12px;font-weight:700;margin-bottom:8px;color:'+c+'">'+(platIcons[p.platform]||'')+'&nbsp;'+p.platform.charAt(0).toUpperCase()+p.platform.slice(1)+'</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;color:var(--text2)">' +
+          '<div>Descobertos: <b>'+(p.total_products||0)+'</b></div>' +
+          '<div>Com link: <b style="color:var(--green)">'+(p.with_link||0)+'</b></div>' +
+          '<div>Com LP: <b style="color:var(--accent3)">'+(p.with_lp||0)+'</b></div>' +
+          '<div>Clicks: <b style="color:var(--yellow)">'+(p.total_clicks||0)+'</b></div>' +
+        '</div></div>';
+    }).join('');
+    setHtml('aff-by-platform', platHtml || '<div style="color:var(--text3);font-size:12px">Nenhum produto ainda. Clique em Descobrir Produtos.</div>');
+
+    function buildRows(products) {
+      return products.slice(0,50).map(function(p) {
+        var lpLink = p.landing_page_url
+          ? '<a href="'+p.landing_page_url+'" target="_blank" style="color:var(--green);font-size:11px">Ver LP</a>'
+          : '<span style="color:var(--text3);font-size:11px">sem LP</span>';
+        var platBadge = '<span class="badge badge-'+(p.platform==='hotmart'?'yellow':p.platform==='cakto'?'blue':'gray')+'">'+p.platform+'</span>';
+        var affHref = (p.affiliate_link||'#').replace(/"/g,'%22');
+        return '<tr>' +
+          '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(p.product_name)+'</td>' +
+          '<td>'+platBadge+'</td>' +
+          '<td style="color:var(--yellow);font-weight:700">'+(p.click_count||0)+'</td>' +
+          '<td style="color:var(--purple)">'+(p.commission_pct?p.commission_pct+'%':'—')+'</td>' +
+          '<td>'+lpLink+'</td>' +
+          '<td><a href="'+affHref+'" target="_blank" class="btn btn-outline btn-sm">Link</a></td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    if(d.topClicked && d.topClicked.length > 0) {
+      setHtml('aff-products-tbody', buildRows(d.topClicked));
+    } else {
+      apiFetch(API + '/affiliate-products').then(function(pd) {
+        var withLink = (pd.products||[]).filter(function(p){ return p.affiliate_link; });
+        setHtml('aff-products-tbody', withLink.length
+          ? buildRows(withLink)
+          : '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Clique em Descobrir Produtos para iniciar.</td></tr>');
+      }).catch(function(){});
+    }
+  }).catch(function() {
+    setHtml('aff-by-platform', '<div style="color:var(--text3);font-size:12px">Erro ao carregar dados.</div>');
+  });
+}
+
+function startAffiliateSetup(store) {
+  var commission  = parseInt(($('aff-commission') && $('aff-commission').value) || '50');
   var autoApprove = $('aff-auto-approve') && $('aff-auto-approve').checked;
-  setText('aff-status', '⏳ Iniciando configuração de afiliados para todos os produtos Hotmart...');
-  apiFetch('/api/v2/stores/affiliate/setup', 'POST', { commission: commission, autoApprove: autoApprove })
+  var storeParam  = store || 'all';
+  setText('aff-status', '⏳ Iniciando configuração de afiliados...');
+  apiFetch('/api/v2/stores/affiliate/setup', 'POST', { commission: commission, autoApprove: autoApprove, store: storeParam })
     .then(function(d) {
       setText('aff-status', '✅ ' + (d.message || 'Processo iniciado! Acompanhe no log.'));
-      appendLog({level:'info',store:'hotmart',message:'Afiliados iniciado: '+commission+'% comissão'});
+      appendLog({level:'info',store:'affiliates',message:'Afiliados: '+commission+'% | loja='+storeParam});
     })
     .catch(function() {
-      setText('aff-status', '⚠️ Endpoint de afiliados ainda não implementado. Execute manualmente no Hotmart → Meus Produtos → Afiliados.');
-      appendLog({level:'warn',store:'hotmart',message:'Afiliados: configure manualmente em app.hotmart.com/products/producer → produto → Afiliados → 50%'});
+      setText('aff-status', '⚠️ Configure manualmente: Hotmart → Produtos → Afiliados.');
     });
 }
 
@@ -1449,6 +1569,11 @@ function showSection(name) {
   if(name === 'stores')         loadStoresRecent();
   if(name === 'ai')             { loadAiStatus(); loadWebCredits(); }
   if(name === 'landing-pages')  loadLandingPages();
+  if(name === 'affiliates')     {
+    // Carregar stats se a aba afiliado estiver ativa
+    var affPanel = document.getElementById('aff-panel-afiliado');
+    if(affPanel && affPanel.style.display !== 'none') loadAffiliateStats();
+  }
 }
 
 // ═══════════════════════════════════════════════════════

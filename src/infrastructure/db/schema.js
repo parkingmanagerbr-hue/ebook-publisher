@@ -69,11 +69,35 @@ function runMigrations(db) {
       price            REAL,
       commission_pct   REAL,
       landing_page_url TEXT,
+      click_count      INTEGER DEFAULT 0,
       created_at       TEXT DEFAULT (datetime('now')),
       UNIQUE(platform, product_id)
     );
     CREATE INDEX IF NOT EXISTS idx_affiliate_platform ON affiliate_products(platform);
     CREATE INDEX IF NOT EXISTS idx_affiliate_lp ON affiliate_products(landing_page_url);
+  `);
+
+  // click_count column migration (for existing installs)
+  try {
+    const affCols = db.pragma('table_info(affiliate_products)').map(c => c.name);
+    if (!affCols.includes('click_count')) {
+      db.exec('ALTER TABLE affiliate_products ADD COLUMN click_count INTEGER DEFAULT 0');
+    }
+  } catch (_) {}
+
+  // affiliate_clicks log (granular click tracking per IP/day)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS affiliate_clicks (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id      INTEGER NOT NULL,
+      platform        TEXT,
+      referer         TEXT,
+      user_agent      TEXT,
+      ip_hash         TEXT,
+      clicked_at      TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_clicks_product ON affiliate_clicks(product_id);
+    CREATE INDEX IF NOT EXISTS idx_clicks_date ON affiliate_clicks(clicked_at);
   `);
 }
 
