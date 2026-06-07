@@ -30,6 +30,14 @@ try {
   generateHTMLCover = require('./coverAgentHTML').generateHTMLCover;
 } catch (_) {}
 
+// Carrega claudeDesignAgent com graceful fallback (requer ANTHROPIC_API_KEY)
+let claudeDesign = null;
+try {
+  if (process.env.ANTHROPIC_API_KEY) {
+    claudeDesign = require('./claudeDesignAgent');
+  }
+} catch (_) {}
+
 const COVERS_DIR = path.join(__dirname, '../../data/covers');
 
 // ─── Paletas por categoria ───────────────────────────────────────────────────
@@ -306,6 +314,24 @@ async function _generateCoverOnce(title, subtitle, topic) {
       }
     } catch (e) {
       logger.warn(`⚠️ Capa HTML viral falhou: ${e.message} — tentando Gemini Image`);
+    }
+  }
+
+  // ── Provider 0b: Claude Design (HTML/CSS via Anthropic) — fallback do HTML Gemini ──
+  if (claudeDesign) {
+    try {
+      logger.info('🤖 Provider 0b: Capa Claude Design (Anthropic HTML → Puppeteer)...');
+      const claudePath = await claudeDesign.generateEbookCover({
+        title, subtitle, topic,
+        author: process.env.AUTHOR_NAME || 'GENIA Editorial',
+        outputDir: COVERS_DIR,
+      });
+      if (claudePath && fs.existsSync(claudePath)) {
+        logger.info(`✅ Capa Claude Design gerada: ${path.basename(claudePath)}`);
+        return claudePath;
+      }
+    } catch (e) {
+      logger.warn(`⚠️ Claude Design falhou: ${e.message.slice(0, 80)} — tentando Gemini Image`);
     }
   }
 

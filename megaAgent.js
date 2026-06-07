@@ -99,6 +99,23 @@ async function generateAudiobookForEbook(ebookId, title, content) {
   return null;
 }
 
+// ── Sales sync ────────────────────────────────────────────────────────────────
+let _lastSalesSync = 0;
+const SALES_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+
+async function syncSalesIfNeeded() {
+  if (Date.now() - _lastSalesSync < SALES_SYNC_INTERVAL_MS) return;
+  _lastSalesSync = Date.now();
+  try {
+    log('[Sales] Sincronizando métricas de vendas (Cakto + Hotmart)...');
+    const { syncSalesFromPlatforms } = require('./src/agents/learningAgent');
+    const result = await syncSalesFromPlatforms();
+    log(`[Sales] Sync concluído: Cakto=${result.syncedCakto} Hotmart=${result.syncedHotmart}`);
+  } catch (e) {
+    log(`[Sales] ⚠️ Sync erro: ${e.message.slice(0, 80)}`);
+  }
+}
+
 // ── Topic injection ───────────────────────────────────────────────────────────
 async function refreshTrending() {
   const now = Date.now();
@@ -241,6 +258,9 @@ async function startLoop() {
 
   while (true) {
     try {
+      // Sync sales periodicamente (a cada 6h)
+      await syncSalesIfNeeded();
+
       const result = await runCycle();
       if (result) {
         errorStreak = 0;
