@@ -30,8 +30,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── DB setup ──────────────────────────────────────────────────────────────────
 const { resolveSessionFile } = require('../core/sessionPath');
-// Resolve DB path portável (Docker vs dev local)
-const _defaultDbDir = fs.existsSync('/app/data') ? '/app/data/db' : path.join(__dirname, '../../data/db');
+// Resolve DB path portável (Docker vs dev local).
+// Só usa /app/data quando realmente em Linux/Docker — no Windows C:\app\data pode existir
+// por acidente e desviaria o DB para fora do projeto.
+const _inDocker = process.platform !== 'win32' && fs.existsSync('/app/data');
+const _defaultDbDir = _inDocker ? '/app/data/db' : path.join(__dirname, '../../data/db');
 const DB_PATH = process.env.AFFILIATE_DB_PATH || path.join(_defaultDbDir, 'ebooks.db');
 
 let _db;
@@ -53,11 +56,20 @@ function getDb() {
       category     TEXT,
       price        REAL,
       commission_pct REAL,
+      commission_value REAL,
+      temperature  REAL,
+      status       TEXT,
       landing_page_url TEXT,
       created_at   TEXT DEFAULT (datetime('now')),
       UNIQUE(platform, product_id)
     )
   `);
+  // Migração leve para bancos antigos (colunas novas)
+  for (const [col, ddl] of [
+    ['commission_value', 'REAL'], ['temperature', 'REAL'], ['status', 'TEXT'],
+  ]) {
+    try { _db.exec(`ALTER TABLE affiliate_products ADD COLUMN ${col} ${ddl}`); } catch (_) {}
+  }
   return _db;
 }
 
@@ -65,30 +77,48 @@ function upsertProduct(row) {
   const db = getDb();
   db.prepare(`
     INSERT INTO affiliate_products
-      (platform, product_id, product_name, product_url, affiliate_link, category, price, commission_pct)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (platform, product_id, product_name, product_url, affiliate_link, category, price,
+       commission_pct, commission_value, temperature, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(platform, product_id) DO UPDATE SET
-      product_name   = excluded.product_name,
-      product_url    = excluded.product_url,
-      affiliate_link = COALESCE(excluded.affiliate_link, affiliate_link),
-      category       = excluded.category,
-      price          = excluded.price,
-      commission_pct = excluded.commission_pct
+      product_name     = excluded.product_name,
+      product_url      = COALESCE(excluded.product_url, product_url),
+      affiliate_link   = COALESCE(excluded.affiliate_link, affiliate_link),
+      category         = excluded.category,
+      price            = excluded.price,
+      commission_pct   = excluded.commission_pct,
+      commission_value = excluded.commission_value,
+      temperature      = excluded.temperature,
+      status           = COALESCE(excluded.status, status)
   `).run(
     row.platform, row.product_id, row.product_name, row.product_url,
-    row.affiliate_link, row.category, row.price, row.commission_pct
+    row.affiliate_link, row.category, row.price, row.commission_pct,
+    row.commission_value, row.temperature, row.status
   );
 }
 
 // ── Puppeteer launch config ───────────────────────────────────────────────────
+function resolveChrome() {
+  if (process.env.CHROME_EXECUTABLE) return process.env.CHROME_EXECUTABLE;
+  const cands = [
+    '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome',
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  ];
+  for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch (_) {} }
+  return undefined; // deixa o puppeteer usar o chromium embutido
+}
+
 function launchBrowser() {
-  return puppeteer.launch({
-    headless: true,
-    executablePath: process.env.CHROME_EXECUTABLE || '/usr/bin/chromium',
+  const opts = {
+    headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
            '--disable-blink-features=AutomationControlled'],
-    defaultViewport: { width: 1280, height: 900 },
-  });
+    defaultViewport: { width: 1366, height: 900 },
+  };
+  const exe = resolveChrome();
+  if (exe) opts.executablePath = exe;
+  return puppeteer.launch(opts);
 }
 
 // ── Session loader ────────────────────────────────────────────────────────────
@@ -111,10 +141,33 @@ async function injectSession(page, session) {
       Object.entries(ls).forEach(([k, v]) => { try { localStorage.setItem(k, v); } catch {} });
     }, session.localStorage);
   }
-  for (const c of (session.cookies || [])) {
+  const cookies = (session.cookies || []);
+  if (!cookies.length) return;
+  // Injeta via CDP Network.setCookies — preserva httpOnly/secure/domain (essencial p/ cookies do SSO).
+  try {
+    const client = await page.target().createCDPSession();
+    await client.send('Network.setCookies', {
+      cookies: cookies.map(c => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path || '/',
+        secure: c.secure !== false,
+        httpOnly: !!c.httpOnly,
+        sameSite: ['Strict', 'Lax', 'None'].includes(c.sameSite) ? c.sameSite : undefined,
+        expires: c.expires && c.expires > 0 ? c.expires : undefined,
+      })),
+    });
+    return;
+  } catch (e) {
+    log.warn('injectSession CDP falhou (' + e.message.slice(0, 60) + ') — fallback page.setCookie');
+  }
+  // Fallback: setCookie por cookie
+  for (const c of cookies) {
     try {
       const x = { ...c };
-      delete x.sameSite; delete x.sameParty;
+      delete x.sameParty;
+      if (!['Strict', 'Lax', 'None'].includes(x.sameSite)) delete x.sameSite;
       if (x.expires === -1) delete x.expires;
       if (!x.url) x.url = x.domain && x.domain.startsWith('.')
         ? 'https://' + x.domain.slice(1)
@@ -157,7 +210,44 @@ async function clickByText(page, texts, timeoutMs = 10000) {
 
 // ── HOTMART affiliate discovery ───────────────────────────────────────────────
 const HOTMART_SESSION_FILE = resolveSessionFile('hotmart', 'HOTMART_SESSION_FILE');
-const HOTMART_CATEGORIES   = ['Negócios e Carreira', 'Saúde e Esportes', 'Desenvolvimento Pessoal'];
+const HOTMART_MAX_PRODUCTS  = parseInt(process.env.AFFILIATE_MAX_PRODUCTS || '20');
+// Pedir afiliação é uma AÇÃO REAL na conta — só roda se explicitamente habilitado.
+const AUTO_REQUEST = String(process.env.AFFILIATE_AUTO_REQUEST || 'false').toLowerCase() === 'true';
+
+/**
+ * Solicita afiliação numa página de detalhe do Mercado de Afiliação do Hotmart.
+ * Botão verde "Solicitar afiliação" -> modal -> "Sim, quero me afiliar".
+ * Retorna { requested: bool, affiliateLink: string|null, approval: bool }.
+ */
+async function hotmartRequestAffiliation(detailPage) {
+  const clickedReq = await clickByText(detailPage, ['Solicitar afiliação', 'Solicitar afiliacao', 'Quero ser afiliado'], 4000);
+  if (!clickedReq) return { requested: false, affiliateLink: null, approval: false };
+  await sleep(1500);
+  // aceitar termos se houver checkbox
+  try {
+    await detailPage.evaluate(() => {
+      document.querySelectorAll('input[type="checkbox"]').forEach(cb => { if (!cb.checked) cb.click(); });
+    });
+  } catch (_) {}
+  const confirmed = await clickByText(detailPage, ['Sim, quero me afiliar', 'Quero me afiliar', 'Confirmar', 'Aceitar'], 4000);
+  await sleep(3500);
+  // capturar link de divulgação (go.hotmart.com) se a afiliação foi imediata
+  const affiliateLink = await detailPage.evaluate(() => {
+    const html = document.documentElement.innerHTML;
+    const m = html.match(/https?:\/\/go\.hotmart\.com\/[A-Za-z0-9?=&._-]+/i)
+      || html.match(/https?:\/\/(?:pay|app)\.hotmart\.com\/[A-Za-z0-9?=&._-]*ref=[A-Za-z0-9_-]+/i);
+    if (m) return m[0];
+    for (const inp of document.querySelectorAll('input, textarea')) {
+      if (inp.value && /hotmart\.com/.test(inp.value) && /(ref=|go\.hotmart)/.test(inp.value)) return inp.value;
+    }
+    return null;
+  }).catch(() => null);
+  // detecta se ficou "pendente de aprovação"
+  const approval = await detailPage.evaluate(() =>
+    /aprova[çc][aã]o pendente|aguardando aprova|solicita[çc][aã]o enviada|pendente de aprova/i.test(document.body.innerText)
+  ).catch(() => false);
+  return { requested: !!confirmed, affiliateLink, approval };
+}
 
 async function runHotmartAffiliate() {
   log.info('[Hotmart] Iniciando busca de afiliados...');
@@ -215,113 +305,85 @@ async function runHotmartAffiliate() {
       }
     }
 
-    // Wait for marketplace to load
-    await page.waitForFunction(
-      () => document.querySelectorAll('[class*="product"], [class*="card"], article').length > 2,
-      { timeout: 20000 }
-    ).catch(() => {});
+    // Aguarda os cards do Mercado de Afiliação carregarem (carregam via XHR)
+    await page.waitForSelector('a[href*="/market/details"], .product-card', { timeout: 25000 }).catch(() => {});
     await sleep(2000);
 
-    for (const category of HOTMART_CATEGORIES) {
-      log.info('[Hotmart] Categoria: ' + category);
-      try {
-        // Try to click the category filter
-        await clickByText(page, [category], 5000);
-        await sleep(2500);
+    // Scroll para carregar mais produtos ("Mais quentes" + grade)
+    for (let s = 0; s < 5; s++) {
+      await page.evaluate(() => window.scrollBy(0, 900));
+      await sleep(900);
+    }
 
-        // Scroll to load more products
-        for (let s = 0; s < 3; s++) {
-          await page.evaluate(() => window.scrollBy(0, 800));
-          await sleep(800);
-        }
-
-        // Extract products from page
-        const products = await page.evaluate(() => {
-          const items = [];
-          // Try various selectors for product cards
-          const cards = Array.from(document.querySelectorAll(
-            '[class*="product-card"], [class*="ProductCard"], [class*="card-product"], ' +
-            '[data-testid*="product"], article[class*="product"], [class*="marketplace-product"]'
-          ));
-          for (const card of cards.slice(0, 25)) {
-            const nameEl = card.querySelector('h2, h3, [class*="title"], [class*="name"]');
-            const priceEl = card.querySelector('[class*="price"], [class*="valor"]');
-            const linkEl = card.querySelector('a[href*="/product"], a[href*="hotmart"]') || card.closest('a');
-            const commEl = card.querySelector('[class*="commission"], [class*="comissao"]');
-            const name = (nameEl && nameEl.textContent.trim()) || '';
-            if (!name || name.length < 3) continue;
-            const priceText = priceEl ? priceEl.textContent.trim() : '';
-            const price = parseFloat(priceText.replace(/[^0-9,.]/g, '').replace(',', '.')) || 0;
-            const commText = commEl ? commEl.textContent.trim() : '';
-            const comm = parseFloat(commText.replace(/[^0-9]/g, '')) || 0;
-            const url = linkEl ? linkEl.href : '';
-            items.push({ name, price, commission: comm, url });
-          }
-          return items.slice(0, 20);
+    // Extrai produtos dos cards reais (.product-card / .product-name / link /market/details)
+    const products = await page.evaluate(() => {
+      const items = [];
+      document.querySelectorAll('.product-card, .card-container').forEach(card => {
+        const a = card.querySelector('a[href*="/market/details"]') || card.closest('a[href*="/market/details"]');
+        const href = a ? a.getAttribute('href') : '';
+        const nameEl = card.querySelector('.product-name, h2, h3, [class*="title"]');
+        const name = (nameEl && nameEl.textContent.trim()) || '';
+        if (!name || name.length < 3) return;
+        const txt = (card.textContent || '').replace(/\s+/g, ' ');
+        const tempM = txt.match(/(\d+)\s*°/);
+        const commM = txt.match(/Comiss[aã]o[^R]*R\$\s*([\d.,]+)/i);
+        const ucodeM = href.match(/productUcode=([a-f0-9-]+)/i);
+        const comm = commM ? parseFloat(commM[1].replace(/\./g, '').replace(',', '.')) : 0;
+        items.push({
+          name,
+          url: href ? new URL(href, location.origin).href : '',
+          product_id: ucodeM ? ucodeM[1] : name.slice(0, 24).replace(/\s/g, '_'),
+          temperature: tempM ? parseInt(tempM[1]) : 0,
+          commission_value: comm,
         });
+      });
+      // dedup por product_id
+      const seen = new Set();
+      return items.filter(i => { if (seen.has(i.product_id)) return false; seen.add(i.product_id); return true; });
+    });
 
-        log.info('[Hotmart] ' + category + ': ' + products.length + ' produtos encontrados');
+    // Ordena por temperatura (mais quentes primeiro) e limita
+    products.sort((a, b) => b.temperature - a.temperature);
+    const top = products.slice(0, HOTMART_MAX_PRODUCTS);
+    log.info('[Hotmart] ' + products.length + ' produtos no Mercado de Afiliação — processando top ' + top.length);
 
-        for (const prod of products) {
-          if (!prod.url) continue;
-          try {
-            // Navigate to product detail page
-            const prodPage = await browser.newPage();
-            await injectSession(prodPage, session);
-            await prodPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-            await prodPage.goto(prod.url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-            await sleep(2500);
+    for (const prod of top) {
+      try {
+        let affiliateLink = null;
+        let status = 'discovered';
 
-            // Look for "Quero ser afiliado" / affiliate request button
-            const affiliateClicked = await clickByText(prodPage, [
-              'Quero ser afiliado', 'Pedir afiliação', 'Ser afiliado', 'Pedir afiliacao',
-              'Solicitar afiliação', 'Quero me afiliar',
-            ], 5000);
-
-            await sleep(3000);
-
-            // Capture affiliate link from page
-            const affiliateLink = await prodPage.evaluate(() => {
-              // Look for ref= link in page content
-              const allText = document.documentElement.innerHTML;
-              const refMatch = allText.match(/https?:\/\/(?:app\.)?hotmart\.com\/product\/(?:checkout|pay)\/[A-Z0-9]+\?ref=[A-Z0-9_-]+/i);
-              if (refMatch) return refMatch[0];
-              // Look in inputs/textareas
-              const inputs = Array.from(document.querySelectorAll('input, textarea'));
-              for (const inp of inputs) {
-                if (inp.value && inp.value.includes('hotmart.com') && inp.value.includes('ref=')) return inp.value;
-              }
-              // Look for confirmation that affiliate link was generated
-              const links = Array.from(document.querySelectorAll('a[href*="hotmart.com"][href*="ref="]'));
-              if (links.length > 0) return links[0].href;
-              return null;
-            });
-
-            const productId = (prod.url.match(/\/product\/([A-Z0-9]+)/i) || [])[1] || prod.name.slice(0, 20).replace(/\s/g, '_');
-
-            const row = {
-              platform: 'hotmart',
-              product_id: productId,
-              product_name: prod.name,
-              product_url: prod.url,
-              affiliate_link: affiliateLink,
-              category,
-              price: prod.price,
-              commission_pct: prod.commission,
-            };
-            upsertProduct(row);
-            results.push(row);
-            log.info('[Hotmart] Salvo: "' + prod.name.slice(0, 40) + '" link=' + (affiliateLink || 'pendente'));
-
-            await prodPage.close();
-          } catch (pe) {
-            log.warn('[Hotmart] produto error: ' + pe.message.slice(0, 80));
-          }
-          await sleep(1000);
+        if (AUTO_REQUEST && prod.url) {
+          const prodPage = await browser.newPage();
+          await injectSession(prodPage, session);
+          await prodPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+          await prodPage.goto(prod.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+          await sleep(3500);
+          const r = await hotmartRequestAffiliation(prodPage);
+          affiliateLink = r.affiliateLink;
+          status = affiliateLink ? 'affiliated' : (r.approval ? 'pending_approval' : (r.requested ? 'requested' : 'discovered'));
+          await prodPage.close();
         }
-      } catch (ce) {
-        log.warn('[Hotmart] categoria "' + category + '" error: ' + ce.message.slice(0, 80));
+
+        const row = {
+          platform: 'hotmart',
+          product_id: prod.product_id,
+          product_name: prod.name,
+          product_url: prod.url,
+          affiliate_link: affiliateLink,
+          category: 'Mercado de Afiliação',
+          price: 0,
+          commission_pct: 0,
+          commission_value: prod.commission_value,
+          temperature: prod.temperature,
+          status,
+        };
+        upsertProduct(row);
+        results.push(row);
+        log.info('[Hotmart] ' + status + ': "' + prod.name.slice(0, 42) + '" R$' + prod.commission_value + ' temp=' + prod.temperature + (affiliateLink ? ' link=' + affiliateLink.slice(0, 45) : ''));
+      } catch (pe) {
+        log.warn('[Hotmart] produto error: ' + pe.message.slice(0, 90));
       }
+      await sleep(800);
     }
   } catch (e) {
     log.error('[Hotmart] runHotmartAffiliate error: ' + e.message);
@@ -354,33 +416,18 @@ async function runCaktoAffiliate() {
     });
     await injectSession(page, session);
 
-    // Try marketplace URLs
-    const marketUrls = [
-      'https://app.cakto.com.br/affiliate/marketplace',
-      'https://app.cakto.com.br/marketplace',
-      'https://app.cakto.com.br/dashboard/marketplace',
-    ];
+    // Vitrine = marketplace de afiliação da Cakto (em /dashboard/showcase)
+    const SHOWCASE_URL = 'https://app.cakto.com.br/dashboard/showcase';
+    await page.goto(SHOWCASE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+    await sleep(4000);
 
-    let marketLoaded = false;
-    for (const url of marketUrls) {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-      await sleep(3000);
-      const curUrl = page.url();
-      if (!curUrl.includes('/login') && !curUrl.includes('/auth')) {
-        marketLoaded = true;
-        log.info('[Cakto] Marketplace URL: ' + curUrl.slice(0, 80));
-        break;
-      }
-    }
-
-    if (!marketLoaded) {
-      // Try login
+    let curUrl = page.url();
+    if (/\/login|\/auth|sso\./i.test(curUrl)) {
+      // Sessão expirada — tenta login com credenciais do .env
       const email = process.env.CAKTO_EMAIL;
       const pass  = process.env.CAKTO_PASSWORD;
       if (email && pass) {
-        log.info('[Cakto] Tentando login...');
-        await page.goto('https://app.cakto.com.br/auth/login', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-        await sleep(2000);
+        log.info('[Cakto] Sessão expirada — tentando login...');
         try {
           const passEl = await page.$('input[type="password"]');
           if (passEl) {
@@ -389,100 +436,85 @@ async function runCaktoAffiliate() {
             await passEl.click({ clickCount: 3 });
             await page.keyboard.type(pass, { delay: 30 });
             await page.keyboard.press('Enter');
-            await sleep(5000);
+            await sleep(6000);
           }
         } catch (le) { log.warn('[Cakto] Login error: ' + le.message); }
       }
-      await page.goto('https://app.cakto.com.br/affiliate/marketplace', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-      await sleep(3000);
+      await page.goto(SHOWCASE_URL, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+      await sleep(4000);
+      curUrl = page.url();
     }
 
-    // Scroll to load products
+    if (/\/login|\/auth|sso\./i.test(curUrl)) {
+      log.warn('[Cakto] Não foi possível autenticar — pulando');
+      await browser.close().catch(() => {});
+      return [];
+    }
+    log.info('[Cakto] Vitrine: ' + curUrl.slice(0, 80));
+
+    // Aguarda os cards MUI carregarem e faz scroll
+    await page.waitForSelector('.MuiCard-root', { timeout: 20000 }).catch(() => {});
     for (let s = 0; s < 5; s++) {
-      await page.evaluate(() => window.scrollBy(0, 600));
+      await page.evaluate(() => window.scrollBy(0, 700));
       await sleep(700);
     }
 
-    // Extract products
+    // Extrai produtos da Vitrine.
+    // Texto do card: "🔮 IA Academy150°Você recebe atéR$ 145,77Order bumpPágina do afiliado"
     const products = await page.evaluate(() => {
       const items = [];
-      const cards = Array.from(document.querySelectorAll(
-        '[class*="product-card"], [class*="ProductCard"], [class*="affiliate-product"], ' +
-        '[class*="marketplace-item"], article, [class*="card"]'
-      ));
-      for (const card of cards.slice(0, 30)) {
-        const nameEl = card.querySelector('h2, h3, [class*="title"], [class*="name"], strong');
-        const priceEl = card.querySelector('[class*="price"], [class*="valor"]');
-        const linkEl = card.querySelector('a') || (card.tagName === 'A' ? card : null);
-        const commEl = card.querySelector('[class*="commission"], [class*="comissao"], [class*="percent"]');
-        const name = (nameEl && nameEl.textContent.trim()) || '';
-        if (!name || name.length < 3 || name.length > 200) continue;
-        const priceText = (priceEl && priceEl.textContent) || '';
-        const price = parseFloat(priceText.replace(/[^0-9,.]/g, '').replace(',', '.')) || 0;
-        const commText = (commEl && commEl.textContent) || '';
-        const comm = parseFloat(commText.replace(/[^0-9]/g, '')) || 0;
-        const url = linkEl ? linkEl.href : '';
-        items.push({ name, price, commission: comm, url });
-      }
-      return items.slice(0, 20);
+      document.querySelectorAll('.MuiCard-root').forEach(card => {
+        const txt = (card.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!/Você recebe/i.test(txt)) return;
+        if (/categorias|todas as categorias/i.test(txt)) return;   // bloco de filtro, não é produto
+        const nameM = txt.match(/^(.*?)(\d{1,3})\s*°/);     // nome até a temperatura (1-3 dígitos)
+        let name = nameM ? nameM[1].trim().replace(/\d+$/, '').trim() : '';
+        if (!name || name.length < 2 || name.length > 120) return;
+        const temp = nameM ? parseInt(nameM[2]) : 0;
+        const commM = txt.match(/recebe at[ée][^R]*R\$\s*([\d.,]+)/i);
+        const comm = commM ? parseFloat(commM[1].replace(/\./g, '').replace(',', '.')) : 0;
+        const tags = ['Order bump', 'Upsell', 'Recorrente', 'Página do afiliado', 'Dupl']
+          .filter(t => txt.includes(t));
+        const a = card.querySelector('a[href^="http"]');
+        items.push({
+          name,
+          product_url: a ? a.getAttribute('href') : '',
+          product_id: name.slice(0, 40).replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_'),
+          temperature: temp,
+          commission_value: comm,
+          tags: tags.join(','),
+        });
+      });
+      const seen = new Set();
+      return items.filter(i => { if (seen.has(i.product_id)) return false; seen.add(i.product_id); return true; });
     });
 
-    log.info('[Cakto] ' + products.length + ' produtos encontrados no marketplace');
+    products.sort((a, b) => b.temperature - a.temperature);
+    const top = products.slice(0, parseInt(process.env.AFFILIATE_MAX_PRODUCTS || '20'));
+    log.info('[Cakto] ' + products.length + ' produtos na Vitrine — salvando top ' + top.length);
 
-    for (const prod of products) {
+    for (const prod of top) {
       try {
-        let affiliateLink = null;
-        let productId = '';
-
-        if (prod.url && prod.url.includes('cakto')) {
-          const prodPage = await browser.newPage();
-          await injectSession(prodPage, session);
-          await prodPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-          await prodPage.goto(prod.url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-          await sleep(2500);
-
-          await clickByText(prodPage, [
-            'Ser afiliado', 'Quero ser afiliado', 'Solicitar', 'Afiliar-se',
-            'Participar', 'Quero participar',
-          ], 5000);
-          await sleep(3000);
-
-          affiliateLink = await prodPage.evaluate(() => {
-            const allText = document.documentElement.innerHTML;
-            const m = allText.match(/https?:\/\/(?:pay|app)\.cakto\.com\.br\/[A-Za-z0-9]+\?[^"'\s]*(?:ref|aff|affiliate)[^"'\s]*/i)
-              || allText.match(/https?:\/\/(?:pay|app)\.cakto\.com\.br\/[A-Za-z0-9_-]+/i);
-            if (m) return m[0];
-            const inputs = Array.from(document.querySelectorAll('input, textarea'));
-            for (const inp of inputs) {
-              if (inp.value && inp.value.includes('cakto.com.br')) return inp.value;
-            }
-            return null;
-          });
-
-          const urlM = prod.url.match(/\/([A-Za-z0-9_-]{4,})(?:\/|$)/);
-          productId = urlM ? urlM[1] : prod.name.slice(0, 20).replace(/\s/g, '_');
-          await prodPage.close();
-        } else {
-          productId = prod.name.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '_');
-        }
-
         const row = {
           platform: 'cakto',
-          product_id: productId,
+          product_id: prod.product_id,
           product_name: prod.name,
-          product_url: prod.url || '',
-          affiliate_link: affiliateLink,
-          category: 'Geral',
-          price: prod.price,
-          commission_pct: prod.commission,
+          product_url: prod.product_url || '',
+          affiliate_link: null,           // link de divulgação é gerado por produto (etapa futura)
+          category: prod.tags || 'Vitrine',
+          price: 0,
+          commission_pct: 0,
+          commission_value: prod.commission_value,
+          temperature: prod.temperature,
+          status: 'discovered',
         };
         upsertProduct(row);
         results.push(row);
-        log.info('[Cakto] Salvo: "' + prod.name.slice(0, 40) + '" link=' + (affiliateLink || 'pendente'));
+        log.info('[Cakto] discovered: "' + prod.name.slice(0, 42) + '" R$' + prod.commission_value + ' temp=' + prod.temperature);
       } catch (pe) {
-        log.warn('[Cakto] produto error: ' + pe.message.slice(0, 80));
+        log.warn('[Cakto] produto error: ' + pe.message.slice(0, 90));
       }
-      await sleep(800);
+      await sleep(300);
     }
   } catch (e) {
     log.error('[Cakto] runCaktoAffiliate error: ' + e.message);
@@ -495,14 +527,50 @@ async function runCaktoAffiliate() {
 
 // ── AMAZON Associates affiliate discovery ────────────────────────────────────
 const AMAZON_SESSION_FILE = resolveSessionFile('amazon', 'AMAZON_SESSION_FILE');
-const AMAZON_CATEGORIES = [
-  { name: 'Livros', url: 'https://www.amazon.com.br/best-sellers-books-br/zgbs/livros' },
-  { name: 'Eletronicos', url: 'https://www.amazon.com.br/gp/bestsellers/electronics' },
-  { name: 'Casa', url: 'https://www.amazon.com.br/gp/bestsellers/casa' },
-];
+// Busca por palavra-chave (bestseller zgbs muda layout e retorna 0). Link de afiliado
+// é instantâneo via tag (?tag=...), sem aprovação — diferente de Hotmart/Cakto.
+const AMAZON_KEYWORDS = (process.env.AMAZON_KEYWORDS ||
+  'air fryer,fone bluetooth,smartwatch,aspirador robo,cafeteira,liquidificador,' +
+  'panela eletrica,echo dot,webcam,caixa de som bluetooth,kindle,umidificador'
+).split(',').map(s => s.trim()).filter(Boolean);
+const _hiresImg = u => (u || '').replace(/\._[^.]+_\./, '.'); // remove modificador de tamanho
+
+/**
+ * Importa produtos já capturados em amazon_products.json (gerado por scrape_amazon_affiliate.js)
+ * para a tabela affiliate_products. Idempotente (upsert por ASIN).
+ */
+function importAmazonJson() {
+  const file = path.join(__dirname, '../../amazon_products.json');
+  let imported = 0;
+  try {
+    if (!fs.existsSync(file)) return 0;
+    const arr = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const p of (Array.isArray(arr) ? arr : [])) {
+      if (!p.asin || !p.affiliate_link) continue;
+      upsertProduct({
+        platform: 'amazon',
+        product_id: p.asin,
+        product_name: (p.name || '').slice(0, 100),
+        product_url: 'https://www.amazon.com.br/dp/' + p.asin,
+        affiliate_link: p.affiliate_link,
+        category: p.category || 'importado',
+        price: p.price_cents ? p.price_cents / 100 : 0,
+        commission_pct: 4.0,
+        commission_value: 0,
+        temperature: 0,
+        status: 'affiliated',
+      });
+      imported++;
+    }
+  } catch (e) { log.warn('[Amazon] importAmazonJson erro: ' + e.message.slice(0, 80)); }
+  return imported;
+}
 
 async function runAmazonAffiliate() {
   log.info('[Amazon] Iniciando busca de afiliados...');
+  // Primeiro importa o que já foi capturado anteriormente (não perde nada).
+  const imp = importAmazonJson();
+  if (imp) log.info('[Amazon] Importados ' + imp + ' produtos de amazon_products.json');
   const session = loadSession(AMAZON_SESSION_FILE);
   const browser = await launchBrowser();
   const results = [];
@@ -549,101 +617,70 @@ async function runAmazonAffiliate() {
       }
     }
 
-    const affiliateTag = process.env.AMAZON_AFFILIATE_TAG || '';
-
-    // Get affiliate tag from SiteStripe if not set
-    let resolvedTag = affiliateTag;
+    // Tag de afiliado: usa AMAZON_AFFILIATE_TAG do .env; tenta SiteStripe como fallback.
+    let resolvedTag = process.env.AMAZON_AFFILIATE_TAG || '';
     if (!resolvedTag) {
       await page.goto('https://www.amazon.com.br', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
       await sleep(3000);
       resolvedTag = await page.evaluate(() => {
-        // SiteStripe bar at top of page when logged into Associates
         const stripe = document.querySelector('#swissKnifeStripeContainer, #navbar-sitestripe, [id*="sitestripe"]');
         if (stripe) {
           const tagMatch = (stripe.textContent || '').match(/(?:tag|store)=([A-Za-z0-9_-]+)/i);
           if (tagMatch) return tagMatch[1];
         }
-        // Check URL params or page content
-        const allText = document.documentElement.innerHTML;
-        const m = allText.match(/(?:"tag"|'tag'|tag=)\s*[:"']?\s*([A-Za-z0-9_-]+-[0-9]+)/i);
+        const m = document.documentElement.innerHTML.match(/(?:"tag"|'tag'|tag=)\s*[:"']?\s*([A-Za-z0-9_-]+-[0-9]+)/i);
         return m ? m[1] : '';
       }).catch(() => '');
-      log.info('[Amazon] Affiliate tag: ' + (resolvedTag || 'não encontrada'));
     }
+    log.info('[Amazon] Affiliate tag: ' + (resolvedTag || 'NÃO definida (configure AMAZON_AFFILIATE_TAG)'));
+    if (!resolvedTag) { log.warn('[Amazon] Sem tag — pulando (links de afiliado precisam da tag)'); await browser.close().catch(() => {}); return []; }
 
-    for (const cat of AMAZON_CATEGORIES) {
-      log.info('[Amazon] Categoria: ' + cat.name);
+    const seen = new Set();
+    for (const kw of AMAZON_KEYWORDS) {
       try {
-        await page.goto(cat.url, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
-        await sleep(3000);
-
-        // Scroll to load more
-        for (let s = 0; s < 3; s++) {
-          await page.evaluate(() => window.scrollBy(0, 800));
-          await sleep(600);
-        }
+        await page.goto('https://www.amazon.com.br/s?k=' + encodeURIComponent(kw), { waitUntil: 'domcontentloaded', timeout: 40000 }).catch(() => {});
+        await sleep(2500 + Math.floor(Math.random() * 1500));
 
         const products = await page.evaluate(() => {
-          const items = [];
-          // Best sellers list items
-          const cards = Array.from(document.querySelectorAll(
-            '[class*="zg-item"], [class*="p13n-sc-uncoverable"], #zg-ordered-list li, ' +
-            '[class*="bestseller-item"], .a-list-item, .s-result-item'
-          ));
-          for (const card of cards.slice(0, 20)) {
-            const nameEl = card.querySelector('[class*="p13n-sc-line-clamp"], [class*="a-link-normal"], [class*="s-title-instructions"], h2 a, .a-size-small.a-link-normal');
-            const priceEl = card.querySelector('[class*="a-price"], [class*="p13n-sc-price"]');
-            const linkEl = card.querySelector('a[href*="/dp/"], a[href*="/gp/product/"]') || card.querySelector('a');
-            const name = (nameEl && nameEl.textContent.trim()) || (nameEl && nameEl.getAttribute('alt')) || '';
-            if (!name || name.length < 3) continue;
-            const priceText = (priceEl && priceEl.textContent.trim()) || '';
-            const price = parseFloat(priceText.replace(/[^0-9,.]/g, '').replace(',', '.')) || 0;
-            const url = linkEl ? (linkEl.href.split('?')[0]) : '';
-            // Extract ASIN
-            const asinM = url.match(/\/dp\/([A-Z0-9]{10})/) || url.match(/\/gp\/product\/([A-Z0-9]{10})/);
-            const asin = asinM ? asinM[1] : '';
-            if (!asin) continue;
-            items.push({ name: name.slice(0, 100), price, url, asin });
-          }
-          return items.slice(0, 20);
+          const out = [];
+          document.querySelectorAll('div[data-asin]').forEach(d => {
+            const asin = d.getAttribute('data-asin');
+            if (!asin || asin.length !== 10) return;
+            const t = d.querySelector('h2 span, .a-size-medium, .a-size-base-plus');
+            const img = d.querySelector('img.s-image');
+            const price = d.querySelector('.a-price .a-offscreen');
+            if (t && img) out.push({ asin, name: t.textContent.trim(), img: img.src, price: price ? price.textContent.trim() : '' });
+          });
+          return out.slice(0, 6);
         });
 
-        log.info('[Amazon] ' + cat.name + ': ' + products.length + ' produtos');
-
-        for (const prod of products) {
-          try {
-            // Build affiliate link with tag
-            let affiliateLink = null;
-            if (resolvedTag) {
-              affiliateLink = prod.url + '?tag=' + resolvedTag;
-            } else if (prod.asin) {
-              // Try SiteStripe API to get link
-              const stripeLinkUrl = 'https://www.amazon.com.br/gp/associates/sitestripe/createUrlForASIN'
-                + '?asin=' + prod.asin + '&tag=' + (resolvedTag || 'yourstore-20');
-              affiliateLink = prod.url + (resolvedTag ? '?tag=' + resolvedTag : '');
-            }
-
-            const row = {
-              platform: 'amazon',
-              product_id: prod.asin || prod.name.slice(0, 20).replace(/\s/g, '_'),
-              product_name: prod.name,
-              product_url: prod.url,
-              affiliate_link: affiliateLink,
-              category: cat.name,
-              price: prod.price,
-              commission_pct: 4.0, // Amazon Associates default ~4%
-            };
-            upsertProduct(row);
-            results.push(row);
-            log.info('[Amazon] Salvo: "' + prod.name.slice(0, 40) + '" asin=' + prod.asin);
-          } catch (pe) {
-            log.warn('[Amazon] produto error: ' + pe.message.slice(0, 80));
-          }
-          await sleep(500);
+        let kept = 0;
+        for (const p of products) {
+          if (seen.has(p.asin) || !p.price) continue;
+          seen.add(p.asin);
+          const price = parseFloat(p.price.replace(/[^0-9,]/g, '').replace(',', '.')) || 0;
+          const row = {
+            platform: 'amazon',
+            product_id: p.asin,
+            product_name: p.name.slice(0, 100),
+            product_url: 'https://www.amazon.com.br/dp/' + p.asin,
+            affiliate_link: 'https://www.amazon.com.br/dp/' + p.asin + '?tag=' + resolvedTag,
+            category: kw,
+            price,
+            commission_pct: 4.0,           // Amazon Associates ~4%
+            commission_value: 0,
+            temperature: 0,
+            status: 'affiliated',          // link instantâneo via tag
+          };
+          upsertProduct(row);
+          results.push(row);
+          kept++;
         }
+        log.info('[Amazon] "' + kw + '": ' + kept + ' produtos com link');
       } catch (ce) {
-        log.warn('[Amazon] categoria "' + cat.name + '" error: ' + ce.message.slice(0, 80));
+        log.warn('[Amazon] keyword "' + kw + '" error: ' + ce.message.slice(0, 80));
       }
+      await sleep(800);
     }
   } catch (e) {
     log.error('[Amazon] runAmazonAffiliate error: ' + e.message);
@@ -723,4 +760,7 @@ async function runAffiliateAgent() {
   return allResults;
 }
 
-module.exports = { runAffiliateAgent, getAffiliateLinks };
+module.exports = {
+  runAffiliateAgent, getAffiliateLinks,
+  runHotmartAffiliate, runCaktoAffiliate, runAmazonAffiliate, importAmazonJson,
+};

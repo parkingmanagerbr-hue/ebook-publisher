@@ -116,6 +116,38 @@ async function syncSalesIfNeeded() {
   }
 }
 
+// ── Afiliados: discovery → landing pages → backlinks ──────────────────────────
+let _lastAffiliateRun = 0;
+const AFFILIATE_INTERVAL_MS = (parseInt(process.env.AFFILIATE_RUN_INTERVAL_HOURS || '24')) * 60 * 60 * 1000;
+
+async function runAffiliatesIfNeeded() {
+  if (process.env.AFFILIATE_AGENT_ENABLED === 'false') return;
+  if (Date.now() - _lastAffiliateRun < AFFILIATE_INTERVAL_MS) return;
+  _lastAffiliateRun = Date.now();
+  try {
+    log('[Afiliados] 🔗 Descobrindo produtos (Hotmart + Cakto + Amazon)...');
+    const { runAffiliateAgent } = require('./src/agents/affiliateAgent');
+    const produtos = await runAffiliateAgent();
+    log(`[Afiliados] ✅ ${(produtos || []).length} produtos processados`);
+
+    // Landing pages só p/ produtos com affiliate_link (Amazon = link instantâneo via tag)
+    try {
+      const { generateLandingPages } = require('./src/agents/landingPageAgent');
+      const lps = await generateLandingPages();
+      log(`[Afiliados] 🌐 Landing pages: ${(lps && lps.length) || 0}`);
+    } catch (e) { log(`[Afiliados] ⚠️ Landing pages erro: ${e.message.slice(0, 80)}`); }
+
+    // Hub de backlinks
+    try {
+      const { buildBacklinks } = require('./src/agents/backlinkAgent');
+      await buildBacklinks();
+      log('[Afiliados] 🔗 Backlinks atualizados');
+    } catch (e) { log(`[Afiliados] ⚠️ Backlinks erro: ${e.message.slice(0, 80)}`); }
+  } catch (e) {
+    log(`[Afiliados] ⚠️ Erro: ${e.message.slice(0, 100)}`);
+  }
+}
+
 // ── Topic injection ───────────────────────────────────────────────────────────
 async function refreshTrending() {
   const now = Date.now();
@@ -260,6 +292,9 @@ async function startLoop() {
     try {
       // Sync sales periodicamente (a cada 6h)
       await syncSalesIfNeeded();
+
+      // Afiliados: discovery + landing pages + backlinks (intervalo próprio)
+      await runAffiliatesIfNeeded();
 
       const result = await runCycle();
       if (result) {

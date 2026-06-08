@@ -32,12 +32,12 @@ const VPS_IP        = process.env.VPS_IP              || '173.212.227.198';
 const BASE_DOMAIN   = process.env.BASE_DOMAIN         || 'veloxisit.com.br';
 const NGINX_DATA_PATH = process.env.NGINX_DATA_PATH   || '/opt/platform/data/veloxisit';
 const NGINX_CONF_PATH = process.env.NGINX_CONF_PATH   || '/opt/platform/nginx/sites';
-const IS_VPS        = process.env.RUNNING_ON_VPS === 'true' || fs.existsSync('/app/data');
+const IS_VPS        = process.env.RUNNING_ON_VPS === 'true' || (process.platform !== 'win32' && fs.existsSync('/app/data'));
 const HUB_SUBDOMAIN = 'afiliados.' + BASE_DOMAIN;
 const HUB_SLUG      = 'afiliados';
 
 // ── DB ────────────────────────────────────────────────────────────────────────
-const _defaultDbDir2 = fs.existsSync('/app/data') ? '/app/data/db' : path.join(__dirname, '../../data/db');
+const _defaultDbDir2 = (process.platform !== 'win32' && fs.existsSync('/app/data')) ? '/app/data/db' : path.join(__dirname, '../../data/db');
 const DB_PATH = process.env.AFFILIATE_DB_PATH || path.join(_defaultDbDir2, 'ebooks.db');
 
 let _db;
