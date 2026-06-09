@@ -765,42 +765,132 @@ async function deployFilesToNetlify(siteId, files) {
   return deploy;
 }
 
-function buildHubHtml(items) {
+// Dicionário de localização das páginas/hubs (template determinístico, sem IA)
+const LP_I18N = {
+  pt: { htmlLang: 'pt-BR', offer: 'Oferta Especial', buy: 'Comprar Agora', secure: 'Garantir Meu Produto',
+    why: 'Por que escolher este produto?', faqT: 'Perguntas Frequentes',
+    benefits: ['Qualidade comprovada', 'Entrega rápida', 'Melhor preço', 'Compra segura', 'Alta avaliação'],
+    faq: [['O produto tem garantia?', 'Sim, segue a política da plataforma vendedora.'],
+          ['Como faço para comprar?', 'Clique no botão "Comprar Agora" acima.'],
+          ['O pagamento é seguro?', 'Sim, a compra é processada pela plataforma oficial.']],
+    affNote: 'Link de afiliado — ganho comissão sem custo extra para você',
+    affFoot: '*Links de afiliado — posso ganhar comissão sem custo adicional para você.',
+    hubTitle: '🛒 Ofertas Selecionadas', hubSub: 'produtos com os melhores preços', see: 'Ver oferta →',
+    hubFoot: 'Contém links de afiliado. Podemos receber comissão pelas compras, sem custo extra para você.',
+    metaDesc: n => `Conheça ${n}. Produto de qualidade com ótimo custo-benefício.` },
+  en: { htmlLang: 'en', offer: 'Special Offer', buy: 'Buy Now', secure: 'Get My Product',
+    why: 'Why choose this product?', faqT: 'Frequently Asked Questions',
+    benefits: ['Proven quality', 'Fast delivery', 'Best price', 'Secure checkout', 'Top rated'],
+    faq: [['Does the product have a warranty?', 'Yes, per the selling platform policy.'],
+          ['How do I buy?', 'Click the "Buy Now" button above.'],
+          ['Is payment secure?', 'Yes, the purchase is processed by the official platform.']],
+    affNote: 'Affiliate link — I earn a commission at no extra cost to you',
+    affFoot: '*Affiliate links — I may earn a commission at no additional cost to you.',
+    hubTitle: '🛒 Curated Deals', hubSub: 'products at the best prices', see: 'View deal →',
+    hubFoot: 'Contains affiliate links. We may earn a commission, at no extra cost to you.',
+    metaDesc: n => `Discover ${n}. Quality product with great value for money.` },
+  es: { htmlLang: 'es', offer: 'Oferta Especial', buy: 'Comprar Ahora', secure: 'Asegurar Mi Producto',
+    why: '¿Por qué elegir este producto?', faqT: 'Preguntas Frecuentes',
+    benefits: ['Calidad comprobada', 'Entrega rápida', 'Mejor precio', 'Compra segura', 'Alta valoración'],
+    faq: [['¿El producto tiene garantía?', 'Sí, según la política de la plataforma vendedora.'],
+          ['¿Cómo compro?', 'Haz clic en el botón "Comprar Ahora" arriba.'],
+          ['¿El pago es seguro?', 'Sí, la compra la procesa la plataforma oficial.']],
+    affNote: 'Enlace de afiliado — gano comisión sin costo extra para ti',
+    affFoot: '*Enlaces de afiliado — puedo ganar comisión sin costo adicional para ti.',
+    hubTitle: '🛒 Ofertas Seleccionadas', hubSub: 'productos a los mejores precios', see: 'Ver oferta →',
+    hubFoot: 'Contiene enlaces de afiliado. Podemos recibir comisión, sin costo extra para ti.',
+    metaDesc: n => `Descubre ${n}. Producto de calidad con excelente relación precio-calidad.` },
+};
+
+function buildLocalizedPage(product, langCode, canonicalUrl) {
+  const t = LP_I18N[langCode] || LP_I18N.pt;
+  const name = product.product_name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const link = (product.affiliate_link || '#').replace(/"/g, '%22');
+  const price = product.price ? 'R$ ' + product.price.toFixed(2).replace('.', ',') : t.offer;
+  const benefitsHtml = t.benefits.map((b, i) => `<div class="benefit"><div class="icon">${['✅','⚡','💰','🔒','⭐'][i]}</div><p>${b}</p></div>`).join('');
+  const faqHtml = t.faq.map(([q, a]) => `<div class="faq-item"><h3>${q}</h3><p>${a}</p></div>`).join('');
+  return `<!DOCTYPE html>
+<html lang="${t.htmlLang}">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${name} — ${t.offer}</title>
+<meta name="description" content="${t.metaDesc(name)}">
+<link rel="canonical" href="${canonicalUrl}">
+<meta property="og:title" content="${name}"><meta property="og:url" content="${canonicalUrl}"><meta property="og:type" content="website">
+<style>*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#333;line-height:1.6}
+.hero{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:80px 20px;text-align:center}
+.hero h1{font-size:2.2rem;margin-bottom:1rem;max-width:700px;margin-left:auto;margin-right:auto}
+.hero p{font-size:1.2rem;margin-bottom:2rem;opacity:.9}
+.cta-btn{display:inline-block;background:#ff6b35;color:#fff;padding:18px 48px;border-radius:50px;text-decoration:none;font-size:1.2rem;font-weight:bold;transition:transform .2s}
+.cta-btn:hover{transform:scale(1.05)}
+.section{padding:60px 20px;max-width:900px;margin:0 auto}
+.benefits{display:flex;flex-wrap:wrap;gap:20px;justify-content:center;margin-top:30px}
+.benefit{background:#f8f9fa;border-radius:12px;padding:24px;flex:1;min-width:220px;max-width:260px;text-align:center}
+.benefit .icon{font-size:2.5rem;margin-bottom:12px}
+.faq-item{border-bottom:1px solid #eee;padding:20px 0}.faq-item h3{color:#667eea;margin-bottom:8px}
+.disclaimer{font-size:.75rem;color:#999;text-align:center;padding:20px;background:#f8f9fa}
+footer{background:#333;color:#ddd;text-align:center;padding:20px;font-size:.85rem}</style>
+</head>
+<body>
+<div class="hero"><h1>${name}</h1><p>${price}</p>
+<a href="${link}" class="cta-btn" rel="nofollow sponsored">${t.buy}</a>
+<p class="disclaimer" style="margin-top:12px;font-size:.75rem;opacity:.7;background:transparent;color:#fff">${t.affNote}</p></div>
+<div class="section"><h2 style="text-align:center;margin-bottom:30px">${t.why}</h2><div class="benefits">${benefitsHtml}</div></div>
+<div class="section"><h2 style="text-align:center;margin-bottom:30px">${t.faqT}</h2>${faqHtml}</div>
+<div style="text-align:center;padding:40px 20px"><a href="${link}" class="cta-btn" rel="nofollow sponsored">${t.secure}</a></div>
+<div class="disclaimer">${t.affFoot}</div>
+<footer>© ${new Date().getFullYear()} ${BASE_DOMAIN}</footer>
+</body></html>`;
+}
+
+function buildHubHtml(items, langCode = 'pt', allLangs = ['pt']) {
+  const t = LP_I18N[langCode] || LP_I18N.pt;
+  const prefix = langCode === 'pt' ? '' : '/' + langCode;
+  const switcher = allLangs.length > 1
+    ? `<nav class="langs">${allLangs.map(l => l === langCode
+        ? `<span class="on">${l.toUpperCase()}</span>`
+        : `<a href="${l === 'pt' ? '/' : '/' + l + '/'}">${l.toUpperCase()}</a>`).join(' · ')}</nav>`
+    : '';
   const cards = items.map(it => `
-    <a class="card" href="/${it.slug}/">
+    <a class="card" href="${prefix}/${it.slug}/">
       <div class="emoji">${it.emoji}</div>
       <div class="name">${(it.name || '').replace(/</g, '&lt;').slice(0, 80)}</div>
-      <div class="cta">Ver oferta →</div>
+      <div class="cta">${t.see}</div>
     </a>`).join('');
-  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+  return `<!DOCTYPE html><html lang="${t.htmlLang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ofertas — Veloxisit Afiliados</title>
-<meta name="description" content="As melhores ofertas selecionadas. ${items.length} produtos.">
+<title>${t.hubTitle.replace('🛒 ', '')} — Veloxisit</title>
+<meta name="description" content="${items.length} ${t.hubSub}.">
 <style>body{font-family:system-ui,Arial,sans-serif;margin:0;background:#0f172a;color:#e2e8f0}
 header{padding:48px 20px;text-align:center;background:linear-gradient(135deg,#1e293b,#0f172a)}
 h1{margin:0 0 8px;font-size:2rem}header p{color:#94a3b8;margin:0}
+.langs{margin-top:14px;font-size:.9rem}.langs a{color:#3b82f6;text-decoration:none;font-weight:700}.langs .on{color:#e2e8f0;font-weight:700}
 .grid{max-width:1100px;margin:0 auto;padding:24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
 .card{background:#1e293b;border:1px solid #334155;border-radius:14px;padding:20px;text-decoration:none;color:inherit;transition:.2s;display:flex;flex-direction:column;gap:10px}
 .card:hover{transform:translateY(-4px);border-color:#3b82f6}
 .emoji{font-size:2.2rem}.name{font-weight:600;font-size:.95rem;line-height:1.3;flex:1}
 .cta{color:#3b82f6;font-weight:700;font-size:.9rem}
 footer{text-align:center;padding:30px;color:#64748b;font-size:.8rem}</style></head>
-<body><header><h1>🛒 Ofertas Selecionadas</h1><p>${items.length} produtos com os melhores preços</p></header>
+<body><header><h1>${t.hubTitle}</h1><p>${items.length} ${t.hubSub}</p>${switcher}</header>
 <div class="grid">${cards}</div>
-<footer>Contém links de afiliado. Podemos receber comissão pelas compras, sem custo extra para você.</footer></body></html>`;
+<footer>${t.hubFoot}</footer></body></html>`;
 }
 
 /**
  * Gera e publica TODAS as landing pages (produtos com affiliate_link) em UM site Netlify.
- * Cada produto vira /slug/ ; o hub fica em / . Atualiza landing_page_url no DB.
- * opts: { lang='pt', platform=null, max=0 }
+ * pt em /slug/, outros idiomas em /<lang>/slug/, hubs em / , /en/, /es/ (com seletor).
+ * Template localizado determinístico (rápido, sem depender de quota de IA).
+ * opts: { langs=['pt','en','es'], platform=null, max=0 }
  */
 async function deployAllOneSite(opts = {}) {
-  const lang = LANGUAGES.find(l => l.code === (opts.lang || 'pt')) || LANGUAGES[0];
+  const langs = (opts.langs || (process.env.LP_LANGS || 'pt,en,es').split(',').map(s => s.trim()).filter(Boolean))
+    .filter(l => LP_I18N[l]);
+  if (!langs.includes('pt')) langs.unshift('pt');
   let products = getProductsWithLinks();
   if (opts.platform) products = products.filter(p => p.platform === opts.platform);
   if (opts.max) products = products.slice(0, opts.max);
-  log.info('[LP-batch] Gerando ' + products.length + ' páginas (' + lang.code + ') p/ 1 site...');
+  log.info('[LP-batch] Gerando ' + products.length + ' produtos × ' + langs.length + ' idiomas (' + langs.join(',') + ') p/ 1 site...');
 
   const files = {}, items = [];
   const emojiFor = c => /fone|som|bluetooth|caixa/i.test(c) ? '🎧' : /smartwatch|watch|rel[óo]gio/i.test(c) ? '⌚' :
@@ -809,20 +899,28 @@ async function deployAllOneSite(opts = {}) {
   for (const product of products) {
     try {
       const baseSlug = makeSlug(product.product_name);
-      const { html } = await generateHtmlMultilang(product, lang);
-      files['/' + baseSlug + '/index.html'] = html;
+      const tracked = { ...product, affiliate_link: getTrackingUrl(product) };
+      for (const lc of langs) {
+        const prefix = lc === 'pt' ? '' : '/' + lc;
+        const pagePath = prefix + '/' + baseSlug + '/index.html';
+        const canonical = 'https://' + BASE_DOMAIN + prefix + '/' + baseSlug + '/';
+        files[pagePath] = buildLocalizedPage(tracked, lc, canonical);
+      }
       items.push({ slug: baseSlug, name: product.product_name, emoji: emojiFor((product.category || '') + ' ' + product.product_name), id: product.id });
     } catch (e) { log.warn('[LP-batch] erro "' + product.product_name.slice(0, 30) + '": ' + e.message.slice(0, 60)); }
   }
   if (!items.length) { log.warn('[LP-batch] nenhuma página gerada'); return { siteUrl: null, count: 0 }; }
-  files['/index.html'] = buildHubHtml(items);
+  for (const lc of langs) {
+    const hubPath = lc === 'pt' ? '/index.html' : '/' + lc + '/index.html';
+    files[hubPath] = buildHubHtml(items, lc, langs);
+  }
 
   const siteId = await getOrCreateBatchSite();
   const deploy = await deployFilesToNetlify(siteId, files);
   const siteUrl = deploy.ssl_url || deploy.deploy_ssl_url || deploy.url || ('https://' + (deploy.subdomain || '') + '.netlify.app');
   for (const it of items) { try { updateLandingPageUrl(it.id, siteUrl.replace(/\/$/, '') + '/' + it.slug + '/'); } catch (_) {} }
-  log.info('[LP-batch] ✅ ' + items.length + ' páginas no ar em ' + siteUrl);
-  return { siteUrl, count: items.length, hub: siteUrl };
+  log.info('[LP-batch] ✅ ' + items.length + ' produtos × ' + langs.length + ' idiomas (' + Object.keys(files).length + ' arquivos) no ar em ' + siteUrl);
+  return { siteUrl, count: items.length, langs, files: Object.keys(files).length };
 }
 
 module.exports = { generateLandingPages, deployLandingPage, deployLandingPageLang, deployAllOneSite, LANGUAGES };
