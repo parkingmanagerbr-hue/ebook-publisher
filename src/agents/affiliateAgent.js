@@ -436,17 +436,23 @@ const CAKTO_SESSION_FILE = resolveSessionFile('cakto', 'CAKTO_SESSION_FILE');
  * Retorna { requested, affiliateLink, approval }.
  */
 async function caktoRequestAffiliation(page, productName) {
-  // 1. Abrir o modal do produto: clique de mouse REAL no centro do card (React não reage a el.click()).
-  const box = await page.evaluate((name) => {
+  // 1. Achar o card ESPECÍFICO do produto (texto curto = 1 produto, NÃO o container que tem todos).
+  const idx = await page.evaluate((name) => {
     const cards = [...document.querySelectorAll('.MuiCard-root')];
-    const card = cards.find(c => (c.textContent || '').includes(name) && /Você recebe/i.test(c.textContent || ''));
-    if (!card) return null;
-    card.scrollIntoView({ block: 'center' });
-    const r = card.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + 60 };   // topo do card (imagem/nome), evita botões de baixo
-  }, productName.slice(0, 30)).catch(() => null);
-  if (!box) return { requested: false, affiliateLink: null, approval: false };
-  await page.mouse.click(box.x, box.y).catch(() => {});
+    let best = -1, bestLen = Infinity;
+    cards.forEach((c, i) => {
+      const t = c.textContent || '';
+      if (t.includes(name) && /Você recebe/i.test(t) && t.length < 220 && t.length < bestLen) { best = i; bestLen = t.length; }
+    });
+    return best;
+  }, productName.slice(0, 28)).catch(() => -1);
+  if (idx < 0) return { requested: false, affiliateLink: null, approval: false };
+  const handles = await page.$$('.MuiCard-root');
+  const card = handles[idx];
+  if (!card) return { requested: false, affiliateLink: null, approval: false };
+  // clica no nome/imagem do card (abre o detalhe do produto)
+  const nameEl = await card.$('h3, h4, [class*="title" i], [class*="name" i], strong, img');
+  try { await (nameEl || card).click({ delay: 30 }); } catch (_) { try { await card.click(); } catch (e2) {} }
 
   await page.waitForFunction(
     () => /Solicitar Afilia|Afiliar-se|Quero me afiliar/i.test(document.body.innerText) &&
@@ -495,8 +501,17 @@ async function caktoRequestAffiliation(page, productName) {
   const approval = await page.evaluate(() =>
     /solicita[çc][aã]o enviada|aguardando aprova|pendente|sob an[áa]lise|em an[áa]lise/i.test(document.body.innerText)
   ).catch(() => false);
+  // Fechar o modal de forma robusta (botão X/Fechar → Escape) e esperar sumir.
+  await page.evaluate(() => {
+    const modal = document.querySelector('[role="dialog"], [class*="Dialog"], [class*="Modal"]');
+    if (!modal) return;
+    const close = [...modal.querySelectorAll('button, [role="button"]')]
+      .find(b => /fechar|close|cancelar/i.test((b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')) || b.querySelector('svg[data-testid*="Close" i]'));
+    if (close) close.click();
+  }).catch(() => {});
   await page.keyboard.press('Escape').catch(() => {});
-  await sleep(500);
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"]'), { timeout: 4000 }).catch(() => {});
+  await sleep(600);
   return { requested: true, affiliateLink, approval };
 }
 
