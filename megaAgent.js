@@ -124,6 +124,11 @@ async function runAffiliatesIfNeeded() {
   if (process.env.AFFILIATE_AGENT_ENABLED === 'false') return;
   if (Date.now() - _lastAffiliateRun < AFFILIATE_INTERVAL_MS) return;
   _lastAffiliateRun = Date.now();
+
+  // Salvaguarda: limita landing pages por ciclo (sem isso seriam ~920 deploys/sites Netlify).
+  // Produtos já deployados são pulados (landing_page_url) → cobertura cresce a cada ciclo.
+  if (!process.env.LP_MAX_PRODUCTS) process.env.LP_MAX_PRODUCTS = '8';
+  if (!process.env.LP_LANGS) process.env.LP_LANGS = 'pt,en,es';
   try {
     log('[Afiliados] 🔗 Descobrindo produtos (Hotmart + Cakto + Amazon)...');
     const { runAffiliateAgent } = require('./src/agents/affiliateAgent');
