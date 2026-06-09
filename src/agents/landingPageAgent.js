@@ -78,6 +78,7 @@ const GEMINI_KEYS = [
 ].filter(Boolean);
 
 let _geminiKeyIndex = 0;
+let _geminiDead = 0;   // contador de falhas seguidas → pula Gemini no lote
 function getGeminiKey() {
   if (GEMINI_KEYS.length === 0) return null;
   const key = GEMINI_KEYS[_geminiKeyIndex % GEMINI_KEYS.length];
@@ -642,16 +643,20 @@ MANDATORY REQUIREMENTS:
 Return ONLY the complete HTML, no markdown, no explanations, no \`\`\`html.`;
 
   let html = '';
-  for (let attempt = 0; attempt < Math.min(3, GEMINI_KEYS.length + 1); attempt++) {
-    try {
-      if (attempt > 0) await sleep(2000);
-      const raw = await callGemini(prompt);
-      html = raw.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-      if (html.includes('<!DOCTYPE') || html.includes('<html')) break;
-      html = '<!DOCTYPE html>' + html;
-      break;
-    } catch (e) {
-      log.warn('[LP][' + langConfig.code + '] Gemini attempt ' + (attempt + 1) + ' failed: ' + e.message.slice(0, 80));
+  // Se o Gemini falhou 2x seguidas (quota/billing), pula direto p/ fallback no resto do lote.
+  if (_geminiDead < 2) {
+    for (let attempt = 0; attempt < Math.min(3, GEMINI_KEYS.length + 1); attempt++) {
+      try {
+        if (attempt > 0) await sleep(2000);
+        const raw = await callGemini(prompt);
+        html = raw.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+        if (!html.includes('<!DOCTYPE') && !html.includes('<html')) html = '<!DOCTYPE html>' + html;
+        _geminiDead = 0;
+        break;
+      } catch (e) {
+        _geminiDead++;
+        log.warn('[LP][' + langConfig.code + '] Gemini attempt ' + (attempt + 1) + ' failed: ' + e.message.slice(0, 80));
+      }
     }
   }
 
@@ -726,4 +731,98 @@ async function generateLandingPages() {
   return deployed;
 }
 
-module.exports = { generateLandingPages, deployLandingPage, deployLandingPageLang, LANGUAGES };
+// ── Deploy em UM site Netlify só (todas as páginas em paths + hub) ────────────
+// Evita 1 site por produto (348 sites). Multi-file deploy via API de digest.
+const crypto = require('crypto');
+
+function _batchSiteFile() { return path.join(__dirname, '../../data/netlify_batch_site.json'); }
+
+async function getOrCreateBatchSite() {
+  if (process.env.NETLIFY_BATCH_SITE_ID) return process.env.NETLIFY_BATCH_SITE_ID;
+  try { const j = JSON.parse(fs.readFileSync(_batchSiteFile(), 'utf8')); if (j.siteId) return j.siteId; } catch (_) {}
+  // nome único (sufixo aleatório p/ evitar colisão global de nome no Netlify)
+  const suffix = Math.abs((Date.now() ^ (Math.random() * 1e9)) | 0).toString(36).slice(0, 6);
+  const site = await netlifyRequest('POST', '/api/v1/sites', { name: 'veloxisit-afiliados-' + suffix });
+  const id = site.id || site.site_id;
+  try { fs.mkdirSync(path.dirname(_batchSiteFile()), { recursive: true }); fs.writeFileSync(_batchSiteFile(), JSON.stringify({ siteId: id, url: site.ssl_url || site.url })); } catch (_) {}
+  return id;
+}
+
+async function deployFilesToNetlify(siteId, files) {
+  const digest = {}, byPath = {};
+  for (const [p, html] of Object.entries(files)) {
+    const buf = Buffer.from(html, 'utf8');
+    digest[p] = crypto.createHash('sha1').update(buf).digest('hex');
+    byPath[p] = buf;
+  }
+  const deploy = await netlifyRequest('POST', `/api/v1/sites/${siteId}/deploys`, { files: digest });
+  const need = new Set(Array.isArray(deploy.required) ? deploy.required : []);
+  for (const [p, buf] of Object.entries(byPath)) {
+    if (need.has(digest[p])) {
+      await netlifyRequest('PUT', `/api/v1/deploys/${deploy.id}/files${p}`, buf, 'application/octet-stream');
+    }
+  }
+  return deploy;
+}
+
+function buildHubHtml(items) {
+  const cards = items.map(it => `
+    <a class="card" href="/${it.slug}/">
+      <div class="emoji">${it.emoji}</div>
+      <div class="name">${(it.name || '').replace(/</g, '&lt;').slice(0, 80)}</div>
+      <div class="cta">Ver oferta →</div>
+    </a>`).join('');
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ofertas — Veloxisit Afiliados</title>
+<meta name="description" content="As melhores ofertas selecionadas. ${items.length} produtos.">
+<style>body{font-family:system-ui,Arial,sans-serif;margin:0;background:#0f172a;color:#e2e8f0}
+header{padding:48px 20px;text-align:center;background:linear-gradient(135deg,#1e293b,#0f172a)}
+h1{margin:0 0 8px;font-size:2rem}header p{color:#94a3b8;margin:0}
+.grid{max-width:1100px;margin:0 auto;padding:24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+.card{background:#1e293b;border:1px solid #334155;border-radius:14px;padding:20px;text-decoration:none;color:inherit;transition:.2s;display:flex;flex-direction:column;gap:10px}
+.card:hover{transform:translateY(-4px);border-color:#3b82f6}
+.emoji{font-size:2.2rem}.name{font-weight:600;font-size:.95rem;line-height:1.3;flex:1}
+.cta{color:#3b82f6;font-weight:700;font-size:.9rem}
+footer{text-align:center;padding:30px;color:#64748b;font-size:.8rem}</style></head>
+<body><header><h1>🛒 Ofertas Selecionadas</h1><p>${items.length} produtos com os melhores preços</p></header>
+<div class="grid">${cards}</div>
+<footer>Contém links de afiliado. Podemos receber comissão pelas compras, sem custo extra para você.</footer></body></html>`;
+}
+
+/**
+ * Gera e publica TODAS as landing pages (produtos com affiliate_link) em UM site Netlify.
+ * Cada produto vira /slug/ ; o hub fica em / . Atualiza landing_page_url no DB.
+ * opts: { lang='pt', platform=null, max=0 }
+ */
+async function deployAllOneSite(opts = {}) {
+  const lang = LANGUAGES.find(l => l.code === (opts.lang || 'pt')) || LANGUAGES[0];
+  let products = getProductsWithLinks();
+  if (opts.platform) products = products.filter(p => p.platform === opts.platform);
+  if (opts.max) products = products.slice(0, opts.max);
+  log.info('[LP-batch] Gerando ' + products.length + ' páginas (' + lang.code + ') p/ 1 site...');
+
+  const files = {}, items = [];
+  const emojiFor = c => /fone|som|bluetooth|caixa/i.test(c) ? '🎧' : /smartwatch|watch|rel[óo]gio/i.test(c) ? '⌚' :
+    /fry|fritadeira|cafeteira|liquidi|panela|cook/i.test(c) ? '🍳' : /webcam|c[âa]mera/i.test(c) ? '📷' :
+    /aspirador|robo/i.test(c) ? '🤖' : /kindle|livro|ebook/i.test(c) ? '📚' : '🛍️';
+  for (const product of products) {
+    try {
+      const baseSlug = makeSlug(product.product_name);
+      const { html } = await generateHtmlMultilang(product, lang);
+      files['/' + baseSlug + '/index.html'] = html;
+      items.push({ slug: baseSlug, name: product.product_name, emoji: emojiFor((product.category || '') + ' ' + product.product_name), id: product.id });
+    } catch (e) { log.warn('[LP-batch] erro "' + product.product_name.slice(0, 30) + '": ' + e.message.slice(0, 60)); }
+  }
+  if (!items.length) { log.warn('[LP-batch] nenhuma página gerada'); return { siteUrl: null, count: 0 }; }
+  files['/index.html'] = buildHubHtml(items);
+
+  const siteId = await getOrCreateBatchSite();
+  const deploy = await deployFilesToNetlify(siteId, files);
+  const siteUrl = deploy.ssl_url || deploy.deploy_ssl_url || deploy.url || ('https://' + (deploy.subdomain || '') + '.netlify.app');
+  for (const it of items) { try { updateLandingPageUrl(it.id, siteUrl.replace(/\/$/, '') + '/' + it.slug + '/'); } catch (_) {} }
+  log.info('[LP-batch] ✅ ' + items.length + ' páginas no ar em ' + siteUrl);
+  return { siteUrl, count: items.length, hub: siteUrl };
+}
+
+module.exports = { generateLandingPages, deployLandingPage, deployLandingPageLang, deployAllOneSite, LANGUAGES };

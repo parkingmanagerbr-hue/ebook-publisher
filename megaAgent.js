@@ -125,21 +125,18 @@ async function runAffiliatesIfNeeded() {
   if (Date.now() - _lastAffiliateRun < AFFILIATE_INTERVAL_MS) return;
   _lastAffiliateRun = Date.now();
 
-  // Salvaguarda: limita landing pages por ciclo (sem isso seriam ~920 deploys/sites Netlify).
-  // Produtos já deployados são pulados (landing_page_url) → cobertura cresce a cada ciclo.
-  if (!process.env.LP_MAX_PRODUCTS) process.env.LP_MAX_PRODUCTS = '8';
-  if (!process.env.LP_LANGS) process.env.LP_LANGS = 'pt,en,es';
   try {
     log('[Afiliados] 🔗 Descobrindo produtos (Hotmart + Cakto + Amazon)...');
     const { runAffiliateAgent } = require('./src/agents/affiliateAgent');
     const produtos = await runAffiliateAgent();
     log(`[Afiliados] ✅ ${(produtos || []).length} produtos processados`);
 
-    // Landing pages só p/ produtos com affiliate_link (Amazon = link instantâneo via tag)
+    // Landing pages: TODAS num único site Netlify (/slug/ + hub). Produtos c/ affiliate_link
+    // (Amazon instantâneo; Hotmart/Cakto entram conforme aprovação). Sem explosão de sites.
     try {
-      const { generateLandingPages } = require('./src/agents/landingPageAgent');
-      const lps = await generateLandingPages();
-      log(`[Afiliados] 🌐 Landing pages: ${(lps && lps.length) || 0}`);
+      const { deployAllOneSite } = require('./src/agents/landingPageAgent');
+      const lp = await deployAllOneSite({ lang: 'pt' });
+      log(`[Afiliados] 🌐 ${lp.count} páginas de venda no ar → ${lp.siteUrl || '(sem links ainda)'}`);
     } catch (e) { log(`[Afiliados] ⚠️ Landing pages erro: ${e.message.slice(0, 80)}`); }
 
     // Hub de backlinks
