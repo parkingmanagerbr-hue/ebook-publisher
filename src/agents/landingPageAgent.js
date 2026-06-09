@@ -156,7 +156,7 @@ async function callGemini(prompt) {
 
     const opts = {
       hostname: 'generativelanguage.googleapis.com',
-      path: '/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey,
+      path: '/v1beta/models/' + (process.env.LP_GEMINI_MODEL || 'gemini-2.0-flash') + ':generateContent?key=' + apiKey,
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     };
@@ -420,56 +420,56 @@ async function deployToVercel(slug, html, subdomain) {
 }
 
 // ── Deploy to Netlify (static hosting, free tier) ────────────────────────────
-async function deployToNetlify(slug, html) {
-  // Uses Netlify Deploy API — creates a new site or deploys to existing
-  const siteId = process.env.NETLIFY_SITE_ID || null;
-  const apiPath = siteId ? `/api/v1/sites/${siteId}/deploys` : '/api/v1/sites';
-  const boundary = 'NETLIFY_DEPLOY_' + Date.now();
-
-  // Netlify zip deploy: POST zip with index.html
-  const { execSync } = require('child_process');
-  const tmpDir = '/tmp/netlify_' + slug;
-  const zipPath = '/tmp/netlify_' + slug + '.zip';
-  try {
-    fs.mkdirSync(tmpDir, { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, 'index.html'), html, 'utf8');
-    execSync(`cd ${tmpDir} && zip -q ${zipPath} index.html`, { timeout: 15000 });
-    const zipContent = fs.readFileSync(zipPath);
-
-    return new Promise((resolve, reject) => {
-      const req = https.request({
-        hostname: 'api.netlify.com',
-        path: apiPath,
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + NETLIFY_TOKEN,
-          'Content-Type': 'application/zip',
-          'Content-Length': zipContent.length,
-        },
-      }, res => {
-        let d = '';
-        res.on('data', c => d += c);
-        res.on('end', () => {
-          try {
-            const j = JSON.parse(d);
-            const deployUrl = j.ssl_url || j.url || j.deploy_ssl_url;
-            if (deployUrl) {
-              log.info('[Netlify] Deployed: ' + deployUrl);
-              resolve({ url: deployUrl, provider: 'netlify', siteId: j.site_id });
-            } else {
-              reject(new Error('Netlify deploy failed: ' + JSON.stringify(j).slice(0, 200)));
-            }
-          } catch (e) { reject(e); }
-        });
+// Helper HTTP JSON/raw para a API do Netlify (cross-platform, sem zip/binário externo)
+function netlifyRequest(method, apiPath, body, contentType) {
+  return new Promise((resolve, reject) => {
+    const payload = body == null ? null : (Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+    const headers = { 'Authorization': 'Bearer ' + NETLIFY_TOKEN };
+    if (payload) { headers['Content-Type'] = contentType || 'application/json'; headers['Content-Length'] = payload.length; }
+    const req = https.request({ hostname: 'api.netlify.com', path: apiPath, method, headers }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        const ok = res.statusCode >= 200 && res.statusCode < 300;
+        if (!ok) return reject(new Error('Netlify ' + method + ' ' + apiPath + ' → ' + res.statusCode + ': ' + d.slice(0, 160)));
+        try { resolve(d ? JSON.parse(d) : {}); } catch (e) { resolve({}); }
       });
-      req.on('error', reject);
-      req.write(zipContent);
-      req.end();
     });
-  } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-    try { fs.rmSync(zipPath, { force: true }); } catch (_) {}
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+async function deployToNetlify(slug, html) {
+  // API de digest do Netlify: sem zip, sem /tmp, sem binário externo (funciona em qualquer SO).
+  const crypto = require('crypto');
+  const buf = Buffer.from(html, 'utf8');
+  const sha1 = crypto.createHash('sha1').update(buf).digest('hex');
+
+  // 1. Site: usa NETLIFY_SITE_ID se houver, senão cria um site novo (nome derivado do slug).
+  let siteId = process.env.NETLIFY_SITE_ID || null;
+  if (!siteId) {
+    const safe = ('lp-' + slug).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 60);
+    const site = await netlifyRequest('POST', '/api/v1/sites', { name: safe });
+    siteId = site.id || site.site_id;
+    if (!siteId) throw new Error('Netlify: não criou site (' + JSON.stringify(site).slice(0, 120) + ')');
   }
+
+  // 2. Cria deploy declarando o digest do index.html.
+  const deploy = await netlifyRequest('POST', `/api/v1/sites/${siteId}/deploys`, { files: { '/index.html': sha1 } });
+  const deployId = deploy.id;
+
+  // 3. Faz upload do conteúdo dos arquivos requeridos (required = sha1s que faltam).
+  const required = Array.isArray(deploy.required) ? deploy.required : [];
+  if (required.includes(sha1)) {
+    await netlifyRequest('PUT', `/api/v1/deploys/${deployId}/files/index.html`, buf, 'application/octet-stream');
+  }
+
+  const deployUrl = deploy.ssl_url || deploy.deploy_ssl_url || deploy.url
+    || ('https://' + (deploy.subdomain || slug) + '.netlify.app');
+  log.info('[Netlify] Deployed: ' + deployUrl);
+  return { url: deployUrl, provider: 'netlify', siteId };
 }
 
 // ── Smart deploy: VPS if healthy, cloud if overloaded ────────────────────────
@@ -668,11 +668,11 @@ async function deployLandingPageLang(product, langConfig) {
   const { html, slug, subdomain, canonicalUrl } = await generateHtmlMultilang(product, langConfig);
 
   let deployResult;
-  if (IS_VPS) {
-    // Smart deploy: VPS if healthy, Vercel/Netlify if overloaded
+  if (IS_VPS || FORCE_CLOUD) {
+    // Smart deploy: VPS if healthy, Vercel/Netlify se overloaded ou FORCE_CLOUD
     deployResult = await smartDeploy(slug, html, subdomain);
   } else {
-    // Local dev: just save file
+    // Local dev sem FORCE_CLOUD: salva arquivo
     const localDir = path.join(process.cwd(), 'data', 'landing_pages', slug);
     fs.mkdirSync(localDir, { recursive: true });
     fs.writeFileSync(path.join(localDir, 'index.html'), html, 'utf8');
@@ -688,15 +688,24 @@ async function deployLandingPageLang(product, langConfig) {
 
 // ── Generate all landing pages (10 languages per product) ────────────────────
 async function generateLandingPages() {
-  log.info('[LP] Iniciando geração de landing pages (10 idiomas por produto)...');
-  const products = getProductsWithLinks();
+  // Guards: evita explodir 10 idiomas × N produtos numa rodada só.
+  const maxProducts = parseInt(process.env.LP_MAX_PRODUCTS || '0');   // 0 = sem limite
+  const langFilter = (process.env.LP_LANGS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const langs = langFilter.length ? LANGUAGES.filter(l => langFilter.includes(l.code)) : LANGUAGES;
+
+  log.info('[LP] Iniciando geração de landing pages (' + langs.length + ' idioma(s) por produto)...');
+  let products = getProductsWithLinks();
   log.info('[LP] ' + products.length + ' produtos com affiliate_link encontrados');
+  if (maxProducts > 0) {
+    products = products.slice(0, maxProducts);
+    log.info('[LP] Limitado a ' + products.length + ' produto(s) (LP_MAX_PRODUCTS)');
+  }
 
   const deployed = [];
   for (const product of products) {
     log.info('[LP] Produto: "' + product.product_name.slice(0, 50) + '" [' + product.platform + ']');
 
-    for (const langConfig of LANGUAGES) {
+    for (const langConfig of langs) {
       const baseSlug = langConfig.prefix + makeSlug(product.product_name);
       // Skip PT if already has landing_page_url (other langs always regenerate to fill gaps)
       if (langConfig.code === 'pt' && product.landing_page_url) {
@@ -713,7 +722,7 @@ async function generateLandingPages() {
     }
   }
 
-  log.info('[LP] Concluído: ' + deployed.length + ' landing pages criadas (' + Math.round(deployed.length / 10) + ' produtos × 10 idiomas)');
+  log.info('[LP] Concluído: ' + deployed.length + ' landing pages criadas (' + products.length + ' produtos × ' + langs.length + ' idiomas)');
   return deployed;
 }
 
