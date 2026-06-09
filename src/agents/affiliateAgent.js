@@ -220,18 +220,50 @@ const AUTO_REQUEST = String(process.env.AFFILIATE_AUTO_REQUEST || 'false').toLow
  * Retorna { requested: bool, affiliateLink: string|null, approval: bool }.
  */
 async function hotmartRequestAffiliation(detailPage) {
-  const clickedReq = await clickByText(detailPage, ['Solicitar afiliação', 'Solicitar afiliacao', 'Quero ser afiliado'], 4000);
-  if (!clickedReq) return { requested: false, affiliateLink: null, approval: false };
-  await sleep(1500);
-  // aceitar termos se houver checkbox
-  try {
-    await detailPage.evaluate(() => {
-      document.querySelectorAll('input[type="checkbox"]').forEach(cb => { if (!cb.checked) cb.click(); });
+  // 1. Abrir o modal: botão verde "Afilie-se agora!" (instantâneo) ou "Solicitar afiliação" (aprovação).
+  const opened = await clickByText(detailPage, [
+    'Afilie-se agora', 'Afiliar-se agora', 'Solicitar afiliação', 'Solicitar afiliacao', 'Quero ser afiliado',
+  ], 5000);
+  if (!opened) return { requested: false, affiliateLink: null, approval: false };
+
+  // 2. Esperar o modal (dialog com checkbox de termos) aparecer.
+  await detailPage.waitForFunction(
+    () => !!document.querySelector('[role="dialog"], [class*="modal" i]') &&
+          document.querySelector('input[type="checkbox"]'),
+    { timeout: 6000 }
+  ).catch(() => {});
+
+  // 3. Marcar o checkbox de termos via setter nativo + eventos React.
+  //    (NÃO clicar no label/input depois — o checkbox é width:0/custom e o clique extra DESMARCA.)
+  await detailPage.evaluate(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked').set;
+    document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      if (!cb.checked) {
+        try { setter.call(cb, true); } catch (_) { cb.checked = true; }
+        ['input', 'change', 'click'].forEach(t => cb.dispatchEvent(new Event(t, { bubbles: true })));
+      }
     });
-  } catch (_) {}
-  const confirmed = await clickByText(detailPage, ['Sim, quero me afiliar', 'Quero me afiliar', 'Confirmar', 'Aceitar'], 4000);
-  await sleep(3500);
-  // capturar link de divulgação (go.hotmart.com) se a afiliação foi imediata
+  }).catch(() => {});
+
+  // 4. Esperar o botão "Sim, quero me afiliar" habilitar e clicar.
+  let confirmed = false;
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const r = await detailPage.evaluate(() => {
+      const btns = [...document.querySelectorAll('button, [role="button"]')];
+      const b = btns.find(x => /sim,?\s*quero me afiliar|quero me afiliar|confirmar afilia/i.test((x.textContent || '').trim()));
+      if (!b) return { found: false };
+      const disabled = b.disabled || b.getAttribute('aria-disabled') === 'true' || b.classList.contains('disabled');
+      if (disabled) return { found: true, disabled: true };
+      b.click();
+      return { found: true, clicked: true };
+    }).catch(() => ({ found: false }));
+    if (r.clicked) { confirmed = true; break; }
+    await sleep(600);
+  }
+
+  await sleep(4000);
+  // 5. Capturar link de divulgação (go.hotmart.com) se a afiliação foi imediata.
   const affiliateLink = await detailPage.evaluate(() => {
     const html = document.documentElement.innerHTML;
     const m = html.match(/https?:\/\/go\.hotmart\.com\/[A-Za-z0-9?=&._-]+/i)
@@ -240,13 +272,14 @@ async function hotmartRequestAffiliation(detailPage) {
     for (const inp of document.querySelectorAll('input, textarea')) {
       if (inp.value && /hotmart\.com/.test(inp.value) && /(ref=|go\.hotmart)/.test(inp.value)) return inp.value;
     }
-    return null;
+    const a = document.querySelector('a[href*="go.hotmart.com"], a[href*="hotmart.com"][href*="ref="]');
+    return a ? a.href : null;
   }).catch(() => null);
-  // detecta se ficou "pendente de aprovação"
+  // 6. Detectar "pendente de aprovação".
   const approval = await detailPage.evaluate(() =>
-    /aprova[çc][aã]o pendente|aguardando aprova|solicita[çc][aã]o enviada|pendente de aprova/i.test(document.body.innerText)
+    /aprova[çc][aã]o pendente|aguardando aprova|solicita[çc][aã]o enviada|pendente de aprova|sob an[áa]lise/i.test(document.body.innerText)
   ).catch(() => false);
-  return { requested: !!confirmed, affiliateLink, approval };
+  return { requested: confirmed, affiliateLink, approval };
 }
 
 async function runHotmartAffiliate() {
@@ -397,6 +430,76 @@ async function runHotmartAffiliate() {
 // ── CAKTO affiliate discovery ─────────────────────────────────────────────────
 const CAKTO_SESSION_FILE = resolveSessionFile('cakto', 'CAKTO_SESSION_FILE');
 
+/**
+ * Solicita afiliação a um produto da Vitrine Cakto.
+ * Abre o card pelo nome -> modal -> "Solicitar Afiliação" -> confirma.
+ * Retorna { requested, affiliateLink, approval }.
+ */
+async function caktoRequestAffiliation(page, productName) {
+  // 1. Abrir o modal do produto: clique de mouse REAL no centro do card (React não reage a el.click()).
+  const box = await page.evaluate((name) => {
+    const cards = [...document.querySelectorAll('.MuiCard-root')];
+    const card = cards.find(c => (c.textContent || '').includes(name) && /Você recebe/i.test(c.textContent || ''));
+    if (!card) return null;
+    card.scrollIntoView({ block: 'center' });
+    const r = card.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + 60 };   // topo do card (imagem/nome), evita botões de baixo
+  }, productName.slice(0, 30)).catch(() => null);
+  if (!box) return { requested: false, affiliateLink: null, approval: false };
+  await page.mouse.click(box.x, box.y).catch(() => {});
+
+  await page.waitForFunction(
+    () => /Solicitar Afilia|Afiliar-se|Quero me afiliar/i.test(document.body.innerText) &&
+          !!document.querySelector('[role="dialog"], [class*="Dialog"], [class*="Modal"]'),
+    { timeout: 6000 }
+  ).catch(() => {});
+  await sleep(800);
+
+  // 2. Clicar "Solicitar Afiliação" dentro do modal.
+  const reqClicked = await page.evaluate(() => {
+    const modal = document.querySelector('[role="dialog"], [class*="Dialog"], [class*="Modal"]') || document;
+    const b = [...modal.querySelectorAll('button, a, [role="button"]')]
+      .find(x => /solicitar afilia|afiliar-se|quero me afiliar|participar/i.test((x.textContent || '').trim()));
+    if (b) { b.click(); return true; }
+    return false;
+  }).catch(() => false);
+  if (!reqClicked) { await page.keyboard.press('Escape').catch(() => {}); return { requested: false, affiliateLink: null, approval: false }; }
+  await sleep(1500);
+
+  // 3. Aceitar termos (checkbox) se houver + confirmar.
+  await page.evaluate(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked').set;
+    document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      if (!cb.checked) { try { setter.call(cb, true); } catch (_) { cb.checked = true; } ['input', 'change'].forEach(t => cb.dispatchEvent(new Event(t, { bubbles: true }))); }
+    });
+  }).catch(() => {});
+  await sleep(500);
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button, [role="button"]')]
+      .find(x => /confirmar|sim,?\s*quero|aceitar|solicitar$/i.test((x.textContent || '').trim()) &&
+                 !(x.disabled || x.getAttribute('aria-disabled') === 'true'));
+    if (b) b.click();
+  }).catch(() => {});
+  await sleep(3000);
+
+  // 4. Capturar link de divulgação (pay/go.cakto) ou detectar pendência.
+  const affiliateLink = await page.evaluate(() => {
+    const html = document.documentElement.innerHTML;
+    const m = html.match(/https?:\/\/(?:pay|go|app)\.cakto\.com\.br\/[A-Za-z0-9?=&._\/-]*(?:ref|aff)[A-Za-z0-9?=&._\/-]*/i);
+    if (m) return m[0];
+    for (const inp of document.querySelectorAll('input, textarea')) {
+      if (inp.value && /cakto\.com\.br/.test(inp.value) && /(ref|aff)/.test(inp.value)) return inp.value;
+    }
+    return null;
+  }).catch(() => null);
+  const approval = await page.evaluate(() =>
+    /solicita[çc][aã]o enviada|aguardando aprova|pendente|sob an[áa]lise|em an[áa]lise/i.test(document.body.innerText)
+  ).catch(() => false);
+  await page.keyboard.press('Escape').catch(() => {});
+  await sleep(500);
+  return { requested: true, affiliateLink, approval };
+}
+
 async function runCaktoAffiliate() {
   log.info('[Cakto] Iniciando busca de afiliados...');
   const session = loadSession(CAKTO_SESSION_FILE);
@@ -495,26 +598,33 @@ async function runCaktoAffiliate() {
 
     for (const prod of top) {
       try {
+        let affiliateLink = null;
+        let status = 'discovered';
+        if (AUTO_REQUEST) {
+          const r = await caktoRequestAffiliation(page, prod.name);
+          affiliateLink = r.affiliateLink;
+          status = affiliateLink ? 'affiliated' : (r.approval ? 'pending_approval' : (r.requested ? 'requested' : 'discovered'));
+        }
         const row = {
           platform: 'cakto',
           product_id: prod.product_id,
           product_name: prod.name,
           product_url: prod.product_url || '',
-          affiliate_link: null,           // link de divulgação é gerado por produto (etapa futura)
+          affiliate_link: affiliateLink,
           category: prod.tags || 'Vitrine',
           price: 0,
           commission_pct: 0,
           commission_value: prod.commission_value,
           temperature: prod.temperature,
-          status: 'discovered',
+          status,
         };
         upsertProduct(row);
         results.push(row);
-        log.info('[Cakto] discovered: "' + prod.name.slice(0, 42) + '" R$' + prod.commission_value + ' temp=' + prod.temperature);
+        log.info('[Cakto] ' + status + ': "' + prod.name.slice(0, 42) + '" R$' + prod.commission_value + (affiliateLink ? ' link=' + affiliateLink.slice(0, 40) : ''));
       } catch (pe) {
         log.warn('[Cakto] produto error: ' + pe.message.slice(0, 90));
       }
-      await sleep(300);
+      await sleep(AUTO_REQUEST ? 800 : 300);
     }
   } catch (e) {
     log.error('[Cakto] runCaktoAffiliate error: ' + e.message);
