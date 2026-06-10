@@ -775,9 +775,11 @@ const LP_I18N = {
           ['O pagamento é seguro?', 'Sim, a compra é processada pela plataforma oficial.']],
     affNote: 'Link de afiliado — ganho comissão sem custo extra para você',
     affFoot: '*Links de afiliado — posso ganhar comissão sem custo adicional para você.',
-    hubTitle: '🛒 Ofertas Selecionadas', hubSub: 'produtos com os melhores preços', see: 'Ver oferta →',
+    hubTitle: '🛒 Ofertas Selecionadas', hubSub: 'produtos com os melhores preços', see: 'Ver oferta',
     hubFoot: 'Contém links de afiliado. Podemos receber comissão pelas compras, sem custo extra para você.',
-    metaDesc: n => `Conheça ${n}. Produto de qualidade com ótimo custo-benefício.` },
+    metaDesc: n => `Conheça ${n}. Produto de qualidade com ótimo custo-benefício.`,
+    priceNote: 'na Amazon — preço pode variar', trustSecure: 'Compra segura', trustShip: 'Envio pela Amazon', trustReturn: 'Devolução fácil',
+    search: 'Buscar produto...', all: 'Todos' },
   en: { htmlLang: 'en', offer: 'Special Offer', buy: 'Buy Now', secure: 'Get My Product',
     why: 'Why choose this product?', faqT: 'Frequently Asked Questions',
     benefits: ['Proven quality', 'Fast delivery', 'Best price', 'Secure checkout', 'Top rated'],
@@ -786,9 +788,11 @@ const LP_I18N = {
           ['Is payment secure?', 'Yes, the purchase is processed by the official platform.']],
     affNote: 'Affiliate link — I earn a commission at no extra cost to you',
     affFoot: '*Affiliate links — I may earn a commission at no additional cost to you.',
-    hubTitle: '🛒 Curated Deals', hubSub: 'products at the best prices', see: 'View deal →',
+    hubTitle: '🛒 Curated Deals', hubSub: 'products at the best prices', see: 'View deal',
     hubFoot: 'Contains affiliate links. We may earn a commission, at no extra cost to you.',
-    metaDesc: n => `Discover ${n}. Quality product with great value for money.` },
+    metaDesc: n => `Discover ${n}. Quality product with great value for money.`,
+    priceNote: 'on Amazon — price may vary', trustSecure: 'Secure checkout', trustShip: 'Shipped by Amazon', trustReturn: 'Easy returns',
+    search: 'Search products...', all: 'All' },
   es: { htmlLang: 'es', offer: 'Oferta Especial', buy: 'Comprar Ahora', secure: 'Asegurar Mi Producto',
     why: '¿Por qué elegir este producto?', faqT: 'Preguntas Frecuentes',
     benefits: ['Calidad comprobada', 'Entrega rápida', 'Mejor precio', 'Compra segura', 'Alta valoración'],
@@ -797,18 +801,26 @@ const LP_I18N = {
           ['¿El pago es seguro?', 'Sí, la compra la procesa la plataforma oficial.']],
     affNote: 'Enlace de afiliado — gano comisión sin costo extra para ti',
     affFoot: '*Enlaces de afiliado — puedo ganar comisión sin costo adicional para ti.',
-    hubTitle: '🛒 Ofertas Seleccionadas', hubSub: 'productos a los mejores precios', see: 'Ver oferta →',
+    hubTitle: '🛒 Ofertas Seleccionadas', hubSub: 'productos a los mejores precios', see: 'Ver oferta',
     hubFoot: 'Contiene enlaces de afiliado. Podemos recibir comisión, sin costo extra para ti.',
-    metaDesc: n => `Descubre ${n}. Producto de calidad con excelente relación precio-calidad.` },
+    metaDesc: n => `Descubre ${n}. Producto de calidad con excelente relación precio-calidad.`,
+    priceNote: 'en Amazon — el precio puede variar', trustSecure: 'Compra segura', trustShip: 'Envío por Amazon', trustReturn: 'Devolución fácil',
+    search: 'Buscar producto...', all: 'Todos' },
 };
 
-function buildLocalizedPage(product, langCode, canonicalUrl) {
+function buildLocalizedPage(product, langCode, canonicalUrl, hubPrefix) {
   const t = LP_I18N[langCode] || LP_I18N.pt;
   const name = product.product_name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const link = (product.affiliate_link || '#').replace(/"/g, '%22');
-  const price = product.price ? 'R$ ' + product.price.toFixed(2).replace('.', ',') : t.offer;
-  const benefitsHtml = t.benefits.map((b, i) => `<div class="benefit"><div class="icon">${['✅','⚡','💰','🔒','⭐'][i]}</div><p>${b}</p></div>`).join('');
-  const faqHtml = t.faq.map(([q, a]) => `<div class="faq-item"><h3>${q}</h3><p>${a}</p></div>`).join('');
+  const img = product.image_url && /^https?:/.test(product.image_url) ? product.image_url : null;
+  const price = product.price ? 'R$ ' + product.price.toFixed(2).replace('.', ',') : '';
+  const hubHref = hubPrefix || '/';
+  const benefitsHtml = t.benefits.map((b, i) => `<div class="benefit"><span>${['✓','⚡','💰','🔒','★'][i]}</span><p>${b}</p></div>`).join('');
+  const faqHtml = t.faq.map(([q, a]) => `<details class="faq"><summary>${q}</summary><p>${a}</p></details>`).join('');
+  const jsonLd = JSON.stringify({
+    '@context': 'https://schema.org', '@type': 'Product', name: product.product_name,
+    ...(img ? { image: img } : {}), ...(product.price ? { offers: { '@type': 'Offer', price: product.price.toFixed(2), priceCurrency: 'BRL', url: canonicalUrl } } : {}),
+  });
   return `<!DOCTYPE html>
 <html lang="${t.htmlLang}">
 <head>
@@ -816,65 +828,142 @@ function buildLocalizedPage(product, langCode, canonicalUrl) {
 <title>${name} — ${t.offer}</title>
 <meta name="description" content="${t.metaDesc(name)}">
 <link rel="canonical" href="${canonicalUrl}">
-<meta property="og:title" content="${name}"><meta property="og:url" content="${canonicalUrl}"><meta property="og:type" content="website">
-<style>*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#333;line-height:1.6}
-.hero{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:80px 20px;text-align:center}
-.hero h1{font-size:2.2rem;margin-bottom:1rem;max-width:700px;margin-left:auto;margin-right:auto}
-.hero p{font-size:1.2rem;margin-bottom:2rem;opacity:.9}
-.cta-btn{display:inline-block;background:#ff6b35;color:#fff;padding:18px 48px;border-radius:50px;text-decoration:none;font-size:1.2rem;font-weight:bold;transition:transform .2s}
-.cta-btn:hover{transform:scale(1.05)}
-.section{padding:60px 20px;max-width:900px;margin:0 auto}
-.benefits{display:flex;flex-wrap:wrap;gap:20px;justify-content:center;margin-top:30px}
-.benefit{background:#f8f9fa;border-radius:12px;padding:24px;flex:1;min-width:220px;max-width:260px;text-align:center}
-.benefit .icon{font-size:2.5rem;margin-bottom:12px}
-.faq-item{border-bottom:1px solid #eee;padding:20px 0}.faq-item h3{color:#667eea;margin-bottom:8px}
-.disclaimer{font-size:.75rem;color:#999;text-align:center;padding:20px;background:#f8f9fa}
-footer{background:#333;color:#ddd;text-align:center;padding:20px;font-size:.85rem}</style>
+<meta property="og:title" content="${name}"><meta property="og:url" content="${canonicalUrl}"><meta property="og:type" content="product">
+${img ? `<meta property="og:image" content="${img}">` : ''}
+<script type="application/ld+json">${jsonLd}</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--ink:#0f172a;--mut:#64748b;--line:#e2e8f0;--acc:#2563eb;--cta:#ff6b35}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--ink);background:#f8fafc;line-height:1.6}
+.top{background:#fff;border-bottom:1px solid var(--line);padding:14px 20px;position:sticky;top:0;z-index:10}
+.top a{color:var(--acc);text-decoration:none;font-weight:700;font-size:.95rem}
+.wrap{max-width:1040px;margin:0 auto;padding:32px 20px}
+.hero{display:grid;grid-template-columns:1fr 1fr;gap:40px;background:#fff;border:1px solid var(--line);border-radius:24px;padding:40px;align-items:center;box-shadow:0 4px 24px rgba(15,23,42,.06)}
+.pic{display:flex;align-items:center;justify-content:center;background:#fff;border-radius:16px;min-height:340px}
+.pic img{max-width:100%;max-height:380px;object-fit:contain}
+.pic .ph{font-size:6rem}
+h1{font-size:1.55rem;line-height:1.35;margin-bottom:14px;font-weight:800}
+.price{font-size:2.2rem;font-weight:800;color:var(--ink);margin:10px 0 4px}
+.price small{font-size:.85rem;color:var(--mut);font-weight:500;display:block}
+.cta{display:block;text-align:center;background:var(--cta);color:#fff;padding:17px 30px;border-radius:14px;text-decoration:none;font-size:1.15rem;font-weight:800;margin:22px 0 10px;box-shadow:0 8px 24px rgba(255,107,53,.35);transition:transform .15s, box-shadow .15s}
+.cta:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(255,107,53,.45)}
+.trust{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px}
+.trust span{font-size:.8rem;color:var(--mut);background:#f1f5f9;border-radius:8px;padding:6px 12px;font-weight:600}
+.note{font-size:.74rem;color:var(--mut);margin-top:12px}
+h2{font-size:1.25rem;margin:46px 0 18px;font-weight:800}
+.benefits{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px}
+.benefit{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center}
+.benefit span{display:inline-flex;width:42px;height:42px;align-items:center;justify-content:center;background:#eff6ff;color:var(--acc);border-radius:12px;font-size:1.2rem;font-weight:800;margin-bottom:10px}
+.benefit p{font-size:.9rem;font-weight:600}
+.faq{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 20px;margin-bottom:10px}
+.faq summary{font-weight:700;cursor:pointer;font-size:.95rem}
+.faq p{margin-top:10px;color:var(--mut);font-size:.92rem}
+.bottom-cta{text-align:center;margin:40px 0 8px}
+.bottom-cta .cta{display:inline-block;min-width:320px}
+footer{text-align:center;color:#94a3b8;font-size:.78rem;padding:34px 20px;border-top:1px solid var(--line);margin-top:40px}
+@media(max-width:760px){.hero{grid-template-columns:1fr;padding:24px}.pic{min-height:240px}.pic img{max-height:260px}h1{font-size:1.3rem}}
+</style>
 </head>
 <body>
-<div class="hero"><h1>${name}</h1><p>${price}</p>
-<a href="${link}" class="cta-btn" rel="nofollow sponsored">${t.buy}</a>
-<p class="disclaimer" style="margin-top:12px;font-size:.75rem;opacity:.7;background:transparent;color:#fff">${t.affNote}</p></div>
-<div class="section"><h2 style="text-align:center;margin-bottom:30px">${t.why}</h2><div class="benefits">${benefitsHtml}</div></div>
-<div class="section"><h2 style="text-align:center;margin-bottom:30px">${t.faqT}</h2>${faqHtml}</div>
-<div style="text-align:center;padding:40px 20px"><a href="${link}" class="cta-btn" rel="nofollow sponsored">${t.secure}</a></div>
-<div class="disclaimer">${t.affFoot}</div>
-<footer>© ${new Date().getFullYear()} ${BASE_DOMAIN}</footer>
+<div class="top"><div class="wrap" style="padding:0;max-width:1040px"><a href="${hubHref}">← ${t.hubTitle.replace('🛒 ', '')}</a></div></div>
+<div class="wrap">
+  <div class="hero">
+    <div class="pic">${img ? `<img src="${img}" alt="${name}" loading="eager">` : '<div class="ph">🛍️</div>'}</div>
+    <div>
+      <h1>${name}</h1>
+      ${price ? `<div class="price">${price}<small>${t.priceNote}</small></div>` : ''}
+      <a href="${link}" class="cta" rel="nofollow sponsored">${t.buy} →</a>
+      <div class="trust"><span>🔒 ${t.trustSecure}</span><span>🚚 ${t.trustShip}</span><span>↩️ ${t.trustReturn}</span></div>
+      <p class="note">${t.affNote}</p>
+    </div>
+  </div>
+  <h2>${t.why}</h2>
+  <div class="benefits">${benefitsHtml}</div>
+  <h2>${t.faqT}</h2>
+  ${faqHtml}
+  <div class="bottom-cta"><a href="${link}" class="cta" rel="nofollow sponsored">${t.secure} →</a></div>
+</div>
+<footer>${t.affFoot}<br>© ${new Date().getFullYear()} ${BASE_DOMAIN}</footer>
 </body></html>`;
 }
 
 function buildHubHtml(items, langCode = 'pt', allLangs = ['pt']) {
   const t = LP_I18N[langCode] || LP_I18N.pt;
   const prefix = langCode === 'pt' ? '' : '/' + langCode;
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const switcher = allLangs.length > 1
-    ? `<nav class="langs">${allLangs.map(l => l === langCode
-        ? `<span class="on">${l.toUpperCase()}</span>`
-        : `<a href="${l === 'pt' ? '/' : '/' + l + '/'}">${l.toUpperCase()}</a>`).join(' · ')}</nav>`
+    ? allLangs.map(l => l === langCode
+        ? `<span class="lng on">${l.toUpperCase()}</span>`
+        : `<a class="lng" href="${l === 'pt' ? '/' : '/' + l + '/'}">${l.toUpperCase()}</a>`).join('')
     : '';
-  const cards = items.map(it => `
-    <a class="card" href="${prefix}/${it.slug}/">
-      <div class="emoji">${it.emoji}</div>
-      <div class="name">${(it.name || '').replace(/</g, '&lt;').slice(0, 80)}</div>
-      <div class="cta">${t.see}</div>
-    </a>`).join('');
+  const cats = [...new Set(items.map(it => it.category).filter(Boolean))];
+  const chips = ['<button class="chip on" data-cat="*">' + t.all + '</button>']
+    .concat(cats.map(c => `<button class="chip" data-cat="${esc(c)}">${esc(c)}</button>`)).join('');
+  const cards = items.map(it => {
+    const price = it.price ? 'R$ ' + it.price.toFixed(2).replace('.', ',') : '';
+    const media = it.image ? `<img src="${esc(it.image)}" alt="${esc(it.name)}" loading="lazy">` : `<div class="ph">${it.emoji}</div>`;
+    return `
+    <a class="card" href="${prefix}/${it.slug}/" data-cat="${esc(it.category || '')}" data-name="${esc((it.name || '').toLowerCase())}">
+      <div class="media">${media}</div>
+      <div class="body">
+        <div class="name">${esc((it.name || '').slice(0, 84))}</div>
+        <div class="row">${price ? `<div class="price">${price}</div>` : '<div></div>'}<div class="go">${t.see} →</div></div>
+      </div>
+    </a>`;
+  }).join('');
   return `<!DOCTYPE html><html lang="${t.htmlLang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${t.hubTitle.replace('🛒 ', '')} — Veloxisit</title>
 <meta name="description" content="${items.length} ${t.hubSub}.">
-<style>body{font-family:system-ui,Arial,sans-serif;margin:0;background:#0f172a;color:#e2e8f0}
-header{padding:48px 20px;text-align:center;background:linear-gradient(135deg,#1e293b,#0f172a)}
-h1{margin:0 0 8px;font-size:2rem}header p{color:#94a3b8;margin:0}
-.langs{margin-top:14px;font-size:.9rem}.langs a{color:#3b82f6;text-decoration:none;font-weight:700}.langs .on{color:#e2e8f0;font-weight:700}
-.grid{max-width:1100px;margin:0 auto;padding:24px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
-.card{background:#1e293b;border:1px solid #334155;border-radius:14px;padding:20px;text-decoration:none;color:inherit;transition:.2s;display:flex;flex-direction:column;gap:10px}
-.card:hover{transform:translateY(-4px);border-color:#3b82f6}
-.emoji{font-size:2.2rem}.name{font-weight:600;font-size:.95rem;line-height:1.3;flex:1}
-.cta{color:#3b82f6;font-weight:700;font-size:.9rem}
-footer{text-align:center;padding:30px;color:#64748b;font-size:.8rem}</style></head>
-<body><header><h1>${t.hubTitle}</h1><p>${items.length} ${t.hubSub}</p>${switcher}</header>
-<div class="grid">${cards}</div>
-<footer>${t.hubFoot}</footer></body></html>`;
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--ink:#0f172a;--mut:#64748b;--line:#e2e8f0;--acc:#2563eb;--cta:#ff6b35}
+body{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;color:var(--ink)}
+.hd{background:linear-gradient(120deg,#1d4ed8,#7c3aed);color:#fff;padding:54px 20px 88px;text-align:center;position:relative}
+.hd h1{font-size:2.3rem;font-weight:900;letter-spacing:-.5px}
+.hd p{opacity:.85;margin-top:8px;font-size:1.05rem}
+.lngs{position:absolute;top:18px;right:22px}
+.lng{display:inline-block;margin-left:6px;padding:5px 12px;border-radius:999px;background:rgba(255,255,255,.14);color:#fff;text-decoration:none;font-weight:700;font-size:.8rem}
+.lng.on{background:#fff;color:#1d4ed8}
+.tools{max-width:1140px;margin:-52px auto 0;padding:0 20px;position:relative;z-index:2}
+.search{width:100%;padding:16px 22px;border:1px solid var(--line);border-radius:16px;font-size:1rem;box-shadow:0 10px 30px rgba(15,23,42,.10);outline:none;background:#fff}
+.search:focus{border-color:var(--acc)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.chip{border:1px solid var(--line);background:#fff;color:var(--mut);padding:8px 16px;border-radius:999px;font-size:.85rem;font-weight:700;cursor:pointer;transition:.15s}
+.chip.on,.chip:hover{background:var(--ink);color:#fff;border-color:var(--ink)}
+.grid{max-width:1140px;margin:26px auto;padding:0 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(245px,1fr));gap:18px}
+.card{background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden;text-decoration:none;color:inherit;display:flex;flex-direction:column;transition:transform .18s, box-shadow .18s}
+.card:hover{transform:translateY(-5px);box-shadow:0 14px 34px rgba(15,23,42,.12)}
+.media{height:200px;display:flex;align-items:center;justify-content:center;background:#fff;padding:16px;border-bottom:1px solid #f1f5f9}
+.media img{max-width:100%;max-height:100%;object-fit:contain}
+.ph{font-size:3.4rem}
+.body{padding:16px 18px 18px;display:flex;flex-direction:column;gap:12px;flex:1}
+.name{font-weight:700;font-size:.92rem;line-height:1.4;flex:1;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.row{display:flex;align-items:center;justify-content:space-between}
+.price{font-weight:900;font-size:1.12rem}
+.go{color:var(--cta);font-weight:800;font-size:.85rem}
+.empty{display:none;text-align:center;color:var(--mut);padding:60px 20px}
+footer{text-align:center;color:#94a3b8;font-size:.78rem;padding:36px 20px;border-top:1px solid var(--line);margin-top:30px}
+@media(max-width:640px){.hd h1{font-size:1.7rem}.grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}.media{height:150px}}
+</style></head>
+<body>
+<header class="hd"><div class="lngs">${switcher}</div><h1>${t.hubTitle}</h1><p>${items.length} ${t.hubSub}</p></header>
+<div class="tools">
+  <input class="search" id="q" type="search" placeholder="${t.search}">
+  <div class="chips" id="chips">${chips}</div>
+</div>
+<div class="grid" id="grid">${cards}</div>
+<div class="empty" id="empty">∅</div>
+<footer>${t.hubFoot}</footer>
+<script>
+(function(){
+  var q=document.getElementById('q'),grid=document.getElementById('grid'),cards=[].slice.call(grid.children),cat='*';
+  function apply(){var s=q.value.toLowerCase().trim(),n=0;cards.forEach(function(c){var ok=(cat==='*'||c.dataset.cat===cat)&&(!s||c.dataset.name.indexOf(s)>-1);c.style.display=ok?'':'none';if(ok)n++;});document.getElementById('empty').style.display=n?'none':'block';}
+  q.addEventListener('input',apply);
+  document.getElementById('chips').addEventListener('click',function(e){var b=e.target.closest('.chip');if(!b)return;document.querySelectorAll('.chip').forEach(function(x){x.classList.remove('on')});b.classList.add('on');cat=b.dataset.cat;apply();});
+})();
+</script>
+</body></html>`;
 }
 
 /**
@@ -904,9 +993,13 @@ async function deployAllOneSite(opts = {}) {
         const prefix = lc === 'pt' ? '' : '/' + lc;
         const pagePath = prefix + '/' + baseSlug + '/index.html';
         const canonical = 'https://' + BASE_DOMAIN + prefix + '/' + baseSlug + '/';
-        files[pagePath] = buildLocalizedPage(tracked, lc, canonical);
+        files[pagePath] = buildLocalizedPage(tracked, lc, canonical, lc === 'pt' ? '/' : '/' + lc + '/');
       }
-      items.push({ slug: baseSlug, name: product.product_name, emoji: emojiFor((product.category || '') + ' ' + product.product_name), id: product.id });
+      items.push({
+        slug: baseSlug, name: product.product_name, id: product.id,
+        image: product.image_url || null, price: product.price || 0, category: product.category || '',
+        emoji: emojiFor((product.category || '') + ' ' + product.product_name),
+      });
     } catch (e) { log.warn('[LP-batch] erro "' + product.product_name.slice(0, 30) + '": ' + e.message.slice(0, 60)); }
   }
   if (!items.length) { log.warn('[LP-batch] nenhuma página gerada'); return { siteUrl: null, count: 0 }; }
@@ -923,4 +1016,7 @@ async function deployAllOneSite(opts = {}) {
   return { siteUrl, count: items.length, langs, files: Object.keys(files).length };
 }
 
-module.exports = { generateLandingPages, deployLandingPage, deployLandingPageLang, deployAllOneSite, LANGUAGES };
+module.exports = {
+  generateLandingPages, deployLandingPage, deployLandingPageLang, deployAllOneSite,
+  buildHubHtml, buildLocalizedPage, LANGUAGES,
+};

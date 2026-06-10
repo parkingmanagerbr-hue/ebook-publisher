@@ -66,7 +66,7 @@ function getDb() {
   `);
   // Migração leve para bancos antigos (colunas novas)
   for (const [col, ddl] of [
-    ['commission_value', 'REAL'], ['temperature', 'REAL'], ['status', 'TEXT'],
+    ['commission_value', 'REAL'], ['temperature', 'REAL'], ['status', 'TEXT'], ['image_url', 'TEXT'],
   ]) {
     try { _db.exec(`ALTER TABLE affiliate_products ADD COLUMN ${col} ${ddl}`); } catch (_) {}
   }
@@ -78,8 +78,8 @@ function upsertProduct(row) {
   db.prepare(`
     INSERT INTO affiliate_products
       (platform, product_id, product_name, product_url, affiliate_link, category, price,
-       commission_pct, commission_value, temperature, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       commission_pct, commission_value, temperature, status, image_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(platform, product_id) DO UPDATE SET
       product_name     = excluded.product_name,
       product_url      = COALESCE(excluded.product_url, product_url),
@@ -89,11 +89,12 @@ function upsertProduct(row) {
       commission_pct   = excluded.commission_pct,
       commission_value = excluded.commission_value,
       temperature      = excluded.temperature,
-      status           = COALESCE(excluded.status, status)
+      status           = COALESCE(excluded.status, status),
+      image_url        = COALESCE(excluded.image_url, image_url)
   `).run(
     row.platform, row.product_id, row.product_name, row.product_url,
     row.affiliate_link, row.category, row.price, row.commission_pct,
-    row.commission_value, row.temperature, row.status
+    row.commission_value, row.temperature, row.status, row.image_url || null
   );
 }
 
@@ -684,6 +685,7 @@ function importAmazonJson() {
         commission_value: 0,
         temperature: 0,
         status: 'affiliated',
+        image_url: p.image_url || null,
       });
       imported++;
     }
@@ -796,6 +798,7 @@ async function runAmazonAffiliate() {
             commission_value: 0,
             temperature: 0,
             status: 'affiliated',          // link instantâneo via tag
+            image_url: _hiresImg(p.img),   // imagem real do produto (full-res)
           };
           upsertProduct(row);
           results.push(row);
