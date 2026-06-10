@@ -388,8 +388,19 @@ function _formatUptime(sec) {
 
 // ─── Afiliados & Landing Pages ────────────────────────────────────────────────
 
+let _affDb = null;
 function getAffiliateDb() {
-  const db = getDb();
+  // MESMO arquivo do affiliateAgent (data/db/ebooks.db) — NÃO o metrics.db.
+  // Antes este helper abria metrics.db e o dashboard/tracking não enxergava os produtos do agente.
+  if (_affDb) return _affDb;
+  const Database = require('better-sqlite3');
+  const fs = require('fs');
+  const _inDocker = process.platform !== 'win32' && fs.existsSync('/app/data');
+  const dir = _inDocker ? '/app/data/db' : path.join(__dirname, '../../data/db');
+  const dbPath = process.env.AFFILIATE_DB_PATH || path.join(dir, 'ebooks.db');
+  try { fs.mkdirSync(path.dirname(dbPath), { recursive: true }); } catch (_) {}
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
   db.exec(`
     CREATE TABLE IF NOT EXISTS affiliate_products (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -404,8 +415,23 @@ function getAffiliateDb() {
       landing_page_url TEXT,
       created_at       TEXT DEFAULT (datetime('now')),
       UNIQUE(platform, product_id)
-    )
+    );
+    CREATE TABLE IF NOT EXISTS affiliate_clicks (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER,
+      platform   TEXT,
+      referer    TEXT,
+      user_agent TEXT,
+      ip_hash    TEXT,
+      clicked_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_clicks_product ON affiliate_clicks(product_id);
   `);
+  // Migrações idempotentes (colunas que o agente usa + tracking)
+  for (const col of ['click_count INTEGER DEFAULT 0', 'commission_value REAL', 'temperature REAL', 'status TEXT']) {
+    try { db.exec('ALTER TABLE affiliate_products ADD COLUMN ' + col); } catch (_) {}
+  }
+  _affDb = db;
   return db;
 }
 
