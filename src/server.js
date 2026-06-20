@@ -187,6 +187,97 @@ app.get('/api/cakto-otp', (req, res) => {
   });
 });
 
+// ── Painel de afiliados + ebooks (protegido por chave: /painel?key=...) ─────────
+app.get('/painel', (req, res) => {
+  const KEY = process.env.PAINEL_KEY || 'genia2026';
+  if ((req.query.key || '') !== KEY) {
+    return res.status(401).send('<h2 style="font-family:sans-serif">Acesso negado</h2><p style="font-family:sans-serif">Use /painel?key=SUA_CHAVE</p>');
+  }
+  try {
+    const Database = require('better-sqlite3');
+    const _inDocker = process.platform !== 'win32' && fs.existsSync('/app/data');
+    const affPath = process.env.AFFILIATE_DB_PATH || path.join(_inDocker ? '/app/data/db' : path.join(__dirname, '../data/db'), 'ebooks.db');
+    const metPath = path.join(__dirname, '../data/metrics.db');
+
+    let aff = { total: 0, links: 0, clicks: 0, byPlat: [], top: [], daily: [] };
+    try {
+      const db = new Database(affPath, { readonly: true });
+      aff.total = db.prepare('SELECT count(*) c FROM affiliate_products').get().c;
+      aff.links = db.prepare('SELECT count(*) c FROM affiliate_products WHERE affiliate_link IS NOT NULL').get().c;
+      aff.clicks = db.prepare('SELECT COALESCE(sum(click_count),0) c FROM affiliate_products').get().c;
+      aff.byPlat = db.prepare("SELECT platform, count(*) total, COALESCE(sum(affiliate_link IS NOT NULL),0) com_link, COALESCE(sum(click_count),0) clicks FROM affiliate_products GROUP BY platform ORDER BY clicks DESC, total DESC").all();
+      aff.top = db.prepare('SELECT product_name, platform, click_count, image_url, landing_page_url FROM affiliate_products WHERE click_count > 0 ORDER BY click_count DESC LIMIT 15').all();
+      try { aff.daily = db.prepare("SELECT substr(clicked_at,1,10) d, count(*) c FROM affiliate_clicks GROUP BY d ORDER BY d DESC LIMIT 14").all(); } catch (_) {}
+      db.close();
+    } catch (e) { aff.err = e.message; }
+
+    let eb = { total: 0, byStatus: [], recent: [], daily: [] };
+    try {
+      const db = new Database(metPath, { readonly: true });
+      eb.total = db.prepare('SELECT count(*) c FROM ebooks').get().c;
+      eb.byStatus = db.prepare('SELECT status, count(*) c FROM ebooks GROUP BY status ORDER BY c DESC').all();
+      eb.recent = db.prepare('SELECT title, status, language, created_at FROM ebooks ORDER BY created_at DESC LIMIT 12').all();
+      eb.daily = db.prepare("SELECT substr(created_at,1,10) d, count(*) c FROM ebooks GROUP BY d ORDER BY d DESC LIMIT 14").all();
+      db.close();
+    } catch (e) { eb.err = e.message; }
+
+    res.send(renderPainel(aff, eb));
+  } catch (e) {
+    res.status(500).send('Erro: ' + e.message);
+  }
+});
+
+function renderPainel(aff, eb) {
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const fmt = n => Number(n || 0).toLocaleString('pt-BR');
+  const maxD = Math.max(1, ...eb.daily.map(x => x.c), ...aff.daily.map(x => x.c));
+  const bars = (arr, color) => arr.slice().reverse().map(x => `<div class="bar"><div class="fill" style="height:${Math.round(x.c / maxD * 90) + 6}px;background:${color}" title="${x.d}: ${x.c}"></div><span>${(x.d || '').slice(5)}</span></div>`).join('');
+  const card = (label, val, sub) => `<div class="kpi"><div class="v">${val}</div><div class="l">${label}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  const platRows = aff.byPlat.map(p => `<tr><td>${esc(p.platform)}</td><td>${fmt(p.total)}</td><td>${fmt(p.com_link)}</td><td><b>${fmt(p.clicks)}</b></td></tr>`).join('');
+  const topRows = aff.top.length ? aff.top.map((p, i) => `<tr><td>${i + 1}</td><td class="nm">${p.image_url ? `<img src="${esc(p.image_url)}">` : ''}<span>${esc((p.product_name || '').slice(0, 60))}</span></td><td>${esc(p.platform)}</td><td><b>${fmt(p.click_count)}</b></td></tr>`).join('') : '<tr><td colspan="4" class="muted">Nenhum clique ainda — divulgue o hub para começar a medir.</td></tr>';
+  const ebStatus = eb.byStatus.map(s => `<span class="tag">${esc(s.status || '?')}: <b>${fmt(s.c)}</b></span>`).join('');
+  const ebRows = eb.recent.map(e => `<tr><td>${(e.created_at || '').slice(0, 16)}</td><td>${esc((e.title || '').slice(0, 55))}</td><td>${esc(e.language || '')}</td><td><span class="st st-${esc(e.status)}">${esc(e.status || '?')}</span></td></tr>`).join('');
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Painel GENIA — Afiliados & Ebooks</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Inter,-apple-system,'Segoe UI',sans-serif;background:#0b1220;color:#e2e8f0}
+.hd{background:linear-gradient(120deg,#1d4ed8,#7c3aed);padding:26px 24px}.hd h1{font-size:1.5rem}.hd p{opacity:.8;font-size:.9rem;margin-top:4px}
+.wrap{max-width:1100px;margin:0 auto;padding:20px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:18px 0}
+.kpi{background:#131c2e;border:1px solid #1f2a3d;border-radius:14px;padding:18px}.kpi .v{font-size:1.8rem;font-weight:800}.kpi .l{color:#94a3b8;font-size:.82rem;margin-top:4px}.kpi .s{color:#64748b;font-size:.72rem;margin-top:2px}
+h2{font-size:1.05rem;margin:26px 0 12px}
+.panel{background:#131c2e;border:1px solid #1f2a3d;border-radius:14px;padding:18px;margin-bottom:18px}
+table{width:100%;border-collapse:collapse;font-size:.86rem}th,td{text-align:left;padding:9px 8px;border-bottom:1px solid #1f2a3d}th{color:#94a3b8;font-weight:600}
+.nm{display:flex;align-items:center;gap:10px}.nm img{width:34px;height:34px;object-fit:contain;background:#fff;border-radius:6px;padding:2px}
+.muted{color:#64748b;text-align:center;padding:18px}
+.tag{display:inline-block;background:#1f2a3d;border-radius:8px;padding:5px 10px;font-size:.8rem;margin:0 6px 6px 0}
+.st{font-size:.72rem;padding:3px 8px;border-radius:6px;background:#334155}.st-published{background:#166534;color:#bbf7d0}.st-ready{background:#854d0e;color:#fde68a}.st-failed{background:#7f1d1d;color:#fecaca}
+.chart{display:flex;align-items:flex-end;gap:6px;height:120px;padding-top:10px}.bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px}.bar .fill{width:100%;border-radius:4px 4px 0 0}.bar span{font-size:.6rem;color:#64748b}
+a{color:#60a5fa}</style></head>
+<body><div class="hd"><h1>📊 Painel GENIA</h1><p>Afiliados &amp; Ebooks · ${new Date().toLocaleString('pt-BR')}</p></div>
+<div class="wrap">
+<div class="kpis">
+${card('Produtos afiliados', fmt(aff.total), `${fmt(aff.links)} com link`)}
+${card('Cliques totais', fmt(aff.clicks), 'nas páginas de venda')}
+${card('Ebooks gerados', fmt(eb.total), 'desde o início')}
+${card('Hub', '<a href="https://ofertas.veloxisit.com.br" target="_blank">ofertas ↗</a>', 'pt · en · es')}
+</div>
+
+<h2>🔗 Afiliados por plataforma</h2>
+<div class="panel"><table><tr><th>Plataforma</th><th>Produtos</th><th>Com link</th><th>Cliques</th></tr>${platRows}</table></div>
+
+<h2>🏆 Top produtos por cliques</h2>
+<div class="panel"><table><tr><th>#</th><th>Produto</th><th>Loja</th><th>Cliques</th></tr>${topRows}</table></div>
+
+<h2>📚 Ebooks gerados por dia (14 dias)</h2>
+<div class="panel"><div class="chart">${bars(eb.daily, '#7c3aed')}</div><div style="margin-top:14px">${ebStatus}</div></div>
+
+<h2>📖 Ebooks recentes</h2>
+<div class="panel"><table><tr><th>Data</th><th>Título</th><th>Idioma</th><th>Status</th></tr>${ebRows}</table></div>
+
+${aff.daily.length ? `<h2>👆 Cliques por dia (14 dias)</h2><div class="panel"><div class="chart">${bars(aff.daily, '#2563eb')}</div></div>` : ''}
+</div></body></html>`;
+}
+
 app.get('/',         (req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
 app.get('/login',    (req, res) => res.sendFile(path.join(__dirname, '../public/login.html')));
 app.get('/register', (req, res) => res.sendFile(path.join(__dirname, '../public/register.html')));
