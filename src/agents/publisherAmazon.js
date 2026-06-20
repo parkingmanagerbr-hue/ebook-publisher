@@ -20,6 +20,44 @@ try {
   log = { info: (...a) => console.log('[amazon]', ...a), warn: (...a) => console.warn('[amazon]', ...a), error: (...a) => console.error('[amazon]', ...a) };
 }
 
+/**
+ * KDP só aceita JPEG/TIFF na capa de ebook Kindle (PNG é ignorado → livro sem capa).
+ * Converte o PNG em JPEG no padrão KDP (1600x2560, 1.6:1, fundo preto, cover-fit)
+ * usando o próprio browser do KDP (canvas). Retorna o caminho do .jpg (ou o original em falha).
+ */
+async function convertCoverToJpeg(browser, pngPath) {
+  try {
+    if (!pngPath || !fs.existsSync(pngPath)) return pngPath;
+    if (/\.(jpe?g)$/i.test(pngPath)) return pngPath;
+    const jpgPath = pngPath.replace(/\.[^.]+$/, '') + '_kdp.jpg';
+    if (fs.existsSync(jpgPath)) return jpgPath;
+    const b64 = fs.readFileSync(pngPath).toString('base64');
+    const page = await browser.newPage();
+    try {
+      const dataJpeg = await page.evaluate(async (src) => {
+        const img = new Image();
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = src; });
+        const W = 1600, H = 2560;                 // padrão capa ebook Kindle (1.6:1)
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+        const ir = img.width / img.height, cr = W / H;
+        let dw, dh, dx, dy;
+        if (ir > cr) { dh = H; dw = H * ir; dx = (W - dw) / 2; dy = 0; }
+        else { dw = W; dh = W / ir; dx = 0; dy = (H - dh) / 2; }
+        ctx.drawImage(img, dx, dy, dw, dh);
+        return c.toDataURL('image/jpeg', 0.92);
+      }, 'data:image/png;base64,' + b64);
+      fs.writeFileSync(jpgPath, Buffer.from(dataJpeg.split(',')[1], 'base64'));
+      log.info('Capa convertida PNG->JPEG (KDP 1600x2560): ' + path.basename(jpgPath));
+      return jpgPath;
+    } finally { await page.close().catch(() => {}); }
+  } catch (e) {
+    log.warn('convertCoverToJpeg falhou (' + e.message.slice(0, 60) + ') — usando PNG');
+    return pngPath;
+  }
+}
+
 const BASE_URL        = 'https://kdp.amazon.com';
 const BOOKSHELF_URL   = 'https://kdp.amazon.com/pt_BR/bookshelf';
 // KDP locale-agnostic URLs (try pt_BR first, fall back to en_US)
@@ -1533,9 +1571,10 @@ async function publishToAmazon(ebook) {
     log.info('PDF modal dismiss: ' + pdfModalResult);
     if (pdfModalResult !== 'not-found') await sleep(2000);
 
-    // Upload cover
+    // Upload cover — KDP exige JPEG/TIFF (PNG é ignorado → livro sem capa). Converte antes.
     if (ebook.coverPath && fs.existsSync(ebook.coverPath)) {
-      log.info('Upload capa KDP: ' + ebook.coverPath);
+      const coverFile = await convertCoverToJpeg(browser, ebook.coverPath);
+      log.info('Upload capa KDP: ' + coverFile);
       let cvUploaded = false;
 
       // Approach 1: Promise.all(waitForFileChooser, click) — most reliable when KDP opens native dialog
@@ -1577,7 +1616,7 @@ async function publishToAmazon(ebook) {
             return 'no-cover-btn';
           }),
         ]);
-        await chooser.accept([ebook.coverPath]);
+        await chooser.accept([coverFile]);
         log.info('Capa enviada via file chooser');
         cvUploaded = true;
         await sleep(8000);
@@ -1610,7 +1649,7 @@ async function publishToAmazon(ebook) {
           if (!coverNodeId && fileInputs.length >= 2) coverNodeId = fileInputs[fileInputs.length - 1].nodeId;
 
           if (coverNodeId) {
-            await client.send('DOM.setFileInputFiles', { files: [ebook.coverPath], nodeId: coverNodeId });
+            await client.send('DOM.setFileInputFiles', { files: [coverFile], nodeId: coverNodeId });
             // Dispatch events so KDP's JS detects the file
             await page.evaluate(() => {
               document.querySelectorAll('input[type="file"]').forEach(el => {
