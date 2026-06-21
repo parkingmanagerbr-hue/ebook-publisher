@@ -39,6 +39,38 @@ const PRICE_USD     = '4.99';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// KDP só aceita JPEG/TIFF na capa de ebook Kindle (PNG é ignorado → livro sem capa).
+// Converte PNG -> JPEG 1600x2560 (1.6:1, cover-fit) usando o próprio browser.
+async function convertCoverToJpeg(browser, pngPath) {
+  try {
+    if (!pngPath || !fs.existsSync(pngPath)) return pngPath;
+    if (/\.(jpe?g)$/i.test(pngPath)) return pngPath;
+    const jpgPath = pngPath.replace(/\.[^.]+$/, '') + '_kdp.jpg';
+    if (fs.existsSync(jpgPath)) return jpgPath;
+    const b64 = fs.readFileSync(pngPath).toString('base64');
+    const page = await browser.newPage();
+    try {
+      const dataJpeg = await page.evaluate(async (src) => {
+        const img = new Image();
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = src; });
+        const W = 1600, H = 2560;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+        const ir = img.width / img.height, cr = W / H;
+        let dw, dh, dx, dy;
+        if (ir > cr) { dh = H; dw = H * ir; dx = (W - dw) / 2; dy = 0; }
+        else { dw = W; dh = W / ir; dx = 0; dy = (H - dh) / 2; }
+        ctx.drawImage(img, dx, dy, dw, dh);
+        return c.toDataURL('image/jpeg', 0.92);
+      }, 'data:image/png;base64,' + b64);
+      fs.writeFileSync(jpgPath, Buffer.from(dataJpeg.split(',')[1], 'base64'));
+      log.info('Capa convertida PNG->JPEG (KDP): ' + path.basename(jpgPath));
+      return jpgPath;
+    } finally { await page.close().catch(() => {}); }
+  } catch (e) { log.warn('convertCoverToJpeg falhou: ' + e.message.slice(0, 50)); return pngPath; }
+}
+
 // ── Books to complete ─────────────────────────────────────────────────────────
 const BOOKS = [
   {
@@ -462,7 +494,8 @@ async function doContentStep(page, book) {
   });
 
   if (!coverAlreadyUploaded) {
-    log.info(`[${book.title}] Uploading cover: ${book.cover}`);
+    const coverJpeg = await convertCoverToJpeg(page.browser(), book.cover);
+    log.info(`[${book.title}] Uploading cover: ${coverJpeg}`);
     try {
       // Find cover file input
       const fileInputs = await page.$$('input[type="file"]');
@@ -483,7 +516,7 @@ async function doContentStep(page, book) {
       }
 
       if (coverInput) {
-        await coverInput.uploadFile(book.cover);
+        await coverInput.uploadFile(coverJpeg);
         log.info(`[${book.title}] Cover upload initiated`);
 
         // Wait for cover preview / success
