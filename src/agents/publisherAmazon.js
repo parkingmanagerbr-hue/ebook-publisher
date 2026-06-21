@@ -22,36 +22,26 @@ try {
 
 /**
  * KDP só aceita JPEG/TIFF na capa de ebook Kindle (PNG é ignorado → livro sem capa).
- * Converte o PNG em JPEG no padrão KDP (1600x2560, 1.6:1, fundo preto, cover-fit)
- * usando o próprio browser do KDP (canvas). Retorna o caminho do .jpg (ou o original em falha).
+ * Converte PNG -> JPEG no padrão KDP (1600x2560, 1.6:1, padding preto) via ffmpeg
+ * (confiável no chromium/linux do VPS, diferente do canvas in-browser).
+ * Prefere o _kdp.jpg já gerado pelo job em lote. Retorna o caminho do .jpg (ou original em falha).
  */
-async function convertCoverToJpeg(browser, pngPath) {
+function convertCoverToJpeg(pngPath) {
   try {
     if (!pngPath || !fs.existsSync(pngPath)) return pngPath;
     if (/\.(jpe?g)$/i.test(pngPath)) return pngPath;
     const jpgPath = pngPath.replace(/\.[^.]+$/, '') + '_kdp.jpg';
-    if (fs.existsSync(jpgPath)) return jpgPath;
-    const b64 = fs.readFileSync(pngPath).toString('base64');
-    const page = await browser.newPage();
-    try {
-      const dataJpeg = await page.evaluate(async (src) => {
-        const img = new Image();
-        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = src; });
-        const W = 1600, H = 2560;                 // padrão capa ebook Kindle (1.6:1)
-        const c = document.createElement('canvas'); c.width = W; c.height = H;
-        const ctx = c.getContext('2d');
-        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
-        const ir = img.width / img.height, cr = W / H;
-        let dw, dh, dx, dy;
-        if (ir > cr) { dh = H; dw = H * ir; dx = (W - dw) / 2; dy = 0; }
-        else { dw = W; dh = W / ir; dx = 0; dy = (H - dh) / 2; }
-        ctx.drawImage(img, dx, dy, dw, dh);
-        return c.toDataURL('image/jpeg', 0.92);
-      }, 'data:image/png;base64,' + b64);
-      fs.writeFileSync(jpgPath, Buffer.from(dataJpeg.split(',')[1], 'base64'));
-      log.info('Capa convertida PNG->JPEG (KDP 1600x2560): ' + path.basename(jpgPath));
+    if (fs.existsSync(jpgPath) && fs.statSync(jpgPath).size > 0) return jpgPath;   // já convertida (job em lote)
+    const { execFileSync } = require('child_process');
+    const ff = process.env.FFMPEG_PATH || 'ffmpeg';
+    execFileSync(ff, ['-y', '-loglevel', 'error', '-i', pngPath,
+      '-vf', 'scale=1600:2560:force_original_aspect_ratio=decrease,pad=1600:2560:(ow-iw)/2:(oh-ih)/2:black',
+      '-q:v', '2', jpgPath], { timeout: 30000 });
+    if (fs.existsSync(jpgPath) && fs.statSync(jpgPath).size > 0) {
+      log.info('Capa convertida PNG->JPEG (ffmpeg, KDP 1600x2560): ' + path.basename(jpgPath));
       return jpgPath;
-    } finally { await page.close().catch(() => {}); }
+    }
+    return pngPath;
   } catch (e) {
     log.warn('convertCoverToJpeg falhou (' + e.message.slice(0, 60) + ') — usando PNG');
     return pngPath;
@@ -1573,7 +1563,7 @@ async function publishToAmazon(ebook) {
 
     // Upload cover — KDP exige JPEG/TIFF (PNG é ignorado → livro sem capa). Converte antes.
     if (ebook.coverPath && fs.existsSync(ebook.coverPath)) {
-      const coverFile = await convertCoverToJpeg(browser, ebook.coverPath);
+      const coverFile = convertCoverToJpeg(ebook.coverPath);
       log.info('Upload capa KDP: ' + coverFile);
       let cvUploaded = false;
 

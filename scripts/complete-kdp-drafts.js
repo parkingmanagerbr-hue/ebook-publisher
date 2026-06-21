@@ -40,34 +40,22 @@ const PRICE_USD     = '4.99';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // KDP só aceita JPEG/TIFF na capa de ebook Kindle (PNG é ignorado → livro sem capa).
-// Converte PNG -> JPEG 1600x2560 (1.6:1, cover-fit) usando o próprio browser.
-async function convertCoverToJpeg(browser, pngPath) {
+// Converte PNG -> JPEG 1600x2560 (1.6:1, padding preto) via ffmpeg. Prefere o _kdp.jpg do job em lote.
+function convertCoverToJpeg(pngPath) {
   try {
     if (!pngPath || !fs.existsSync(pngPath)) return pngPath;
     if (/\.(jpe?g)$/i.test(pngPath)) return pngPath;
     const jpgPath = pngPath.replace(/\.[^.]+$/, '') + '_kdp.jpg';
-    if (fs.existsSync(jpgPath)) return jpgPath;
-    const b64 = fs.readFileSync(pngPath).toString('base64');
-    const page = await browser.newPage();
-    try {
-      const dataJpeg = await page.evaluate(async (src) => {
-        const img = new Image();
-        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = src; });
-        const W = 1600, H = 2560;
-        const c = document.createElement('canvas'); c.width = W; c.height = H;
-        const ctx = c.getContext('2d');
-        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
-        const ir = img.width / img.height, cr = W / H;
-        let dw, dh, dx, dy;
-        if (ir > cr) { dh = H; dw = H * ir; dx = (W - dw) / 2; dy = 0; }
-        else { dw = W; dh = W / ir; dx = 0; dy = (H - dh) / 2; }
-        ctx.drawImage(img, dx, dy, dw, dh);
-        return c.toDataURL('image/jpeg', 0.92);
-      }, 'data:image/png;base64,' + b64);
-      fs.writeFileSync(jpgPath, Buffer.from(dataJpeg.split(',')[1], 'base64'));
-      log.info('Capa convertida PNG->JPEG (KDP): ' + path.basename(jpgPath));
+    if (fs.existsSync(jpgPath) && fs.statSync(jpgPath).size > 0) return jpgPath;
+    const { execFileSync } = require('child_process');
+    execFileSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-y', '-loglevel', 'error', '-i', pngPath,
+      '-vf', 'scale=1600:2560:force_original_aspect_ratio=decrease,pad=1600:2560:(ow-iw)/2:(oh-ih)/2:black',
+      '-q:v', '2', jpgPath], { timeout: 30000 });
+    if (fs.existsSync(jpgPath) && fs.statSync(jpgPath).size > 0) {
+      log.info('Capa convertida PNG->JPEG (ffmpeg KDP): ' + path.basename(jpgPath));
       return jpgPath;
-    } finally { await page.close().catch(() => {}); }
+    }
+    return pngPath;
   } catch (e) { log.warn('convertCoverToJpeg falhou: ' + e.message.slice(0, 50)); return pngPath; }
 }
 
@@ -494,7 +482,7 @@ async function doContentStep(page, book) {
   });
 
   if (!coverAlreadyUploaded) {
-    const coverJpeg = await convertCoverToJpeg(page.browser(), book.cover);
+    const coverJpeg = convertCoverToJpeg(book.cover);
     log.info(`[${book.title}] Uploading cover: ${coverJpeg}`);
     try {
       // Find cover file input
