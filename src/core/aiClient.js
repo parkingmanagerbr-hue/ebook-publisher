@@ -128,7 +128,7 @@ async function _markGeminiGloballyExhausted() {
   const now = Date.now(), r = new Date();
   r.setUTCHours(8, 0, 0, 0);
   if (r.getTime() <= now) r.setUTCDate(r.getUTCDate() + 1);
-  await _rCmd('SET', 'gemini:daily_exhausted', '1', 'EX', String(Math.ceil((r.getTime() - now) / 1000)));
+  await _rCmd('SET', 'gemini:daily_exhausted', '1', 'EX', String(Math.min(1800, Math.ceil((r.getTime() - now) / 1000)))); // cap 30min
 }
 async function _withinDailyBudget() {
   const key = `ai:gemini:sys:${_QUOTA_SYS}:daily:${new Date().toISOString().slice(0, 10)}`;
