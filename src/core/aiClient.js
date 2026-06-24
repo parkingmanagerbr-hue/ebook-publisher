@@ -56,7 +56,7 @@ const PROVIDER_KEYS = {
     process.env.SAMBANOVA_API_KEY_7,
     process.env.SAMBANOVA_API_KEY_8,
   ].filter(Boolean),
-  groq:        [process.env.GROQ_API_KEY].filter(Boolean),
+  groq:        [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2, process.env.GROQ_API_KEY_3, process.env.GROQ_API_KEY_4, process.env.GROQ_API_KEY_5, process.env.GROQ_API_KEY_6, process.env.GROQ_API_KEY_7, process.env.GROQ_API_KEY_8].filter(Boolean),
   deepseek:    [
     process.env.DEEPSEEK_API_KEY,
     process.env.DEEPSEEK_API_KEY_2,
