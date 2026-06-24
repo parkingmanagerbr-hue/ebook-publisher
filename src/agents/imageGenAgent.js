@@ -16,8 +16,12 @@ require('dotenv').config();
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { createLogger } = require('../core/logger');
 const logger = createLogger('imageGenAgent');
+
+let magichour = null;
+try { magichour = require('../core/magichour_ai'); } catch { /* opcional */ }
 
 // Module-level provider failure cache — skip providers that failed recently
 // Cleared every 60 minutes so transient errors don't permanently block a provider
@@ -449,6 +453,21 @@ async function generateWithPollinations(prompt, width, height) {
 }
 
 // ═══════════════════════════════════════════════════
+// 5. MAGIC HOUR — imagem (~5 créditos), 8 contas com rotação
+//    Rede de segurança após os grátis (consome créditos)
+// ═══════════════════════════════════════════════════
+async function generateWithMagicHour(prompt, width, height) {
+  const ratio = width / height;
+  const orientation = ratio > 1.2 ? 'landscape' : ratio < 0.85 ? 'portrait' : 'square';
+  const tmp = path.join(os.tmpdir(), `mhimg_${Date.now()}_${Math.floor(Math.random() * 1e6)}.png`);
+  await magichour.generateImage(prompt, tmp, { orientation });
+  const buf = fs.readFileSync(tmp);
+  try { fs.unlinkSync(tmp); } catch {}
+  if (buf.length < 10_000) throw new Error(`Magic Hour imagem suspeita (${buf.length} bytes)`);
+  return buf;
+}
+
+// ═══════════════════════════════════════════════════
 // FUNÇÃO PRINCIPAL
 // ═══════════════════════════════════════════════════
 async function generateImage({ prompt, width = 1024, height = 1024, outputPath }) {
@@ -522,6 +541,11 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
       name: 'Pollinations.ai',    // ✅ grátis, sem chave, fallback garantido
       enabled: true,
       fn: () => generateWithPollinations(prompt, width, height),
+    },
+    {
+      name: 'Magic Hour',         // rede de segurança final (créditos), 8 contas
+      enabled: !!(magichour && magichour.isAvailable()),
+      fn: () => generateWithMagicHour(prompt, width, height),
     },
   ];
 
