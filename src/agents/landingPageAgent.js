@@ -196,7 +196,7 @@ function getTrackingUrl(product) {
 async function generateHtml(product) {
   const slug = makeSlug(product.product_name);
   const subdomain = slug + '.' + BASE_DOMAIN;
-  const canonicalUrl = 'https://' + subdomain;
+  const canonicalUrl = AFFILIATE_LP_BASE_URL ? AFFILIATE_LP_BASE_URL + '/' + slug + '/' : 'https://' + subdomain;
   const price = product.price ? 'R$ ' + product.price.toFixed(2).replace('.', ',') : 'Confira o preço';
   // Use tracking URL for click counting
   product = { ...product, affiliate_link: getTrackingUrl(product) };
@@ -612,7 +612,7 @@ async function generateHtmlMultilang(product, langConfig) {
   const baseSlug = makeSlug(product.product_name);
   const slug = langConfig.prefix + baseSlug;
   const subdomain = slug + '.' + BASE_DOMAIN;
-  const canonicalUrl = 'https://' + subdomain;
+  const canonicalUrl = AFFILIATE_LP_BASE_URL ? AFFILIATE_LP_BASE_URL + '/' + slug + '/' : 'https://' + subdomain;
   const price = product.price ? 'R$ ' + product.price.toFixed(2).replace('.', ',') : '';
 
   const isPortuguese = langConfig.code === 'pt';
