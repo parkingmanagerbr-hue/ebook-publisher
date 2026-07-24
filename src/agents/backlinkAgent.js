@@ -97,15 +97,19 @@ async function ensureCloudflareRecord(name, ip) {
 }
 
 // ── Nginx deploy helper ───────────────────────────────────────────────────────
-function deployHtml(slug, html) {
+const AFFILIATE_LP_BASE_URL = (process.env.AFFILIATE_LP_BASE_URL || '').replace(/\/$/, '');
+
+function deployHtml(slug, html, { skipNginxConf = false } = {}) {
   if (IS_VPS) {
     const webRoot = path.join(NGINX_DATA_PATH, slug);
     fs.mkdirSync(webRoot, { recursive: true });
     fs.writeFileSync(path.join(webRoot, 'index.html'), html, 'utf8');
 
-    const confFile = path.join(NGINX_CONF_PATH, slug + '.conf');
-    if (!fs.existsSync(confFile)) {
-      const nginxConf = `server {
+    // Skip subdomain conf + reload when using path-based routing or caller says skip
+    if (!skipNginxConf && !AFFILIATE_LP_BASE_URL) {
+      const confFile = path.join(NGINX_CONF_PATH, slug + '.conf');
+      if (!fs.existsSync(confFile)) {
+        const nginxConf = `server {
   listen 80;
   server_name ${slug}.${BASE_DOMAIN};
   root /var/www/veloxisit/${slug};
@@ -115,16 +119,17 @@ function deployHtml(slug, html) {
   }
 }
 `;
-      try {
-        fs.mkdirSync(NGINX_CONF_PATH, { recursive: true });
-        fs.writeFileSync(confFile, nginxConf, 'utf8');
-      } catch (e) { log.warn('[Deploy] conf error: ' + e.message); }
-    }
+        try {
+          fs.mkdirSync(NGINX_CONF_PATH, { recursive: true });
+          fs.writeFileSync(confFile, nginxConf, 'utf8');
+        } catch (e) { log.warn('[Deploy] conf error: ' + e.message); }
+      }
 
-    try {
-      const { execSync } = require('child_process');
-      execSync('nginx -s reload 2>&1', { timeout: 10000 });
-    } catch (e) { log.warn('[Deploy] nginx reload: ' + e.message.slice(0, 60)); }
+      try {
+        const { execSync } = require('child_process');
+        execSync('nginx -s reload 2>&1', { timeout: 10000 });
+      } catch (e) { log.warn('[Deploy] nginx reload: ' + e.message.slice(0, 60)); }
+    }
 
     log.info('[Deploy] ' + slug + ' → ' + path.join(NGINX_DATA_PATH, slug, 'index.html'));
   } else {
@@ -352,9 +357,16 @@ async function buildBacklinks() {
   let relatedLinksAdded = 0;
   for (const product of products) {
     try {
-      const slug = product.landing_page_url
-        ? product.landing_page_url.replace(/^https?:\/\//, '').split('.')[0]
-        : null;
+      const slug = (() => {
+        const url = product.landing_page_url;
+        if (!url) return null;
+        // Path-based: https://ofertas.veloxisit.com.br/SLUG/ → extract SLUG
+        const pathMatch = url.match(/ofertas\.veloxisit\.com\.br\/([^/?#]+)/);
+        if (pathMatch) return pathMatch[1];
+        // Subdomain-based: https://SLUG.veloxisit.com.br → extract SLUG
+        const sub = url.replace(/^https?:\/\//, '').split('.')[0];
+        return (sub && sub !== 'www' && sub !== 'ofertas') ? sub : null;
+      })();
       if (!slug) continue;
 
       const existingHtml = readLpHtml(slug);
@@ -376,7 +388,7 @@ async function buildBacklinks() {
       }
 
       const updatedHtml = injectRelatedLinks(existingHtml, related);
-      deployHtml(slug, updatedHtml);
+      deployHtml(slug, updatedHtml, { skipNginxConf: true });
       relatedLinksAdded++;
       log.info('[Backlink] ' + slug + ': adicionados ' + related.length + ' links relacionados');
 
