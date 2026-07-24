@@ -32,9 +32,11 @@ const CF_ZONE_ID    = process.env.CLOUDFLARE_ZONE_ID  || '';
 const CF_API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN || '';
 const VPS_IP        = process.env.VPS_IP              || '173.212.227.198';
 const BASE_DOMAIN   = process.env.BASE_DOMAIN         || 'veloxisit.com.br';
-const NGINX_DATA_PATH = process.env.NGINX_DATA_PATH   || '/opt/platform/data/veloxisit';
-const NGINX_CONF_PATH = process.env.NGINX_CONF_PATH   || '/opt/platform/nginx/sites';
+const NGINX_DATA_PATH = process.env.NGINX_DATA_PATH   || '/app/landing_pages';
+const NGINX_CONF_PATH = process.env.NGINX_CONF_PATH   || '/app/nginx_sites';
 const IS_VPS        = process.env.RUNNING_ON_VPS === 'true' || (process.platform !== 'win32' && fs.existsSync('/app/data'));
+// Path-based URL: quando definido, todas as LPs ficam em BASE_URL/SLUG/ (evita quota CF DNS e Netlify sites)
+const AFFILIATE_LP_BASE_URL = (process.env.AFFILIATE_LP_BASE_URL || '').replace(/\/$/, '');
 
 // Vercel / Netlify tokens (obter em: vercel.com/account/tokens | app.netlify.com/user/applications)
 // Adicionar ao ebook-publisher.env:
@@ -480,10 +482,13 @@ async function smartDeploy(slug, html, subdomain) {
   if (!overloaded && IS_VPS) {
     // VPS healthy → deploy local (nginx) + DNS
     deployToFilesystem(slug, html);
-    try { await createCloudflareSubdomain(subdomain); } catch (e) {
-      log.warn('[Deploy] CF DNS error: ' + e.message);
+    if (!AFFILIATE_LP_BASE_URL) {
+      try { await createCloudflareSubdomain(subdomain); } catch (e) {
+        log.warn('[Deploy] CF DNS error: ' + e.message);
+      }
     }
-    return { url: 'https://' + subdomain, provider: 'vps' };
+    const vpsUrl = AFFILIATE_LP_BASE_URL ? AFFILIATE_LP_BASE_URL + '/' + slug + '/' : 'https://' + subdomain;
+    return { url: vpsUrl, provider: 'vps' };
   }
 
   // VPS overloaded → try Vercel first, Netlify as fallback
@@ -511,8 +516,9 @@ async function smartDeploy(slug, html, subdomain) {
   // Final fallback: VPS regardless of load
   log.warn('[Deploy] Sem tokens cloud disponíveis ou todos falharam → forçando deploy local');
   if (IS_VPS) deployToFilesystem(slug, html);
-  try { await createCloudflareSubdomain(subdomain); } catch (_) {}
-  return { url: 'https://' + subdomain, provider: 'vps-fallback' };
+  if (!AFFILIATE_LP_BASE_URL) { try { await createCloudflareSubdomain(subdomain); } catch (_) {} }
+  const fallbackUrl = AFFILIATE_LP_BASE_URL ? AFFILIATE_LP_BASE_URL + '/' + slug + '/' : 'https://' + subdomain;
+  return { url: fallbackUrl, provider: 'vps-fallback' };
 }
 
 // ── Deploy to VPS filesystem ───────────────────────────────────────────────────
@@ -525,6 +531,8 @@ function deployToFilesystem(slug, html) {
   } catch (e) {
     throw new Error('Deploy HTML falhou: ' + e.message);
   }
+  // With path-based routing, one nginx vhost serves all LPs — no per-product conf or CF DNS needed.
+  if (AFFILIATE_LP_BASE_URL) return;
 
   // Write Nginx server block
   const confDir = NGINX_CONF_PATH;
