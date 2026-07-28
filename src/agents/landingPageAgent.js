@@ -497,8 +497,8 @@ async function smartDeploy(slug, html, subdomain) {
   if (VERCEL_TOKEN) {
     try {
       const r = await deployToVercel(slug, html, subdomain);
-      // Still create CF DNS even for cloud deploys (CNAME to vercel deployment) — best-effort
-      try { await createCloudflareSubdomain(subdomain); } catch (_) {}
+      // Create CF DNS only when not using path-based routing
+      if (!AFFILIATE_LP_BASE_URL) { try { await createCloudflareSubdomain(subdomain); } catch (_) {} }
       return r;
     } catch (e) {
       log.warn('[Vercel] falhou: ' + e.message.slice(0, 120) + ' — tentando Netlify...');

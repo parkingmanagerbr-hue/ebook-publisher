@@ -81,7 +81,8 @@ async function ensureCloudflareRecord(name, ip) {
       res.on('end', () => {
         try {
           const j = JSON.parse(d);
-          if (j.success || (j.errors || []).some(e => e.code === 81057)) {
+          const nonFatalCodes = [81057, 81045]; // 81057=already exists, 81045=quota exceeded (record likely exists)
+          if (j.success || (j.errors || []).some(e => nonFatalCodes.includes(e.code))) {
             resolve({ success: true });
           } else {
             log.warn('[CF] ' + name + ' error: ' + JSON.stringify(j.errors || []).slice(0, 100));
