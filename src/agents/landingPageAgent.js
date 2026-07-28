@@ -725,6 +725,11 @@ async function generateLandingPages() {
         log.info('[LP][pt] Já deployado → ' + product.landing_page_url);
         continue;
       }
+      // Skip non-PT langs whose LP already exists on disk (LP_FORCE_REGEN=true to override)
+      if (langConfig.code !== 'pt' && IS_VPS && process.env.LP_FORCE_REGEN !== 'true') {
+        const existing = path.join(NGINX_DATA_PATH, baseSlug, 'index.html');
+        if (fs.existsSync(existing)) continue;
+      }
       try {
         const result = await deployLandingPageLang(product, langConfig);
         deployed.push({ product: product.product_name, lang: langConfig.code, ...result });
