@@ -415,7 +415,27 @@ async function loop() {
   let _lastAffiliateCheck = 0;
   const AFFILIATE_CHECK_INTERVAL_MS = 60 * 60 * 1000; // check every hour (agent self-throttles to 24h)
 
+  // ─── Hotmart: tira produtos do rascunho ──────────────────────────────────────
+  // publisherHotmart cria em DRAFT; sem isso nada fica à venda.
+  let _lastFinalizeCheck = 0;
+  const FINALIZE_INTERVAL_MS = 30 * 60 * 1000;
+
   while (state.enabled) {
+    // ── Finalizar rascunhos Hotmart ──────────────────────────────────────────
+    if (Date.now() - _lastFinalizeCheck > FINALIZE_INTERVAL_MS) {
+      _lastFinalizeCheck = Date.now();
+      try {
+        const { finalizeDrafts } = require('../agents/hotmartFinalizeAgent');
+        setState({ currentStep: 'hotmart:finalize' });
+        const r = await finalizeDrafts();
+        if (r && r.error) logger.warn('[hotmart-finalize] ' + r.error);
+        setState({ currentStep: null });
+      } catch (e) {
+        logger.warn('[hotmart-finalize] ' + e.message.slice(0, 100));
+        setState({ currentStep: null });
+      }
+    }
+
     // ── Run affiliate pipeline once per day ──────────────────────────────────
     if (Date.now() - _lastAffiliateCheck > AFFILIATE_CHECK_INTERVAL_MS) {
       _lastAffiliateCheck = Date.now();
