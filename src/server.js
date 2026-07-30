@@ -32,6 +32,7 @@ const publishRoutes   = require('./presentation/api/routes/publish');
 const storesRoutes    = require('./presentation/api/routes/stores');
 const statsRoutes     = require('./presentation/api/routes/stats');
 const gutenbergRoutes = require('./presentation/api/routes/gutenberg');
+const catalogRoutes   = require('./presentation/api/routes/catalog');
 
 const logger = createLogger('server');
 const app    = express();
@@ -123,6 +124,8 @@ app.use('/api/v2/publish',    requireAuth, publishRoutes(orchestrator));
 app.use('/api/v2/stores',     requireAuth, storesRoutes(SessionManager, orchestrator));
 app.use('/api/v2/stats',      requireAuth, statsRoutes(repo));
 app.use('/api/v2/gutenberg',  requireAuth, gutenbergRoutes());
+app.use('/catalog/api', catalogRoutes(repo));
+app.get('/catalog', (req, res) => res.sendFile(path.join(__dirname, '../public/ebooks-catalog.html')));
 
 // ── Amazon OTP endpoint (no auth required — called by user from phone/terminal) ──
 app.post('/api/amazon-otp', (req, res) => {
