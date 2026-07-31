@@ -93,11 +93,11 @@
     totalBadge.textContent = data.total + ' e-books disponíveis';
     grid.innerHTML = data.items.map(function (it) {
       return '<div class="card">' +
-        '<img src="' + it.coverUrl + '" alt="' + escapeHtml(it.title) + '" loading="lazy" onerror="this.style.opacity=0.2">' +
+        '<img src="' + location.origin + it.coverUrl + '" alt="' + escapeHtml(it.title) + '" loading="lazy" onerror="this.style.opacity=0.2">' +
         '<div class="body">' +
         '<h3>' + escapeHtml(it.title) + '</h3>' +
         '<p>' + escapeHtml(it.description) + '</p>' +
-        '<a class="dl" href="' + it.downloadUrl + '" download>Baixar PDF</a>' +
+        '<a class="dl" href="' + location.origin + it.downloadUrl + '" download>Baixar PDF</a>' +
         '</div></div>';
     }).join('');
 
@@ -123,7 +123,9 @@
     statusEl.style.display = 'block';
     statusEl.textContent = 'Carregando catálogo…';
     grid.innerHTML = '';
-    fetch('/catalog/api/ebooks?page=' + page + '&pageSize=' + pageSize)
+    // location.origin nunca inclui credenciais user:pass@ da URL — fetch com
+    // base credenciada é bloqueado pelos browsers.
+    fetch(location.origin + '/catalog/api/ebooks?page=' + page + '&pageSize=' + pageSize)
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || 'Erro desconhecido');
