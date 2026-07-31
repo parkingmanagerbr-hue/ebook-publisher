@@ -47,10 +47,15 @@ async function getCaktoPayUrlFromApi(page, titleSnippet) {
           if (!txt || txt.startsWith('<')) continue;
           const j = JSON.parse(txt);
           const items = j.results || j.items || (Array.isArray(j) ? j : []);
-          // Find offer matching our title (first 20 chars, case insensitive)
+          // Find offer matching our title (case insensitive).
+          // Só palavras significativas (≥4 chars) e TODAS precisam bater — o match antigo
+          // (3 primeiras palavras) casava "Ganhe Dinheiro com IA" com "Ganhe Dinheiro como Afiliado"
+          // ("com" ⊂ "como") e pulava a criação de produtos novos.
           const match = items.find(o => {
             const n = (o.name || '').toLowerCase();
-            return n.includes(sTitle) || sTitle.split(' ').filter(Boolean).slice(0,3).every(w => n.includes(w.toLowerCase()));
+            if (n.includes(sTitle)) return true;
+            const words = sTitle.split(' ').map(w => w.toLowerCase()).filter(w => w.length >= 4);
+            return words.length >= 3 && words.every(w => n.includes(w));
           });
           if (match) {
             return { offerId: match.id, offerName: match.name, status: match.status, productId: match.product };
@@ -697,6 +702,7 @@ async function publishToCakto(ebook) {
       await browser.close();
       return {
         success: true, platform: 'cakto',
+        url: existingPayUrl,
         productUrl: existingPayUrl, caktoProductId: existingId,
         caktoUrl: existingPayUrl,
       };

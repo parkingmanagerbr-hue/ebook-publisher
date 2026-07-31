@@ -53,23 +53,25 @@ const COLOR_THEMES = {
   educacao:        { overlay: 'rgba(0,48,73,0.72)',   accent: '#48CAE4', text: '#FFFFFF' },
   familia:         { overlay: 'rgba(43,0,24,0.72)',   accent: '#FF9EBC', text: '#FFFFFF' },
   carreira:        { overlay: 'rgba(0,18,25,0.72)',   accent: '#94D2BD', text: '#FFFFFF' },
+  pets:            { overlay: 'rgba(43,27,10,0.72)',  accent: '#FFB347', text: '#FFFFFF' },
   default:         { overlay: 'rgba(26,26,46,0.72)',  accent: '#E94560', text: '#FFFFFF' },
 };
 
 // ─── Detecção de categoria ────────────────────────────────────────────────────
 function detectCategory(topic) {
   const t = (topic || '').toLowerCase();
-  if (t.match(/financ|dívid|invest|dinheiro|renda/))       return 'financas';
-  if (t.match(/ia|intelig|tecnol|digital|program/))         return 'tecnologia';
-  if (t.match(/saúde|emagrec|fitness|dieta|nutri/))         return 'saude';
+  if (t.match(/\bcão\b|cachorro|\bgato\b|felino|\bpet\b|adestr|canin[ao]/)) return 'pets';
+  if (t.match(/financ|dívid|invest|dinheiro|renda|bolsa|bitcoin|cripto|economiz|reserva|aposentad/)) return 'financas';
+  if (t.match(/\bia\b|intelig[êe]ncia artificial|tecnol|digital|program|\bapps?\b|\bsites?\b/)) return 'tecnologia';
+  if (t.match(/saúde|emagrec|fitness|dieta|nutri|pressão|diabetes|tireoide|intestino/))   return 'saude';
   if (t.match(/negóci|empreend|marketing|vend|lucro/))      return 'negocios';
-  if (t.match(/hábito|pessoal|desenvolvimento|ansied|mental/)) return 'comportamento';
+  if (t.match(/hábito|pessoal|desenvolvimento|ansied|mental|pânico|gaslight/)) return 'comportamento';
   if (t.match(/espirit|cristã|fé|devoc|bíbli/))             return 'espiritualidade';
-  if (t.match(/relacion|amor|comunicaç|casamento/))         return 'relacionamentos';
+  if (t.match(/relacion|amor|comunicaç|casamento|traição/))         return 'relacionamentos';
   if (t.match(/receita|culinár|aliment|cozinha/))           return 'culinaria';
-  if (t.match(/concurso|educaç|estudo|aprend/))             return 'educacao';
-  if (t.match(/maternid|filho|família|criança/))            return 'familia';
-  if (t.match(/carreir|freelan|trabalh|emprego/))           return 'carreira';
+  if (t.match(/concurso|educaç|estudo|aprend|matemática|espanhol|inglês/)) return 'educacao';
+  if (t.match(/maternid|filho|família|criança|adolescente|autismo/))            return 'familia';
+  if (t.match(/carreir|freelan|trabalh|emprego|liderança|gerente/))     return 'carreira';
   return 'default';
 }
 
@@ -87,6 +89,7 @@ function buildBackgroundPrompt(title, topic, category) {
     educacao:        'dark blue background, open books and knowledge symbols, academic achievement aesthetic, purely visual composition',
     familia:         'warm dark background, family silhouettes, love and togetherness atmosphere, purely visual composition',
     carreira:        'dark teal background, career growth ladder, professional achievement symbols, purely visual composition',
+    pets:            'warm dark background, paw prints and pet silhouettes, cozy heartwarming atmosphere, purely visual composition',
     default:         'dramatic dark gradient background, modern abstract shapes, premium book cover aesthetic, purely visual',
   };
 
@@ -301,7 +304,22 @@ async function _generateCoverOnce(title, subtitle, topic) {
   fs.mkdirSync(COVERS_DIR, { recursive: true });
   const cat = detectCategory(topic);
 
-  // ── Provider 0: HTML/CSS viral via Puppeteer (PRIMÁRIO — melhor qualidade) ──
+  // ── Provider 0 (VIRAL — PRIMÁRIO): imagem IA (rosto/cena por categoria) + composição HTML premium ──
+  // Capa de infoproduto: rosto real + tipografia forte + benefício. Substitui o gradiente genérico.
+  if (process.env.COVER_VIRAL !== 'false') {
+    try {
+      const { generateViralCover } = require('./coverViralAgent');
+      const viralPath = await generateViralCover(title, subtitle, topic, cat, COVERS_DIR);
+      if (viralPath && fs.existsSync(viralPath)) {
+        logger.info(`✅ Capa VIRAL (rosto/cena ${cat}) gerada: ${path.basename(viralPath)}`);
+        return viralPath;
+      }
+    } catch (e) {
+      logger.warn(`⚠️ Capa viral falhou: ${e.message.slice(0, 80)} — tentando HTML/gradiente`);
+    }
+  }
+
+  // ── Provider 0b: HTML/CSS via Puppeteer (fallback) ──
   // Usa Gemini Text para gerar HTML com design viral, renderizado pelo browser
   // Resultado: tipografia profissional, Google Fonts, layouts criativos por categoria
   if (generateHTMLCover) {

@@ -7,7 +7,7 @@
  *  - Screenshots at each step for debugging
  *  - Session refresh after successful signin
  */
-const puppeteer = require('puppeteer');
+let puppeteer; try { puppeteer = require('puppeteer'); } catch (_) { puppeteer = require('puppeteer-core'); }
 const path = require('path');
 const fs = require('fs');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -106,7 +106,7 @@ function isAuthUrl(url) {
 }
 
 // ── OTP wait (polls OTP_FILE for up to maxMs) ─────────────────────────────────
-async function waitForOtp(page, maxMs = 300_000) {
+async function waitForOtp(page, maxMs = 900_000) {
   // Step 0: If we're on the OTP-delivery-choice page (no input yet), click "Send OTP" button first
   try {
     const sendBtnPos = await page.evaluate(() => {
@@ -654,59 +654,79 @@ async function waitForUrlChange(page, fromUrl, maxMs = 30000) {
 async function publishToAmazon(ebook) {
   log.info('Amazon KDP: publicando "' + ebook.title + '"');
 
-  const session = loadSession() || { cookies: [] }; // sessão vazia → login fresh
-  if (!KDP_EMAIL || !KDP_PASSWORD) {
+  // Modo REMOTO: conecta a um Chrome já logado (ex.: porta 9223, IP residencial) e
+  // pula login/OTP — usado para publicar KDP sem o inferno de OTP da VPS (datacenter IP).
+  const USE_REMOTE = !!process.env.KDP_BROWSER_URL;
+  const session = USE_REMOTE ? { cookies: [] } : (loadSession() || { cookies: [] });
+  if (!USE_REMOTE && (!KDP_EMAIL || !KDP_PASSWORD)) {
     log.warn('KDP_EMAIL/KDP_PASSWORD não configurados');
     return { success: false, error: 'Credenciais KDP não configuradas', platform: 'amazon' };
   }
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--lang=pt-BR', '--disable-blink-features=AutomationControlled',
-    ],
-    defaultViewport: { width: 1366, height: 900 },
-  });
+  const browser = USE_REMOTE
+    ? await puppeteer.connect({ browserURL: process.env.KDP_BROWSER_URL, defaultViewport: null })
+    : await puppeteer.launch({
+        headless: true,
+        args: [
+          '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+          '--lang=pt-BR', '--disable-blink-features=AutomationControlled',
+        ],
+        defaultViewport: { width: 1366, height: 900 },
+      });
 
   const page = await browser.newPage();
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  });
-  await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8' });
+  if (!USE_REMOTE) {
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    });
+  }
+  await page.setExtraHTTPHeaders({ 'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8' }).catch(() => {});
 
   try {
-    // ── Inject session ────────────────────────────────────────────────────────
-    log.info('Injetando sessão Amazon...');
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-    await sleep(1000);
-
-    for (const cookie of (session.cookies || [])) {
-      try {
-        const c = { ...cookie };
-        // Ensure correct domain for amazon.com
-        if (!c.domain) c.domain = '.amazon.com';
-        if (c.domain === '.amazon.com.br') c.domain = '.amazon.com';
-        await page.setCookie(c);
-      } catch {}
-    }
-
-    // ── Verify session ────────────────────────────────────────────────────────
-    await page.goto(BOOKSHELF_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-    await sleep(3000);
-    let currentUrl = page.url();
-
-    if (currentUrl.includes('signin') || currentUrl.includes('ap/signin')) {
-      log.warn('Sessão expirada no bookshelf — tentando login...');
-      const ok = await doSignin(page);
-      if (!ok) {
-        await browser.close();
-        return { success: false, error: 'Sessão expirada e login falhou', platform: 'amazon' };
-      }
+    let currentUrl;
+    if (USE_REMOTE) {
+      // Chrome remoto já logado — pula injeção de sessão e login (evita OTP)
       await page.goto(BOOKSHELF_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-      await sleep(2000);
+      await sleep(2500);
+      currentUrl = page.url();
+      if (isAuthUrl(currentUrl)) {
+        await browser.disconnect();
+        return { success: false, error: 'Chrome remoto (9223) não está logado no KDP', platform: 'amazon' };
+      }
+      log.info('9223: sessão KDP válida: ' + currentUrl.slice(0, 60));
+    } else {
+      // ── Inject session ────────────────────────────────────────────────────────
+      log.info('Injetando sessão Amazon...');
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+      await sleep(1000);
+
+      for (const cookie of (session.cookies || [])) {
+        try {
+          const c = { ...cookie };
+          // Ensure correct domain for amazon.com
+          if (!c.domain) c.domain = '.amazon.com';
+          if (c.domain === '.amazon.com.br') c.domain = '.amazon.com';
+          await page.setCookie(c);
+        } catch {}
+      }
+
+      // ── Verify session ────────────────────────────────────────────────────────
+      await page.goto(BOOKSHELF_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+      await sleep(3000);
+      currentUrl = page.url();
+
+      if (currentUrl.includes('signin') || currentUrl.includes('ap/signin')) {
+        log.warn('Sessão expirada no bookshelf — tentando login...');
+        const ok = await doSignin(page);
+        if (!ok) {
+          await browser.close();
+          return { success: false, error: 'Sessão expirada e login falhou', platform: 'amazon' };
+        }
+        await page.goto(BOOKSHELF_URL, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+        await sleep(2000);
+      }
+      log.info('Sessão Amazon válida: ' + page.url().slice(0, 60));
     }
-    log.info('Sessão Amazon válida: ' + page.url().slice(0, 60));
 
     // ── Navigate to new title ────────────────────────────────────────────────
     // Try known direct URLs first; if all 404, click "Create" from bookshelf
@@ -865,23 +885,46 @@ async function publishToAmazon(ebook) {
       // Step-up auth can happen after type-selection — handle it
       if (isAuthUrl(currentUrl)) {
         log.info('Step-up auth após type-selection: ' + currentUrl.slice(0, 80));
-        const ok = await doSignin(page);
+        let ok;
+        if (USE_REMOTE) {
+          // Chrome do usuário: ELE completa o login (senha/OTP) na janela visível.
+          // Só esperamos a tela de auth sair (até 10 min).
+          log.info('⏳ MODO REMOTO: aguardando VOCÊ completar o login na janela do Chrome (até 10 min)...');
+          const dl = Date.now() + 600000;
+          ok = false;
+          while (Date.now() < dl) { await sleep(3000); if (!isAuthUrl(page.url())) { ok = true; break; } }
+          if (ok) log.info('✅ Login completado — retomando preenchimento automático');
+        } else {
+          ok = await doSignin(page);
+        }
         if (!ok) {
           await screenshot(page, 'signin_failed_after_type_select');
-          await browser.close();
+          if (USE_REMOTE) await browser.disconnect(); else await browser.close();
           return { success: false, error: 'Amazon auth após type-selection falhou', platform: 'amazon' };
         }
-        // Try navigating back to new title after signin
-        for (const url of NEW_TITLE_URLS) {
-          await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+        if (USE_REMOTE) {
+          // Amazon continua o fluxo original após o step-up; só re-lê a URL.
           await sleep(3000);
           currentUrl = page.url();
-          if (!currentUrl.includes('/404') && !isAuthUrl(currentUrl)) break;
-        }
-        if (isAuthUrl(currentUrl)) {
-          log.warn('Ainda em auth após re-signin: ' + currentUrl.slice(0, 80));
-          await browser.close();
-          return { success: false, error: 'Amazon auth persistente após type-selection', platform: 'amazon' };
+          log.info('Pós-login URL: ' + currentUrl.slice(0, 80));
+          if (currentUrl.includes('/bookshelf')) {
+            await page.evaluate(() => { const b = [...document.querySelectorAll('a,button,span,[role="button"]')].find(e => /criar novo livro|create new|criar novo título/i.test(e.textContent || '')); if (b) b.click(); }).catch(() => {});
+            await sleep(4000);
+            currentUrl = page.url();
+          }
+        } else {
+          // Try navigating back to new title after signin
+          for (const url of NEW_TITLE_URLS) {
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+            await sleep(3000);
+            currentUrl = page.url();
+            if (!currentUrl.includes('/404') && !isAuthUrl(currentUrl)) break;
+          }
+          if (isAuthUrl(currentUrl)) {
+            log.warn('Ainda em auth após re-signin: ' + currentUrl.slice(0, 80));
+            await browser.close();
+            return { success: false, error: 'Amazon auth persistente após type-selection', platform: 'amazon' };
+          }
         }
         // Handle type-selection again if needed
         if (currentUrl.includes('/create') && !currentUrl.includes('title-setup')) {
@@ -938,9 +981,24 @@ async function publishToAmazon(ebook) {
       log.warn('Timeout esperando formulário renderizar: ' + e.message.slice(0,60));
     }
 
-    // Language
+    // Language — escolhe pelo idioma do ebook (corrige livros es/en marcados errado)
     try {
-      await page.select('select[name*="language" i], select[id*="language" i]', 'pt').catch(() => {});
+      const lng = (ebook.language || 'pt').toLowerCase();
+      const want = (lng.startsWith('es') || /span|espa/.test(lng)) ? { code: 'es', names: ['español', 'espanhol', 'spanish'] }
+                 : (lng.startsWith('en') || /engl|ingl/.test(lng)) ? { code: 'en', names: ['inglês', 'ingles', 'english'] }
+                 : { code: 'pt', names: ['português', 'portugues', 'portuguese'] };
+      const lset = await page.evaluate((w) => {
+        const sel = document.querySelector('select[name*="language" i], select[id*="language" i]');
+        if (!sel) return 'no-select';
+        let opt = Array.from(sel.options).find(o => o.value && o.value.toLowerCase() === w.code);
+        if (!opt) opt = Array.from(sel.options).find(o => w.names.some(n => (o.text || '').toLowerCase().includes(n)));
+        if (!opt) return 'no-opt:' + w.code;
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        sel.dispatchEvent(new Event('input', { bubbles: true }));
+        return 'lang=' + opt.text.trim();
+      }, want).catch(e => 'err:' + e.message);
+      log.info('Idioma: ' + lset);
     } catch {}
 
     // Title — exact KDP React ID first, then fallbacks
@@ -1424,6 +1482,46 @@ async function publishToAmazon(ebook) {
     log.info('DRM selection: ' + drmResult);
     await sleep(500);
 
+    // Os controles do KDP (Potter) ignoram .click() via JS — o valor nunca chega ao POST
+    // e o save-and-continue devolve {"data[is_drm]":"Enter a selection for DRM"}.
+    // Só clique REAL de mouse registra. Confere e reclica se preciso.
+    for (let tentativa = 0; tentativa < 3; tentativa++) {
+      const drmOk = await page.evaluate(() => {
+        const n = document.querySelector('input[name="data[is_drm]"]');
+        if (n && n.value !== '' && n.value != null) return String(n.value);
+        const marcado = [...document.querySelectorAll('input[name*="is_drm"]')].find(i => i.checked);
+        if (marcado) return String(marcado.value);
+        const pot = [...document.querySelectorAll('[role="radio"]')].find(e => e.getAttribute('aria-checked') === 'true' &&
+          /drm|direitos digitais|digital rights/i.test((e.closest('fieldset,section,div')||{}).textContent || ''));
+        return pot ? 'potter' : '';
+      }).catch(() => '');
+      if (drmOk) { log.info('DRM confirmado no form: ' + drmOk); break; }
+
+      const alvo = await page.evaluate(() => {
+        // "Não" do bloco de DRM — aceita radio nativo ou div[role=radio]
+        const cands = [...document.querySelectorAll('input[type="radio"], [role="radio"]')];
+        for (const e of cands) {
+          if (e.offsetParent === null) continue;
+          let ctx = '';
+          for (let n = e, d = 0; n && d < 6; n = n.parentElement, d++) ctx += ' ' + (n.textContent || '');
+          const c = ctx.toLowerCase();
+          if (!/drm|direitos digitais|digital rights/.test(c)) continue;
+          const rot = (e.closest('label')?.textContent || e.parentElement?.textContent || '').toLowerCase();
+          if (/^\s*(não|nao|no)\b/.test(rot.trim()) || /não aplique|do not apply/.test(rot)) {
+            e.scrollIntoView({ block: 'center' });
+            const r = e.getBoundingClientRect();
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2, rot: rot.trim().slice(0, 50) };
+          }
+        }
+        return null;
+      }).catch(() => null);
+      if (!alvo) { log.warn('DRM: opção "Não" não localizada (tentativa ' + (tentativa + 1) + ')'); break; }
+      await sleep(600);
+      await page.mouse.click(alvo.x, alvo.y);   // clique real
+      log.info('DRM clique real em: ' + alvo.rot);
+      await sleep(1500);
+    }
+
     // Debug step 2 DOM — retry up to 3× (execution context can be briefly destroyed during SPA updates)
     let step2Debug = {};
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -1626,17 +1724,31 @@ async function publishToAmazon(ebook) {
           log.info('CDP cover (pierced): ' + fileInputs.length + ' file inputs found' +
             (fileInputs.length ? ' — attrs=' + JSON.stringify(fileInputs.map(f => f.attrs)).slice(0, 200) : ''));
 
-          let coverNodeId = 0;
-          for (const f of fileInputs) {
+          // NUNCA escrever num input de manuscrito: mandar a capa pro campo do
+          // interior substitui o livro pelo JPEG (arquivo "convertido" vira ~0.05 MB
+          // e a aba Conteúdo volta a "Não iniciada"). Só aceita inputs comprovadamente
+          // de imagem; sem candidato seguro, aborta em vez de chutar.
+          const ehManuscrito = f => {
             const nm = (f.attrs.name || f.attrs.id || '').toLowerCase();
             const ac = (f.attrs.accept || '').toLowerCase();
-            if (nm.includes('cover') || nm.includes('capa') || nm.includes('image') ||
-                ac.includes('image') || ac.includes('jpeg') || ac.includes('jpg') || ac.includes('png')) {
-              coverNodeId = f.nodeId; break;
-            }
+            return nm.includes('interior') || nm.includes('manuscript') || nm.includes('manuscrito') ||
+                   ac.includes('.pdf') || ac.includes('.doc') || ac.includes('.epub') || ac.includes('.kpf');
+          };
+          const ehCapa = f => {
+            const nm = (f.attrs.name || f.attrs.id || '').toLowerCase();
+            const ac = (f.attrs.accept || '').toLowerCase();
+            return nm.includes('cover') || nm.includes('capa') ||
+                   ac.includes('image') || ac.includes('jpeg') || ac.includes('jpg') ||
+                   ac.includes('png') || ac.includes('tif');
+          };
+          const candidatos = fileInputs.filter(f => ehCapa(f) && !ehManuscrito(f));
+          let coverNodeId = candidatos.length ? candidatos[0].nodeId : 0;
+          if (!coverNodeId) {
+            const naoManuscrito = fileInputs.filter(f => !ehManuscrito(f));
+            if (naoManuscrito.length === 1) coverNodeId = naoManuscrito[0].nodeId;
+            else log.warn('CDP capa: nenhum input de imagem seguro (' + fileInputs.length +
+              ' inputs, ' + naoManuscrito.length + ' não-manuscrito) — pulando p/ não corromper o manuscrito');
           }
-          // Last resort: use last file input (manuscript is first, cover is last)
-          if (!coverNodeId && fileInputs.length >= 2) coverNodeId = fileInputs[fileInputs.length - 1].nodeId;
 
           if (coverNodeId) {
             await client.send('DOM.setFileInputFiles', { files: [coverFile], nodeId: coverNodeId });
@@ -1675,30 +1787,86 @@ async function publishToAmazon(ebook) {
     }).catch(() => {});
     await sleep(1000);
 
-    // ── AI tools disclosure (new KDP requirement) ───────────────────────────
-    const aiResult = await page.evaluate(() => {
-      // Find any radio/checkbox related to AI tools
-      const allRadios = Array.from(document.querySelectorAll('input[type="radio"]'));
-      for (const r of allRadios) {
-        const section = r.closest('section') || r.closest('.a-section') || r.closest('fieldset') || r.closest('div');
-        const sectionText = (section?.textContent || '').toLowerCase();
-        if (sectionText.includes('inteligência artificial') || sectionText.includes('artificial intelligence') ||
-            sectionText.includes('ferramentas de ia') || sectionText.includes('ai tools') ||
-            sectionText.includes('gerado por ia') || sectionText.includes('ai-generated') ||
-            sectionText.includes('conteúdo gerado')) {
-          const label = r.labels?.[0] || r.closest('label') || r.parentElement;
-          const labelText = (label?.textContent || '').toLowerCase();
-          if (labelText.includes('não') || labelText.includes('no,') || labelText.includes('nenhum') || labelText.includes('none')) {
-            r.click();
-            r.dispatchEvent(new Event('change', { bubbles: true }));
-            return 'ai-no clicked: ' + labelText.slice(0, 50);
+    // ── AI tools disclosure — responde "Sim" (conteúdo gerado por IA) + sub-formulário ──
+    // A pergunta usa div[role=radio] (Potter), que exige clique de mouse real.
+    let aiResult = 'ai-skip';
+    try {
+      const simBox = await page.evaluate(() => {
+        const h = [...document.querySelectorAll('*')].find(e => /Você us(a|ou) ferramentas de IA/i.test(e.textContent || '') && e.childElementCount < 8);
+        let sec = h;
+        for (let k = 0; k < 6 && sec; k++) { if ([...sec.querySelectorAll('[role=radio]')].length >= 2) break; sec = sec.parentElement; }
+        const radios = sec ? [...sec.querySelectorAll('[role=radio]')]
+          : [...document.querySelectorAll('[role=radio]')].filter(r => /^(Sim|Não)$/.test((r.textContent || '').trim()));
+        const sim = radios.find(r => /^Sim$/i.test((r.textContent || '').trim())) || radios[0];
+        if (!sim) return null;
+        sim.scrollIntoView({ block: 'center' });
+        const r = sim.getBoundingClientRect();
+        return { x: r.x + 10, y: r.y + r.height / 2 };
+      }).catch(() => null);
+      if (simBox) {
+        await page.mouse.click(simBox.x, simBox.y);
+        await sleep(2500);
+        const selResult = await page.evaluate(() => {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+          const selects = [...document.querySelectorAll('select')].filter(s => s.offsetParent && /react-aui/.test(s.name || ''));
+          const out = [];
+          selects.forEach((s, idx) => {
+            const opts = [...s.options];
+            const opt = idx === 0 ? opts.find(o => /A obra inteira, com pouca/i.test(o.text)) : opts.find(o => /^Nenhuma/i.test(o.text.trim()));
+            if (opt) { setter.call(s, opt.value); s.dispatchEvent(new Event('input', { bubbles: true })); s.dispatchEvent(new Event('change', { bubbles: true })); out.push(opt.text.trim().slice(0, 18)); }
+          });
+          return out.join(' | ');
+        }).catch(() => 'sel-err');
+        await sleep(1500);
+        try {
+          const th = await page.evaluateHandle(() => [...document.querySelectorAll('input[type=text],textarea')].find(i => /ChatGPT|ferramenta/i.test(i.placeholder || '') && i.offsetParent) || null);
+          const tel = th.asElement();
+          if (tel) { await tel.click(); await tel.type('ChatGPT', { delay: 30 }); await page.keyboard.press('Tab'); }
+        } catch {}
+        aiResult = 'ai-sim: ' + selResult;
+      } else {
+        aiResult = 'ai-radio-not-found';
+      }
+    } catch (e) { aiResult = 'ai-err: ' + e.message.slice(0, 50); }
+    log.info('AI disclosure: ' + aiResult);
+
+    // Mesmo problema do DRM: sem clique real de mouse o KDP devolve
+    // {"data[generative_ai_questionnaire]":"Specify if you used AI tools."}
+    // Declaração permanece VERDADEIRA (conteúdo é gerado por IA) — só garante que persista.
+    for (let tentativa = 0; tentativa < 3; tentativa++) {
+      const aiOk = await page.evaluate(() => {
+        const n = document.querySelector('input[name*="generative_ai"]');
+        if (n && String(n.value || '').trim()) return String(n.value).slice(0, 20);
+        const pot = [...document.querySelectorAll('[role="radio"]')].find(e => e.getAttribute('aria-checked') === 'true' &&
+          /inteligência artificial|generative ai|ferramentas de ia|ai-generated|ia generativa/i.test(
+            (e.closest('fieldset,section,div') || {}).textContent || ''));
+        return pot ? 'potter-sim' : '';
+      }).catch(() => '');
+      if (aiOk) { log.info('IA confirmada no form: ' + aiOk); break; }
+
+      const alvo = await page.evaluate(() => {
+        const cands = [...document.querySelectorAll('[role="radio"], input[type="radio"]')];
+        for (const e of cands) {
+          if (e.offsetParent === null) continue;
+          let ctx = '';
+          for (let n = e, d = 0; n && d < 7; n = n.parentElement, d++) ctx += ' ' + (n.textContent || '');
+          if (!/inteligência artificial|generative ai|ferramentas de ia|conteúdo gerado por ia|ai tools/i.test(ctx)) continue;
+          const rot = (e.closest('label')?.textContent || e.parentElement?.textContent || '').trim().toLowerCase();
+          if (/^(sim|yes)\b/.test(rot)) {          // declaração verdadeira: SIM, usou IA
+            e.scrollIntoView({ block: 'center' });
+            const r = e.getBoundingClientRect();
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2, rot: rot.slice(0, 40) };
           }
         }
-      }
-      return 'ai-not-found';
-    }).catch(() => 'error');
-    log.info('AI disclosure: ' + aiResult);
-    await sleep(300);
+        return null;
+      }).catch(() => null);
+      if (!alvo) { log.warn('IA: opção "Sim" não localizada (tentativa ' + (tentativa + 1) + ')'); break; }
+      await sleep(600);
+      await page.mouse.click(alvo.x, alvo.y);
+      log.info('IA clique real em: ' + alvo.rot);
+      await sleep(2000);
+    }
+    await sleep(500);
 
     // ── Accessibility confirmation checkbox ─────────────────────────────────
     // KDP shows: "Ao clicar aqui, confirmo que minhas respostas estão corretas"
@@ -1931,6 +2099,28 @@ async function publishToAmazon(ebook) {
     }).catch(() => ({}));
     log.info('Step3 DOM: ' + JSON.stringify(step3Debug).slice(0, 1000));
 
+    // KDP Select enrollment (exclusividade) — só para versões KDP distintas/exclusivas.
+    // Marca o checkbox "Cadastrar meu livro no KDP Select" antes de royalty/preço.
+    if (ebook.kdpSelect) {
+      const selectResult = await page.evaluate(() => {
+        const cbs = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+        for (const cb of cbs) {
+          const lbl = (cb.closest('label')?.textContent || cb.closest('div')?.textContent || '').toLowerCase();
+          if (lbl.includes('kdp select')) {
+            if (cb.disabled) return 'disabled: ' + lbl.slice(0, 50);
+            if (cb.checked) return 'already-checked';
+            cb.scrollIntoView({ block: 'center' });
+            cb.click();
+            cb.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'enrolled: checked=' + cb.checked;
+          }
+        }
+        return 'checkbox-not-found';
+      }).catch(e => 'error: ' + e.message);
+      log.info('KDP Select: ' + selectResult);
+      await sleep(1000);
+    }
+
     // Publishing rights: worldwide
     await page.evaluate(() => {
       const radios = document.querySelectorAll('input[type="radio"]');
@@ -1963,43 +2153,60 @@ async function publishToAmazon(ebook) {
     const kdpMinUsd = parseFloat(process.env.KDP_PRICE_USD || '0.99');
     const priceUsd = Math.max(0.99, kdpMinUsd).toFixed(2);
 
-    // Approach 1: look for inputs with ID/name containing "price" (KDP: data-digital-price-ATVPDKIKX0DER, etc.)
-    const priceFilled = await page.evaluate((price) => {
-      // Find all visible text/number inputs
-      const allInputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"]'));
-      const visible = allInputs.filter(el => {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && !el.disabled && !el.readOnly;
-      });
+    // Preço US no formato VÍRGULA via TECLADO — só assim o KDP dispara a auto-conversão
+    // "Com base em Amazon.com" que preenche os outros 12 mercados. (native-setter + ponto NÃO
+    // dispara → mercados vazios → publish bloqueado.)
+    // Preenche TODOS os 13 mercados explicitamente (vírgula; JP/IN inteiros — exigência das moedas).
+    // Não confiar na auto-conversão: ela gera IN/JP com decimais → "múltiplos de 1 INR/JPY" bloqueia.
+    const priceComma = priceUsd.replace('.', ',');
+    const PRICES = { US: priceComma, UK: '3,99', DE: '4,49', FR: '4,49', ES: '4,49', IT: '4,49',
+                     NL: '4,49', JP: '750', CA: '6,49', MX: '99', AU: '7,99', IN: '249', BR: '14,99' };
+    const digitar = async (mk, val) => {
+      const h = await page.evaluateHandle((m) =>
+        [...document.querySelectorAll('input')].find(i => (i.name || '').includes('[' + m + '][price_vat_inclusive]') && i.type === 'text') || null, mk);
+      const el = h.asElement();
+      if (!el) return false;
+      await el.click({ clickCount: 3 });
+      await page.keyboard.press('Backspace');
+      await el.type(val, { delay: 40 });
+      await page.keyboard.press('Tab');
+      await sleep(350);
+      return true;
+    };
 
-      // Prefer inputs whose id/name mentions "price" — KDP uses data[digital][price][ATVPDKIKX0DER]
-      const priceInputs = visible.filter(el => {
-        const id = (el.id || '').toLowerCase();
-        const name = (el.name || '').toLowerCase();
-        return id.includes('price') || name.includes('price');
-      });
+    // Ordem importa: o US dispara a auto-conversão "Com base em Amazon.com", que
+    // SOBRESCREVE os demais mercados. Preencher US primeiro e esperar assentar;
+    // só depois gravar os outros 12, senão a conversão apaga nossos valores
+    // (observado: UK virava 3,00 e CA/MX/AU ficavam vazios → "Use um formato de preço de 0,00").
+    let filledCount = 0;
+    try { if (await digitar('US', PRICES.US)) filledCount++; } catch {}
+    await sleep(5000);
 
-      const target = priceInputs.length > 0 ? priceInputs[0] : (visible.length > 0 ? visible[0] : null);
-      if (!target) return 'no-input-found';
+    for (const [mk, val] of Object.entries(PRICES)) {
+      if (mk === 'US') continue;
+      try { if (await digitar(mk, val)) filledCount++; } catch {}
+    }
+    await sleep(2500);
 
-      target.scrollIntoView({ block: 'center' });
-      target.focus();
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-      nativeInputValueSetter.call(target, price);
-      target.dispatchEvent(new Event('input', { bubbles: true }));
-      target.dispatchEvent(new Event('change', { bubbles: true }));
-      target.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-      // CRITICAL: commit the value so KDP fires the "Com base em Amazon.com" auto-conversion
-      // that populates all other marketplace prices. Without blur/focusout the other
-      // marketplaces stay empty and KDP blocks publish (page stuck on /pricing).
-      target.dispatchEvent(new Event('blur', { bubbles: true }));
-      target.dispatchEvent(new Event('focusout', { bubbles: true }));
-      target.blur();
-      return 'filled: id=' + (target.id || target.name || 'unknown') + ' val=' + price;
-    }, priceUsd).catch(e => 'error: ' + e.message);
-    log.info('USD price: $' + priceUsd + ' result=' + priceFilled);
-    // Wait for KDP to auto-convert the US price into all other marketplaces
-    await sleep(4000);
+    // Re-preenche o que ficou vazio (a conversão às vezes limpa campos ao assentar)
+    for (let passada = 0; passada < 2; passada++) {
+      const vazios = await page.evaluate(() =>
+        [...document.querySelectorAll('input')]
+          .filter(i => i.type === 'text' && /\[([A-Z]{2})\]\[price_vat_inclusive\]/.test(i.name || '') && !String(i.value).trim())
+          .map(i => (i.name.match(/\[([A-Z]{2})\]\[price_vat_inclusive\]/) || [])[1])
+          .filter(Boolean));
+      if (!vazios.length) break;
+      log.warn('Preços vazios após conversão: ' + vazios.join(',') + ' — repreenchendo');
+      for (const mk of vazios) { if (PRICES[mk]) { try { await digitar(mk, PRICES[mk]); } catch {} } }
+      await sleep(2000);
+    }
+
+    const estado = await page.evaluate(() =>
+      [...document.querySelectorAll('input')]
+        .filter(i => i.type === 'text' && /\[([A-Z]{2})\]\[price_vat_inclusive\]/.test(i.name || ''))
+        .map(i => ((i.name.match(/\[([A-Z]{2})\]\[price_vat_inclusive\]/) || [])[1]) + '=' + i.value));
+    log.info('Preços (vírgula, 13 mercados): preenchidos ' + filledCount + '/13 | final: ' + estado.join(' '));
+    await sleep(1500);
 
     // Verify auto-conversion populated other marketplaces; if not, the publish will be blocked.
     const marketCount = await page.evaluate(() => {
@@ -2067,10 +2274,11 @@ async function publishToAmazon(ebook) {
     }
     await screenshot(page, 'step3_done');
 
-    // Save updated session
-    await saveSession(page);
+    // Save updated session (não no modo remoto — paths são da VPS)
+    if (!USE_REMOTE) await saveSession(page);
 
-    await browser.close();
+    if (USE_REMOTE) { await page.close().catch(() => {}); await browser.disconnect(); }
+    else { await browser.close(); }
     return { success: reallyPublished, url: reallyPublished ? finalUrl : null, platform: 'amazon' };
 
   } catch (err) {
@@ -2079,7 +2287,8 @@ async function publishToAmazon(ebook) {
       fs.mkdirSync(LOGS_DIR, { recursive: true });
       await page.screenshot({ path: path.join(LOGS_DIR, 'amazon_error.png') }).catch(() => {});
     } catch {}
-    await browser.close().catch(() => {});
+    if (USE_REMOTE) { await browser.disconnect().catch(() => {}); }
+    else { await browser.close().catch(() => {}); }
     return { success: false, error: err.message, platform: 'amazon' };
   }
 }

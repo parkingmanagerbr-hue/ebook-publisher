@@ -191,9 +191,30 @@ async function runPipeline(topicOverride = null, language = null) {
       // Amazon KDP — isolado: exceção não mata o pipeline
       if (process.env.AUTO_PUBLISH_AMAZON !== 'false' &&
           (process.env.AUTO_PUBLISH_AMAZON === 'true' || (process.env.KDP_EMAIL && process.env.KDP_PASSWORD))) {
+
+        // Versão DISTINTA para o KDP (conteúdo novo completo) — satisfaz a exclusividade
+        // do KDP Select, já que o Cakto/Hotmart vendem a versão padrão. Só inscreve no
+        // Select se a versão distinta for gerada com sucesso (senão publica sem Select).
+        let amazonPublishData = publishData;
+        if (process.env.KDP_DISTINCT_VERSION !== 'false') {
+          try {
+            logger.info('\n📘 ETAPA 4b: Gerando versão DISTINTA para o KDP (exclusividade Select)...');
+            const kdpEbook = await generateFullEbook(topic.topic + ' — abordagem aprofundada e exclusiva', lang);
+            const kdpCover = await generateCover(kdpEbook.title, kdpEbook.subtitle, topic.topic);
+            const kdpId = ebookId + '-kdp';
+            const kdpPrice = parseFloat(process.env.EBOOK_PRICE || '4.99');
+            const kdpPdf = await generatePDF({ ...kdpEbook, id: kdpId, coverPath: kdpCover, price: kdpPrice }, kdpCover);
+            amazonPublishData = { ...kdpEbook, id: kdpId, coverPath: kdpCover, pdfPath: kdpPdf, price: kdpPrice, kdpSelect: true };
+            logger.info(`✅ Versão KDP distinta: "${kdpEbook.title}" (${kdpEbook.wordCount} palavras)`);
+          } catch (kdpGenErr) {
+            logger.warn(`⚠️ Falha ao gerar versão KDP distinta (${kdpGenErr.message.slice(0, 80)}) — publicando versão padrão SEM Select`);
+            amazonPublishData = publishData;
+          }
+        }
+
         logger.info('Publicando na Amazon KDP...');
         try {
-          const amazonResult = await publishToAmazon(publishData);
+          const amazonResult = await publishToAmazon(amazonPublishData);
           results.amazon = amazonResult;
           if (amazonResult?.success) logger.info(`✅ Amazon KDP: ${amazonResult.url || amazonResult.asin || 'OK'}`);
           else logger.warn(`⚠️ Amazon KDP falhou: ${amazonResult?.error || 'desconhecido'}`);

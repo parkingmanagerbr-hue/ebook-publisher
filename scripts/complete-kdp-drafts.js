@@ -507,24 +507,32 @@ async function doContentStep(page, book) {
         await coverInput.uploadFile(coverJpeg);
         log.info(`[${book.title}] Cover upload initiated`);
 
-        // Wait for cover preview / success
+        // Wait for cover preview / success. Detecção robusta: a miniatura da capa
+        // (img grande, ratio ~1.6, blob:/data:/media-amazon) aparece quando o upload conclui.
         let coverDone = false;
-        for (let i = 0; i < 40; i++) {
+        for (let i = 0; i < 30; i++) {
           await sleep(3000);
           const status = await page.evaluate(() => {
-            const preview = document.querySelector(
-              '.cover-image img, img[alt*="cover" i], [class*="coverPreview"] img, [data-testid*="cover"] img'
-            );
-            const success = document.querySelector('[class*="cover-success"], [class*="coverSuccess"]');
-            const spinner = document.querySelector('.a-spinner, [class*="uploading"], [class*="processing"]');
-            if (preview || success) return 'done';
-            if (spinner) return 'processing';
-            return 'waiting';
+            const imgs = [...document.querySelectorAll('img')];
+            const cover = imgs.find(im => {
+              const w = im.naturalWidth || 0, h = im.naturalHeight || 0;
+              const src = im.src || '';
+              const looksCover = /blob:|data:image|\/images\/[IP]\/|media-amazon/i.test(src) || /cover|capa/i.test((im.alt || '') + (im.className || ''));
+              return looksCover && w > 120 && h > 150 && h >= w; // retrato, tamanho real
+            });
+            if (cover) return 'done';
+            const success = document.querySelector('[class*="cover-success"], [class*="coverSuccess"], [class*="upload-success"]');
+            if (success) return 'done';
+            const txt = document.body.innerText || '';
+            if (/capa.*(carregad|conclu|sucesso)|cover.*(uploaded|success)/i.test(txt)) return 'done';
+            const spinner = document.querySelector('.a-spinner, [class*="uploading"], [class*="processing"], [class*="spinner"]');
+            return spinner ? 'processing' : 'waiting';
           });
-          log.info(`[${book.title}] Cover upload status: ${status}`);
+          if (i % 4 === 0 || status === 'done') log.info(`[${book.title}] Cover upload status: ${status}`);
           if (status === 'done') { coverDone = true; break; }
         }
-        if (!coverDone) log.warn(`[${book.title}] Cover upload may not have completed`);
+        if (coverDone) log.info(`[${book.title}] ✅ Capa confirmada (preview visível)`);
+        else log.warn(`[${book.title}] Cover upload may not have completed`);
         await dismissModal(page);
       } else {
         log.warn(`[${book.title}] No cover file input found`);
