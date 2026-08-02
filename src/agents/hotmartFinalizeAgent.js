@@ -86,8 +86,17 @@ async function renovarToken() {
     const novo = await page.evaluate(() => (localStorage.getItem('token') || '').replace(/^"|"$/g, '')).catch(() => '');
     if (!novo) { log.warn('[token] SPA não gravou token'); return null; }
 
-    // Persiste sessão + TGT para a próxima renovação
-    const cookies = await page.cookies();
+    // Persiste sessão + TGT para a próxima renovação.
+    // page.cookies() só devolve o domínio atual — os cookies do SSO
+    // (sso.hotmart.com, httpOnly) se perdiam. CDP pega todos.
+    let cookies;
+    try {
+      const cdp = await page.target().createCDPSession();
+      const all = (await cdp.send('Network.getAllCookies')).cookies || [];
+      cookies = all.filter(x => /hotmart\.com/i.test(x.domain));
+    } catch (_) {
+      cookies = await page.cookies();
+    }
     const localStorage_ = await page.evaluate(() => {
       const o = {}; for (let i = 0; i < window.localStorage.length; i++) { const k = window.localStorage.key(i); o[k] = window.localStorage.getItem(k); } return o;
     }).catch(() => ({}));
@@ -157,10 +166,32 @@ async function approveProduct(id) {
   return true;
 }
 
+/**
+ * Sessão do wizard (cookies de app.hotmart.com) apodrece em ~1 dia mesmo com
+ * TGT válido — e aí o publisherHotmart cai no login e falha TODA publicação.
+ * Renova preventivamente quando o arquivo passa de 8h.
+ */
+async function refreshSessionIfStale() {
+  const SESSION = process.env.HOTMART_SESSION_FILE || '/app/data/sessions/hotmart.json';
+  const MAX_AGE_MS = parseInt(process.env.HOTMART_SESSION_MAX_AGE_MS || String(8 * 3600 * 1000), 10);
+  try {
+    const j = JSON.parse(fs.readFileSync(SESSION, 'utf8'));
+    const idade = Date.now() - (j.savedAt || 0);
+    if (idade < MAX_AGE_MS) return false;
+    log.info('[sessao] ' + (idade / 3600000).toFixed(1) + 'h — renovando preventivamente via CAS');
+    return !!(await renovarToken());
+  } catch (e) {
+    log.warn('[sessao] ' + e.message.slice(0, 80));
+    return false;
+  }
+}
+
 async function finalizeDrafts() {
   const state = loadState();
   const done = new Set(state.done);
   const stats = { sent: 0, errors: 0, drafts: 0, remaining: 0 };
+
+  await refreshSessionIfStale();
 
   let products;
   try { products = await listProducts(); }
