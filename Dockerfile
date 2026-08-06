@@ -50,9 +50,12 @@ RUN mkdir -p data/pdfs data/covers data/sessions data/audiobooks data/db logs &&
 
 EXPOSE 3100
 
-# Healthcheck — verifica /api/status (endpoint público, sem auth)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3100/api/status',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
+# Healthcheck — /api/status E presenca do megaAgent.
+# Antes so checava o endpoint (o server), entao o container ficou 3 dias
+# "healthy" com o pipeline morto (04-06/08/2026). No modo FULL o megaAgent
+# tem que estar no ps; sem ele nao ha publicacao nenhuma.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3100/api/status',r=>{if(r.statusCode!==200)process.exit(1);if(process.env.DASHBOARD_ONLY==='1')process.exit(0);const{execSync}=require('child_process');try{execSync('pgrep -f megaAgent.js')}catch(e){console.error('megaAgent ausente');process.exit(1)}process.exit(0)}).on('error',()=>process.exit(1))"
 
 # Entrypoint com suporte a DASHBOARD_ONLY / MEGA_ONLY / FULL
 CMD ["sh", "start.sh"]

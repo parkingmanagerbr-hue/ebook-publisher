@@ -32,17 +32,44 @@ elif [ "${DASHBOARD_ONLY}" = "1" ]; then
   exec node src/server.js
 
 else
-  # Modo completo: dashboard + megaAgent em paralelo
-  echo "[start] Modo FULL — dashboard + megaAgent em paralelo"
+  # Modo completo: dashboard + megaAgent supervisionados.
+  #
+  # BUG CORRIGIDO (06/08/2026): antes era `wait $SERVER_PID $MEGA_PID`, que no
+  # sh POSIX espera TODOS terminarem — nao o primeiro. Em 04/08 o megaAgent
+  # morreu (Chromium "Target closed") e o wait seguiu aguardando o server, vivo.
+  # O healthcheck so testa /api/status (o server), entao o container ficou
+  # 3 DIAS "healthy" sem publicar nada. Agora o megaAgent e supervisionado e
+  # reinicia sozinho; se o server cair, o container sai e o restart policy age.
+  echo "[start] Modo FULL — dashboard + megaAgent supervisionado"
+
   node src/server.js &
   SERVER_PID=$!
 
   # Aguardar server inicializar antes do megaAgent
   sleep 8
 
-  node megaAgent.js &
-  MEGA_PID=$!
+  # Supervisor: mantem o megaAgent vivo com backoff progressivo.
+  MEGA_BACKOFF_MAX=${MEGA_BACKOFF_MAX:-300}
+  (
+    tentativa=0
+    while true; do
+      tentativa=$((tentativa + 1))
+      echo "[supervisor] iniciando megaAgent (tentativa ${tentativa})"
+      node megaAgent.js
+      code=$?
+      # Backoff: 15s, 30s, 60s... ate MEGA_BACKOFF_MAX. Evita loop de crash
+      # quente quando a causa e persistente (ex.: sessao expirada).
+      espera=$((15 * tentativa))
+      [ "$espera" -gt "$MEGA_BACKOFF_MAX" ] && espera=$MEGA_BACKOFF_MAX
+      echo "[supervisor] megaAgent saiu (code=${code}) — reiniciando em ${espera}s"
+      sleep "$espera"
+    done
+  ) &
+  SUPERVISOR_PID=$!
 
-  # Manter container vivo; sair se qualquer processo morrer
-  wait $SERVER_PID $MEGA_PID
+  # Se o SERVER morrer, encerra o container para o restart policy reiniciar tudo.
+  wait $SERVER_PID
+  echo "[start] server.js saiu — derrubando container para restart limpo"
+  kill $SUPERVISOR_PID 2>/dev/null || true
+  exit 1
 fi
