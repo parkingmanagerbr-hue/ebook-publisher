@@ -135,16 +135,18 @@ async function runPipeline(topicOverride = null, language = null) {
       status: 'ready'
     });
 
-    // ===== 4.5 AUDIOBOOK =====
+    // ===== 4.5 AUDIOBOOK (em paralelo com a publicação) =====
+    // Media ~2min46 = metade do ciclo, e o resultado NAO entra no publishData
+    // (so e logado no fim). Antes rodava com await aqui e atrasava a venda do
+    // e-book em ~50% sem beneficio nenhum. Agora dispara e a publicacao segue;
+    // o await acontece depois, ja com o produto no ar.
     let audiobookPath = null;
+    let audiobookPromise = null;
     if (audiobookAvailable()) {
-      logger.info('\n🎙️ ETAPA 4.5: Gerando audiobook...');
-      try {
-        audiobookPath = await generateAudiobook(ebook, ebookId);
-        if (audiobookPath) logger.info(`✅ Audiobook gerado: ${audiobookPath}`);
-      } catch (err) {
-        logger.warn(`⚠️ Audiobook falhou (não crítico): ${err.message}`);
-      }
+      logger.info('\n🎙️ ETAPA 4.5: Audiobook iniciado em paralelo (não bloqueia publicação)');
+      audiobookPromise = generateAudiobook(ebook, ebookId)
+        .then(p => { if (p) logger.info(`✅ Audiobook gerado: ${p}`); return p; })
+        .catch(err => { logger.warn(`⚠️ Audiobook falhou (não crítico): ${err.message}`); return null; });
     }
 
     // ===== 5. PUBLICAR =====
@@ -245,6 +247,10 @@ async function runPipeline(topicOverride = null, language = null) {
     // ===== 6. APRENDIZADO =====
     logger.info('\n🧠 ETAPA 5: Rodando ciclo de aprendizado ML...');
     await runLearningCycle();
+
+    // Audiobook rodou junto com a publicação e o ML — aqui ja deve estar pronto
+    // ou faltando pouco, entao o await custa quase nada.
+    if (audiobookPromise) audiobookPath = await audiobookPromise;
 
     // ===== RESUMO =====
     logger.info('\n' + '='.repeat(60));
