@@ -56,6 +56,52 @@ function getIntervalMs() {
   return Math.max(5, mins) * 60 * 1000; // mínimo 5 minutos
 }
 
+// ─── Retencao de artefatos ───────────────────────────────────────────────────
+// Em 07/08/2026 o disco do VPS bateu 100% (193G) e derrubou TUDO: o Docker nao
+// conseguia nem fazer exec ("no space left on device"). Causa: 83G em 4449
+// audiobooks acumulados — arquivos que nao vao para plataforma nenhuma (nao
+// aparecem em publisherCakto/Hotmart/Amazon), so ficam servidos em /audiobooks.
+// PDFs e capas sao enviados no upload e depois viram lixo local tambem.
+// Sem isso o disco enche de novo em dias, ainda mais com o ciclo acelerado.
+const RETENCAO = {
+  audiobooks: parseInt(process.env.KEEP_AUDIOBOOKS || '500', 10),
+  pdfs: parseInt(process.env.KEEP_PDFS || '1000', 10),
+  covers: parseInt(process.env.KEEP_COVERS || '1000', 10),
+};
+
+function limparArtefatos() {
+  const fs = require('fs');
+  const base = path.join(__dirname, '../../data');
+  let totalRemovido = 0;
+
+  for (const [pasta, manter] of Object.entries(RETENCAO)) {
+    if (!manter || manter < 1) continue;            // 0 = desliga a limpeza
+    const dir = path.join(base, pasta);
+    try {
+      if (!fs.existsSync(dir)) continue;
+      const arquivos = fs.readdirSync(dir)
+        .map(nome => {
+          const full = path.join(dir, nome);
+          try { const st = fs.statSync(full); return st.isFile() ? { full, mtime: st.mtimeMs } : null; }
+          catch { return null; }
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.mtime - a.mtime);          // mais novos primeiro
+
+      const excedente = arquivos.slice(manter);
+      for (const a of excedente) {
+        try { fs.unlinkSync(a.full); totalRemovido++; } catch (_) {}
+      }
+      if (excedente.length) {
+        logger.info(`[retencao] ${pasta}: removidos ${excedente.length}, mantidos ${manter}`);
+      }
+    } catch (e) {
+      logger.warn(`[retencao] ${pasta}: ${e.message.slice(0, 80)}`);
+    }
+  }
+  return totalRemovido;
+}
+
 // ─── Amazon OTP circuit breaker ──────────────────────────────────────────────
 // Após falha por OTP, pausa Amazon automaticamente por 2h para não travar pipeline
 const _amazonCircuit = { failCount: 0, pausedUntil: 0 };
@@ -421,6 +467,12 @@ async function loop() {
   const FINALIZE_INTERVAL_MS = 30 * 60 * 1000;
 
   while (state.enabled) {
+    // ── Retencao de disco (mesma cadencia do finalize) ───────────────────────
+    if (Date.now() - _lastFinalizeCheck > FINALIZE_INTERVAL_MS) {
+      try { limparArtefatos(); }
+      catch (e) { logger.warn('[retencao] ' + e.message.slice(0, 80)); }
+    }
+
     // ── Finalizar rascunhos Hotmart ──────────────────────────────────────────
     if (Date.now() - _lastFinalizeCheck > FINALIZE_INTERVAL_MS) {
       _lastFinalizeCheck = Date.now();

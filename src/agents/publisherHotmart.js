@@ -59,7 +59,16 @@ async function refreshJWT(browser, session) {
   const hmSso = session.cookies.find(c => c.name === 'hmSsoExp');
   if (!hmSso) throw new Error('hmSsoExp cookie not found');
   const tgt = hmSso.value.split('|').slice(1).join('|');
-  const oauth2Service = 'https://sso.hotmart.com/oauth2.0/callbackAuthorize?client_id=8cef361b-94f8-4679-bd92-9d1cb496452d&scope=openid+profile+email&redirect_uri=https%3A%2F%2Fapp.hotmart.com%2Flogout&response_type=code';
+  // URL de servico REAL do app (a mesma do login humano). Antes usava
+  // redirect_uri=/logout, que devolve o token MAS DESLOGA o browser — o wizard
+  // caia em sso.hotmart.com/login e queimava 90s de timeout POR CICLO
+  // ("eBook card not found after 90s"). Com /auth/login o browser autentica.
+  const oauth2Service = 'https://sso.hotmart.com/oauth2.0/callbackAuthorize' +
+    '?client_id=8cef361b-94f8-4679-bd92-9d1cb496452d' +
+    '&scope=openid+profile+authorities+email+user+address' +
+    '&redirect_uri=' + encodeURIComponent('https://app.hotmart.com/auth/login?realm=hotmart&branding_id=bw') +
+    '&response_type=code&response_mode=query&state=' + Math.abs(Date.now() | 0).toString(16) +
+    '&client_name=CasOAuthClient';
   const st = await getCASTicket(tgt, oauth2Service);
   log.info('CAS ST: ' + st.status);
   const lp = await browser.newPage();
