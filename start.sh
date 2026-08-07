@@ -48,28 +48,44 @@ else
   # Aguardar server inicializar antes do megaAgent
   sleep 8
 
-  # Supervisor: mantem o megaAgent vivo com backoff progressivo.
+  # Supervisao por POLLING no processo principal, em vez de subshell.
+  #
+  # A versao com subshell tinha uma fragilidade: `pgrep -f megaAgent.js` casa
+  # tambem com a linha de comando do proprio subshell, entao matar "o megaAgent"
+  # podia matar o supervisor — e ai ninguem reiniciava nada. Aqui quem
+  # supervisiona e o PID 1 (start.sh), que nunca casa com esse padrao.
   MEGA_BACKOFF_MAX=${MEGA_BACKOFF_MAX:-300}
-  (
-    tentativa=0
-    while true; do
-      tentativa=$((tentativa + 1))
-      echo "[supervisor] iniciando megaAgent (tentativa ${tentativa})"
-      node megaAgent.js
+  tentativa=0
+  MEGA_PID=""
+
+  iniciar_mega() {
+    tentativa=$((tentativa + 1))
+    echo "[supervisor] iniciando megaAgent (tentativa ${tentativa})"
+    node megaAgent.js &
+    MEGA_PID=$!
+  }
+
+  iniciar_mega
+
+  while true; do
+    sleep 15
+
+    # Server caiu -> encerra o container para o restart policy reiniciar limpo.
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "[start] server.js saiu — derrubando container para restart limpo"
+      kill "$MEGA_PID" 2>/dev/null || true
+      exit 1
+    fi
+
+    # megaAgent caiu -> reinicia com backoff progressivo (15s, 30s... ate o max).
+    if ! kill -0 "$MEGA_PID" 2>/dev/null; then
+      wait "$MEGA_PID" 2>/dev/null
       code=$?
-      # Backoff: 15s, 30s, 60s... ate MEGA_BACKOFF_MAX. Evita loop de crash
-      # quente quando a causa e persistente (ex.: sessao expirada).
       espera=$((15 * tentativa))
       [ "$espera" -gt "$MEGA_BACKOFF_MAX" ] && espera=$MEGA_BACKOFF_MAX
       echo "[supervisor] megaAgent saiu (code=${code}) — reiniciando em ${espera}s"
       sleep "$espera"
-    done
-  ) &
-  SUPERVISOR_PID=$!
-
-  # Se o SERVER morrer, encerra o container para o restart policy reiniciar tudo.
-  wait $SERVER_PID
-  echo "[start] server.js saiu — derrubando container para restart limpo"
-  kill $SUPERVISOR_PID 2>/dev/null || true
-  exit 1
+      iniciar_mega
+    fi
+  done
 fi
