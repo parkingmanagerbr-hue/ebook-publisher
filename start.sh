@@ -79,8 +79,12 @@ else
 
     # megaAgent caiu -> reinicia com backoff progressivo (15s, 30s... ate o max).
     if ! kill -0 "$MEGA_PID" 2>/dev/null; then
-      wait "$MEGA_PID" 2>/dev/null
-      code=$?
+      # `|| code=$?` e obrigatorio: com `set -e` (linha 9) um wait que retorna
+      # nao-zero — exatamente o caso de crash/kill — derrubaria o start.sh e o
+      # container inteiro, em vez de so reerguer o megaAgent. Observado na
+      # pratica: RestartCount subiu e o PID voltou identico apos um kill -9.
+      code=0
+      wait "$MEGA_PID" 2>/dev/null || code=$?
       espera=$((15 * tentativa))
       [ "$espera" -gt "$MEGA_BACKOFF_MAX" ] && espera=$MEGA_BACKOFF_MAX
       echo "[supervisor] megaAgent saiu (code=${code}) — reiniciando em ${espera}s"
