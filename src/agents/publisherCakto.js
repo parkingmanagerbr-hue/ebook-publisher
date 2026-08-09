@@ -1303,6 +1303,57 @@ async function publishToCakto(ebook) {
       } else { log.warn('Cover file input not found on step 2'); }
     }
 
+    // ── Audiobook como material extra ─────────────────────────────────────────
+    // O audiobook custa ~50% do ciclo e ate 07/08/2026 era gerado e NUNCA
+    // entregue: nao ia para plataforma nenhuma, so acumulava em disco (83G que
+    // derrubaram o VPS). Agora sobe junto, virando bonus de valor do produto.
+    // NUNCA reusar o input do PDF/capa: mandar mp3 no campo do PDF substituiria
+    // o e-book pelo audio (mesmo erro que corrompeu manuscritos no KDP).
+    if (ebook.audiobookPath && fs.existsSync(ebook.audiobookPath)) {
+      log.info('Upload audiobook: ' + ebook.audiobookPath);
+      try {
+        await page.evaluate(() => {
+          const el = Array.from(document.querySelectorAll(
+            'button, [role="button"], [class*="upload"], [class*="file"], label'
+          )).find(e => {
+            const t = (e.textContent || '').toLowerCase();
+            return (t.includes('adicionar arquivo') || t.includes('material') ||
+                    t.includes('bônus') || t.includes('bonus') || t.includes('anexo') ||
+                    t.includes('audio')) && e.getBoundingClientRect().width > 0;
+          });
+          if (el) el.click();
+        });
+        await sleep(1200);
+
+        // Só aceita input livre ou de áudio; descarta os já usados por pdf/capa.
+        const inputs = await page.$$('input[type="file"]');
+        let audioInput = null;
+        for (const inp of inputs) {
+          const info = await inp.evaluate(el => ({
+            accept: (el.accept || '').toLowerCase(),
+            preenchido: !!(el.files && el.files.length),
+          })).catch(() => null);
+          if (!info || info.preenchido) continue;
+          if (info.accept.includes('image') || info.accept.includes('pdf')) continue;
+          if (info.accept === '' || info.accept.includes('audio') || info.accept.includes('mp3')) {
+            audioInput = inp; break;
+          }
+        }
+
+        if (audioInput) {
+          await audioInput.uploadFile(ebook.audiobookPath);
+          log.info('Audiobook upload disparado');
+          await sleep(8000);
+          await screenshot(page, 'after_audiobook_upload');
+        } else {
+          log.info('Audiobook: sem campo livre nesta etapa — e-book segue normalmente');
+        }
+      } catch (e) {
+        // Nunca derruba a publicação: o e-book vale mais que o bônus.
+        log.warn('Audiobook upload falhou (não crítico): ' + e.message.slice(0, 80));
+      }
+    }
+
     // ── Save / Publish ─────────────────────────────────────────────────────────
     // Declare result vars before branching
     let productUrl = null;

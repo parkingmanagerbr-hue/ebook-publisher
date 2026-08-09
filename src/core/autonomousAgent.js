@@ -193,6 +193,15 @@ async function publishReadyEbooks() {
       id: ebook.id, title: ebook.title, subtitle: ebook.subtitle || '',
       description: ebook.description || '', price: ebook.price || 4.99,
       pdfPath: ebook.pdf_path, coverPath: ebook.cover_path,
+      // Audiobook entra como material extra na publicacao (ver publisherCakto).
+      // A fila publish-ready le do disco: o arquivo tem o id do ebook e pode ja
+      // ter sido removido pela retencao — por isso o existsSync.
+      audiobookPath: (() => {
+        try {
+          const p = path.join(__dirname, '../../data/audiobooks', `${ebook.id}.mp3`);
+          return require('fs').existsSync(p) ? p : null;
+        } catch { return null; }
+      })(),
       // Include existing platform URLs so publishers can cross-reference
       hotmartUrl: ebook.hotmart_url || null,
       hotmartProductId: ebook.hotmart_product_id || null,

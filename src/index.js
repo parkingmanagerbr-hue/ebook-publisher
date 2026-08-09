@@ -154,7 +154,21 @@ async function runPipeline(topicOverride = null, language = null) {
     if (process.env.AUTO_PUBLISH !== 'false') {
       logger.info('\n🚀 ETAPA 4: Publicando nas plataformas...');
 
-      const publishData = { ...ebookData, pdfPath, coverPath };
+      // O audiobook agora e ENTREGUE junto (bonus do produto), entao precisa
+      // estar pronto antes do upload. Espera limitada: se estourar, publica o
+      // e-book assim mesmo — vender o e-book importa mais que o bonus.
+      if (audiobookPromise) {
+        const LIMITE_MS = parseInt(process.env.AUDIOBOOK_WAIT_MS || '240000', 10);
+        try {
+          audiobookPath = await Promise.race([
+            audiobookPromise,
+            new Promise(r => setTimeout(() => r(null), LIMITE_MS)),
+          ]);
+          if (!audiobookPath) logger.warn(`⚠️ Audiobook nao ficou pronto em ${LIMITE_MS / 1000}s — publicando sem ele`);
+        } catch (_) { audiobookPath = null; }
+      }
+
+      const publishData = { ...ebookData, pdfPath, coverPath, audiobookPath };
 
       // Cakto — isolado: exceção não mata o pipeline
       if (process.env.AUTO_PUBLISH_CAKTO !== 'false' &&
