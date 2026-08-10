@@ -1764,9 +1764,81 @@ async function screenshotLandingPage(page, numericId, title) {
   }catch(e){log.warn('Screenshot failed: '+e.message);return null;}
 }
 
+// Pergunta ao proprio CAS da Hotmart se o TGT da sessao ainda vale.
+//
+// POR QUE: quando o TGT (48h, fixo) morre, todo publish entra no fluxo caro —
+// sobe o Chromium, navega, espera 90s por um wizard que NUNCA vai renderizar
+// (a URL vira sso.hotmart.com/login) e so entao falha. Medido em producao
+// (10/08/2026): 3-4 min desperdicados POR CICLO, ~40% de um ciclo de 8 min,
+// numa tentativa que nao tinha como dar certo. Esse tempo sai do Cakto, que
+// esta publicando normalmente.
+//
+// Uma chamada HTTPS de ~1s responde a mesma pergunta. Retorna:
+//   true  = sessao viva      false = morta (exige login humano)
+//   null  = indeterminado    -> NUNCA bloquear nesse caso (ver chamador)
+const TGT_CACHE_MS = 5 * 60 * 1000;
+let _tgtCache = { em: 0, valor: null };
+
+async function sessaoHotmartViva() {
+  if (Date.now() - _tgtCache.em < TGT_CACHE_MS) return _tgtCache.valor;
+  let resultado = null;
+  try {
+    const sess = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+    const c = (sess.cookies || []).find(x => x.name === 'hmSsoExp');
+    if (!c) return (_tgtCache = { em: Date.now(), valor: false }).valor;
+    const tgt = String(c.value).split('|').slice(1).join('|');
+
+    const svc = 'https://sso.hotmart.com/oauth2.0/callbackAuthorize'
+      + '?client_id=8cef361b-94f8-4679-bd92-9d1cb496452d'
+      + '&scope=openid+profile+authorities+email+user+address'
+      + '&redirect_uri=' + encodeURIComponent('https://app.hotmart.com/auth/login?realm=hotmart&branding_id=bw')
+      + '&response_type=code&response_mode=query&state=chk&client_name=CasOAuthClient';
+    const body = 'service=' + encodeURIComponent(svc);
+
+    resultado = await new Promise(resolve => {
+      const req = https.request({
+        hostname: 'sso.hotmart.com',
+        path: '/v1/tickets/' + encodeURIComponent(tgt),
+        method: 'POST',
+        timeout: 15000,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': Buffer.byteLength(body),
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        },
+      }, res => {
+        let d = '';
+        res.on('data', x => d += x);
+        res.on('end', () => {
+          if (res.statusCode === 200 && d.startsWith('ST-')) resolve(true);
+          else if (res.statusCode === 404 || /invalid|could not be found/i.test(d)) resolve(false);
+          else resolve(null);                       // resposta inesperada: nao arrisca
+        });
+      });
+      // Rede instavel NAO pode virar "sessao morta": bloquear um publisher que
+      // funciona e pior do que desperdicar um ciclo.
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => { req.destroy(); resolve(null); });
+      req.write(body);
+      req.end();
+    });
+  } catch { resultado = null; }
+  _tgtCache = { em: Date.now(), valor: resultado };
+  return resultado;
+}
+
 async function publishToHotmart(ebook) {
   const { title, topic, pdfPath, coverPath, description, audiobookPath } = ebook;
   if(!fs.existsSync(SESSION_FILE)) throw new Error('Session not found: '+SESSION_FILE);
+
+  // Fast-fail: so aborta quando o CAS respondeu explicitamente que o TGT morreu.
+  // `null` (indeterminado) segue o fluxo normal de proposito.
+  const viva = await sessaoHotmartViva();
+  if (viva === false) {
+    log.warn('Sessao Hotmart EXPIRADA (TGT invalido no CAS) — pulando sem gastar o ciclo. Exige login humano.');
+    return { success:false, platform:'hotmart', error:'SESSAO_EXPIRADA_LOGIN_HUMANO',
+             hotmartProductId:null, url:null, needsHumanLogin:true };
+  }
   if(!pdfPath||!fs.existsSync(pdfPath)) throw new Error('PDF not found: '+pdfPath);
   const session=JSON.parse(fs.readFileSync(SESSION_FILE,'utf8'));
   const browser=await puppeteer.launch({
@@ -1850,4 +1922,4 @@ async function publishToHotmart(ebook) {
   }
 }
 
-module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook };
+module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook, sessaoHotmartViva };

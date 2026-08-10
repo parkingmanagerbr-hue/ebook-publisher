@@ -12,7 +12,19 @@ const fs        = require('fs');
 
 const BASE        = path.join(__dirname, '..');
 const SESSION_DIR = path.join(BASE, 'data', 'sessions');
-const CHROME      = process.env.CHROME_EXECUTABLE || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+// O default era o caminho do Chrome no WINDOWS — este script nasceu para rodar
+// na maquina local. Dentro do container (Linux) ele falhava SEMPRE, com
+// "Browser was not found at the configured executablePath (C:/Program Files/...)".
+// O megaAgent chamava isso a cada 4 falhas de publicacao e registrava so
+// "Renovação error", escondendo que a renovacao nunca teve chance de rodar.
+const CHROME      = process.env.CHROME_EXECUTABLE
+                 || process.env.PUPPETEER_EXECUTABLE_PATH
+                 || (process.platform === 'win32'
+                      ? 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+                      : '/usr/bin/chromium');
+// headful so faz sentido onde existe display. No container nao ha X: manter
+// headless:false ali derruba o launch mesmo com o executavel certo.
+const HEADFUL     = process.platform === 'win32' || !!process.env.DISPLAY;
 const HM_EMAIL    = process.env.HOTMART_EMAIL    || 'mrovariz@hotmail.com';
 const HM_PASS     = process.env.HOTMART_PASSWORD || 'Nu4qreq13$M';
 const HM_2FA_EMAIL = process.env.HOTMART_2FA_EMAIL || 'mrovariz@gmail.com';
@@ -30,8 +42,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const browser = await puppeteer.launch({
     executablePath: CHROME,
-    headless: false,
-    args: ['--no-sandbox', '--start-maximized', '--ignore-certificate-errors'],
+    headless: HEADFUL ? false : 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+           '--start-maximized', '--ignore-certificate-errors'],
     defaultViewport: null,
   });
 
