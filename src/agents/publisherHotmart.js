@@ -1662,6 +1662,86 @@ async function finalizarCadastro(page, numericId) {
   return true;
 }
 
+// Decide se um <input type=file> pode receber o mp3 do audiobook.
+//
+// Errar aqui e caro: mandar audio no campo do manuscrito TROCA o e-book pelo mp3
+// (foi assim que se corromperam manuscritos no KDP). Na duvida, recusa — perder o
+// bonus e barato, perder o e-book nao. Pura de proposito, para ser testavel.
+function aceitaAudiobook(info) {
+  if (!info || info.preenchido) return false;              // ja usado por pdf/capa
+  const accept = (info.accept || '').toLowerCase();
+  if (accept.includes('image')) return false;              // campo de capa
+  const aceitaAudio = accept.includes('audio') || accept.includes('mp3');
+  if (aceitaAudio) return true;
+  return accept === '';                                    // campo livre (sem accept)
+}
+
+// Sobe o audiobook como material extra do produto.
+//
+// Roda DEPOIS do Finalizar de proposito: o botao "Finalizar cadastro" so habilita
+// quando a Hotmart termina de processar o arquivo enviado, entao mandar o mp3 antes
+// so faria o gate esperar mais (o uploadPDF ja custa ate 60s de espera ali).
+//
+// Mesma trava do Cakto: NUNCA reusar o input do PDF/capa. Mandar mp3 no campo do
+// manuscrito troca o e-book pelo audio — foi assim que se corromperam manuscritos
+// no KDP. So aceita input VAZIO que nao seja exclusivo de imagem ou de PDF.
+async function uploadAudiobook(page, numericId, audiobookPath) {
+  log.info('Uploading audiobook to ' + numericId);
+  await page.goto('https://app.hotmart.com/products/manage/' + numericId + '/info',
+    { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+  await sleep(5000);
+
+  // Abre o painel de conteudo (mesmo caminho do PDF: Painel -> Configurar)
+  await page.evaluate(() => {
+    const b = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Painel');
+    if (b) b.click();
+  }).catch(() => {});
+  await sleep(3000);
+
+  let configs = [];
+  for (let i = 0; i < 15; i++) {
+    await sleep(1000);
+    configs = await page.evaluate(() => Array.from(document.querySelectorAll('button'))
+      .filter(b => b.textContent.trim() === 'Configurar')
+      .map(b => { const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, vis: r.width > 0 }; })
+      .filter(b => b.vis)).catch(() => []);
+    if (configs.length) break;
+  }
+  if (!configs.length) { log.info('Audiobook: painel de conteudo indisponivel — e-book segue normalmente'); return false; }
+  await page.mouse.click((configs.find(c => c.y < 700) || configs[0]).x, (configs.find(c => c.y < 700) || configs[0]).y);
+  await sleep(4000);
+
+  // Tenta revelar um campo novo (o do PDF ja esta ocupado)
+  await page.evaluate(() => {
+    const el = Array.from(document.querySelectorAll('button, [role="button"], label'))
+      .find(e => {
+        const t = (e.textContent || '').toLowerCase();
+        return (t.includes('adicionar arquivo') || t.includes('novo arquivo') || t.includes('adicionar material') ||
+                t.includes('bônus') || t.includes('bonus') || t.includes('anexo') || t.includes('audio')) &&
+               e.getBoundingClientRect().width > 0;
+      });
+    if (el) el.click();
+  }).catch(() => {});
+  await sleep(1500);
+
+  const inputs = await page.$$('input[type="file"]');
+  for (const inp of inputs) {
+    const info = await inp.evaluate(el => ({
+      accept: (el.accept || '').toLowerCase(),
+      preenchido: !!(el.files && el.files.length),
+    })).catch(() => null);
+    if (!aceitaAudiobook(info)) continue;
+
+    await inp.uploadFile(audiobookPath);
+    log.info('Audiobook upload disparado');
+    await sleep(12000);
+    return true;
+  }
+
+  log.info('Audiobook: sem campo livre nesta etapa — e-book segue normalmente');
+  return false;
+}
+
 async function screenshotLandingPage(page, numericId, title) {
   try {
     const safeTitle = title.replace(/[^a-zA-Z0-9]/g,'_').slice(0,40);
@@ -1685,7 +1765,7 @@ async function screenshotLandingPage(page, numericId, title) {
 }
 
 async function publishToHotmart(ebook) {
-  const { title, topic, pdfPath, coverPath, description } = ebook;
+  const { title, topic, pdfPath, coverPath, description, audiobookPath } = ebook;
   if(!fs.existsSync(SESSION_FILE)) throw new Error('Session not found: '+SESSION_FILE);
   if(!pdfPath||!fs.existsSync(pdfPath)) throw new Error('PDF not found: '+pdfPath);
   const session=JSON.parse(fs.readFileSync(SESSION_FILE,'utf8'));
@@ -1747,13 +1827,22 @@ async function publishToHotmart(ebook) {
       coverUploaded = await uploadCoverImage(page, numericId, coverPath);
       log.info('Cover retry after finalize: '+coverUploaded);
     }
+    // Step 4c: Audiobook como material extra (nao critico — o e-book vale mais que o bonus)
+    let audiobookUploaded = false;
+    if (audiobookPath && fs.existsSync(audiobookPath)) {
+      audiobookUploaded = await uploadAudiobook(page, numericId, audiobookPath).catch(e => {
+        log.warn('Audiobook upload falhou (nao critico): ' + e.message.slice(0, 100));
+        return false;
+      });
+      log.info('Audiobook uploaded: ' + audiobookUploaded);
+    }
     // Step 5: Screenshot
     const screenshot=await screenshotLandingPage(page,numericId,title);
     await browser.close();
     log.info('Done: "'+title+'" id='+numericId+' finalized='+finalized+' cover='+coverUploaded);
     // Only return url if finalized — if not finalized, product is in draft and cannot be purchased.
     // Returning url=null when not finalized ensures autonomousAgent retries finalization next cycle.
-    return{success:finalized,hotmartProductId:numericId,url:finalized?'https://hotmart.com/product/'+numericId:null,screenshot,category,platform:'hotmart',uploaded,coverUploaded};
+    return{success:finalized,hotmartProductId:numericId,url:finalized?'https://hotmart.com/product/'+numericId:null,screenshot,category,platform:'hotmart',uploaded,coverUploaded,audiobookUploaded};
   }catch(err){
     await browser.close().catch(()=>{});
     log.error('publishToHotmart error: '+err.message);
@@ -1761,4 +1850,4 @@ async function publishToHotmart(ebook) {
   }
 }
 
-module.exports = { publishToHotmart, getCategory: getCategoryPT };
+module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook };
