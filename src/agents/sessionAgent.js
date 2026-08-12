@@ -136,6 +136,74 @@ async function checkSessionViaApi(platform, session) {
   return true;
 }
 
+// Dispensa o aviso de cookies antes de interagir com o formulario.
+//
+// POR QUE (caso real, 12/08/2026): o login do Hotmart falhava havia dias e
+// parecia senha errada — o log dizia "email preenchido / senha preenchida /
+// botao submit clicado" e 28s depois continuava em /login, sem mensagem de erro
+// nenhuma. O screenshot mostrou a causa: o banner "Este site utiliza cookies"
+// monta por cima do rodape e cobre exatamente o botao "Log in" (banner comeca
+// em y=660, botao em y=661). O clique ia para o overlay, nao para o botao.
+// Nada de errado com a credencial — e o motivo de nunca aparecer erro.
+//
+// Escolhe SEMPRE a opcao menos invasiva ("somente os necessarios" / "rejeitar"),
+// e so aceita tudo se nao houver alternativa — e o consentimento e do dono da
+// conta, nao nosso para dar de forma ampla.
+// Precisa varrer TODOS os frames: no Hotmart o banner mora num iframe, entao a
+// primeira versao disto (page.evaluate no frame principal) nao achava nada e
+// falhava em silencio — o banner seguia cobrindo o botao. O sintoma que
+// denunciou: o dump de texto da pagina tambem nao continha "Este site utiliza
+// cookies", embora ele estivesse visivel no screenshot.
+async function dispensarBannerCookies(page, platform) {
+  for (const frame of page.frames()) {
+    const achou = await dispensarBannerNoFrame(frame, platform);
+    if (achou) return true;
+  }
+  return false;
+}
+
+async function dispensarBannerNoFrame(page, platform) {
+  try {
+    const clicou = await page.evaluate(() => {
+      // O banner do Hotmart vem em INGLES ("Accept only necessary cookies"),
+      // mesmo com a pagina em portugues — cobrir os dois idiomas nao e luxo.
+      const preferidos = [
+        /only necessary/i, /somente os necess/i, /apenas os necess/i,
+        /rejeitar/i, /reject/i, /recusar/i, /decline/i,
+      ];
+      const ultimoCaso = [/permitir todos/i, /aceitar todos/i, /accept all/i, /allow all/i, /^aceitar$/i, /^ok$/i];
+      // Tem que descer no SHADOW DOM: no Hotmart o banner e um web component,
+      // entao querySelectorAll no document nao enxerga os botoes (e por isso
+      // document.body.innerText tambem nao contem a palavra "cookie", o que
+      // despistou o diagnostico por um bom tempo).
+      const coletar = (root, saida) => {
+        for (const el of root.querySelectorAll('button, a[role="button"], [role="button"], input[type="submit"]')) saida.push(el);
+        for (const el of root.querySelectorAll('*')) if (el.shadowRoot) coletar(el.shadowRoot, saida);
+        return saida;
+      };
+      const visiveis = coletar(document, []).filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+      });
+      const achar = pats => visiveis.find(el => {
+        const t = (el.textContent || '').trim();
+        return t && pats.some(p => p.test(t));
+      });
+      const alvo = achar(preferidos) || achar(ultimoCaso);
+      if (!alvo) return null;
+      const texto = (alvo.textContent || '').trim().slice(0, 40);
+      alvo.click();
+      return texto;
+    });
+    if (clicou) {
+      logger.info(`[${platform}] banner de cookies dispensado ("${clicou}")`);
+      await new Promise(r => setTimeout(r, 1200));
+      return true;
+    }
+    return false;
+  } catch { return false; /* banner e detalhe de UI: nunca deve derrubar o login */ }
+}
+
 // ─── Login com credenciais (fallback quando cookies expiram) ─────────────────
 async function tryCredentialLogin(page, platform, browser) {
   const creds = {
@@ -181,6 +249,8 @@ async function tryCredentialLogin(page, platform, browser) {
       if (emailEl2) break;
     }
 
+    await dispensarBannerCookies(page, platform);
+
     // Preencher email
     const emailEl = await page.$(c.emailSel).catch(() => null);
     if (emailEl) {
@@ -213,6 +283,10 @@ async function tryCredentialLogin(page, platform, browser) {
     }
 
     await new Promise(r => setTimeout(r, 800));
+
+    // De novo antes do submit: o banner costuma montar depois do carregamento
+    // inicial, entao dispensar so no comeco nao basta.
+    await dispensarBannerCookies(page, platform);
 
     // Clicar no botão submit
     const btn = await page.$(c.btnSel).catch(() => null);
