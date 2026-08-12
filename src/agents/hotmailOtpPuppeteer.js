@@ -47,6 +47,19 @@ function cfg() {
 // ── Circuit breaker ────────────────────────────────────────────────────────────
 let _blockedUntil       = 0;
 let _consecutiveFails   = 0;
+// Backoff longo quando o LOGIN e impossivel (conta sem senha / FIDO).
+//
+// NAO travar permanentemente: a leitura do OTP tambem funciona pela SESSAO ja
+// persistida no perfil do navegador, sem passar por login nenhum — e isso
+// funciona (verificado: codigo lido com "sessao valida, sem login necessario").
+// Uma trava permanente mataria junto esse caminho que da certo. O que nao
+// adianta e re-tentar o LOGIN de 15 em 15 min quando ele e estruturalmente
+// impossivel; dai o backoff longo em vez de permanente.
+// 45min, nao 6h: a sessao do Outlook oscila (o mesmo processo leu um codigo com
+// "sessao valida" e minutos depois caiu no login). Recuo longo demais perderia
+// justamente as janelas em que a sessao volta. A conta e barata (~25s de
+// tentativa) contra o preco de um ciclo de publicacao perdido, que e minutos.
+const BACKOFF_SEM_SENHA_MS = 45 * 60 * 1000;
 
 function isAvailable() {
   if (Date.now() < _blockedUntil) return false;
@@ -154,7 +167,25 @@ async function loginToOutlook(page, email, password) {
   try {
     await page.waitForSelector('input[type="password"], input[name="passwd"]', { timeout: 15000 });
   } catch {
-    log.warn('Hotmail: campo de senha não encontrado');
+    // Distinguir "seletor mudou" de "nao existe senha nesta conta".
+    //
+    // Verificado em 12/08/2026: a conta mrovariz@hotmail.com esta em modo SEM
+    // SENHA. Depois do e-mail a Microsoft vai direto para FIDO ("Face,
+    // fingerprint, PIN or security key") e nem o menu "..." oferece senha —
+    // ou seja, exige autenticador fisico. Nenhum ajuste de seletor passa disso,
+    // e insistir so queima ~30s de browser a cada 2FA do Cakto.
+    const semSenha = await page.evaluate(() => {
+      const t = (document.body ? document.body.innerText : '') + ' ' + location.href;
+      return /fido|face, fingerprint|security key|chave de seguran|impress[aã]o digital/i.test(t);
+    }).catch(() => false);
+    if (semSenha) {
+      log.warn('Hotmail: conta em modo SEM SENHA (FIDO/passkey) — LOGIN por navegador e impossivel '
+             + '(so a sessao ja persistida funciona). Recuando 6h. Para independer da sessao, '
+             + 'configure uma APP PASSWORD em OTP_IMAP_PASSWORD (account.microsoft.com > Seguranca).');
+      _blockedUntil = Date.now() + BACKOFF_SEM_SENHA_MS;
+    } else {
+      log.warn('Hotmail: campo de senha não encontrado');
+    }
     return false;
   }
   await page.type('input[type="password"], input[name="passwd"]', password, { delay: 50 });
