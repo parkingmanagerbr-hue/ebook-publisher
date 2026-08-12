@@ -1914,7 +1914,16 @@ async function publishToHotmart(ebook) {
     log.info('Done: "'+title+'" id='+numericId+' finalized='+finalized+' cover='+coverUploaded);
     // Only return url if finalized — if not finalized, product is in draft and cannot be purchased.
     // Returning url=null when not finalized ensures autonomousAgent retries finalization next cycle.
-    return{success:finalized,hotmartProductId:numericId,url:finalized?'https://hotmart.com/product/'+numericId:null,screenshot,category,platform:'hotmart',uploaded,coverUploaded,audiobookUploaded};
+    // Sem `error`, o orquestrador logava "Hotmart falhou: undefined" — mensagem
+    // que nao diz nada e custou tempo real de diagnostico (12/08/2026): parecia
+    // falha grave quando na verdade o produto tinha sido CRIADO e so nao
+    // finalizado, porque o Hotmart ainda processava o PDF quando os 90s de
+    // espera pelo botao acabaram. Esse caso se resolve sozinho no proximo passe
+    // do hotmartFinalizeAgent (aprova por API, sem browser) — e o log tem que
+    // dizer isso em vez de "undefined".
+    const erro = finalized ? undefined
+      : `rascunho criado (id=${numericId}) mas nao finalizado — PDF ainda em processamento; o finalizeAgent aprova no proximo passe`;
+    return{success:finalized,error:erro,hotmartProductId:numericId,url:finalized?'https://hotmart.com/product/'+numericId:null,screenshot,category,platform:'hotmart',uploaded,coverUploaded,audiobookUploaded};
   }catch(err){
     await browser.close().catch(()=>{});
     log.error('publishToHotmart error: '+err.message);
