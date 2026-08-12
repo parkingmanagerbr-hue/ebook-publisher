@@ -20,6 +20,12 @@ const logger = createLogger('sessionAgent');
 
 const SESS_DIR = path.join(__dirname, '../../data/sessions');
 
+// Recuo por plataforma quando o login esbarra em CAPTCHA (parede humana).
+// 6h e proposital: nada muda ate uma pessoa logar, e o custo de re-tentar
+// (~40s de Chromium por tentativa, a cada 2min) sai do tempo de publicacao.
+const CAPTCHA_BACKOFF_MS = 6 * 60 * 60 * 1000;
+const _captchaUntil = {};
+
 const PLATFORMS = {
   hotmart: {
     sessionFile:   path.join(SESS_DIR, 'hotmart.json'),
@@ -320,11 +326,25 @@ async function tryCredentialLogin(page, platform, browser) {
         logger.info(`[${platform}] Screenshot de falha salva: ${screenshotPath}`);
       } catch {}
       // Log page title and visible text for debugging
+      let title = '', bodyText = '';
       try {
-        const title = await page.title();
-        const bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 500) || '');
+        title = await page.title();
+        bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 500) || '');
         logger.warn(`[${platform}] Login página — título: "${title}" | texto: "${bodyText.replace(/\n/g,' ').slice(0,200)}"`);
       } catch {}
+
+      // CAPTCHA = parede humana, nao falha transitoria.
+      //
+      // Medido em 12/08/2026: o Hotmart passou a exigir "Human Verification"
+      // depois do submit, e o agente re-tentava a cada ~2min (17:42, 17:44...),
+      // subindo Chromium toda vez para bater na mesma parede. Nenhuma dessas
+      // tentativas podia dar certo — resolver CAPTCHA exige uma pessoa. Recuar
+      // devolve esse tempo ao pipeline em vez de queimar em ciclo perdido.
+      if (/human verification|confirm you are human|verifica(ç|c)[aã]o humana|captcha|recaptcha|hcaptcha/i.test(title + ' ' + bodyText)) {
+        _captchaUntil[platform] = Date.now() + CAPTCHA_BACKOFF_MS;
+        logger.warn(`[${platform}] CAPTCHA detectado ("${title}") — login automatico e impossivel. `
+                  + `Recuando ${CAPTCHA_BACKOFF_MS / 3600000}h. Exige login humano para renovar a sessao.`);
+      }
       return false;
     }
   } catch (e) {
@@ -336,6 +356,14 @@ async function tryCredentialLogin(page, platform, browser) {
 // ─── Renovação via Puppeteer ──────────────────────────────────────────────────
 async function renewViaPuppeteer(platform) {
   const { baseUrl, testUrl, loginUrl, loginCheck, localStorageTokenKey } = PLATFORMS[platform];
+
+  // Nem sobe o browser enquanto o CAPTCHA estiver valendo: cada tentativa custa
+  // ~40s e nao tem como dar certo sem uma pessoa resolvendo o desafio.
+  if (Date.now() < (_captchaUntil[platform] || 0)) {
+    const faltam = Math.round((_captchaUntil[platform] - Date.now()) / 60000);
+    logger.info(`[${platform}] pulando renovacao — CAPTCHA ativo, aguardando login humano (${faltam}min de recuo)`);
+    return false;
+  }
 
   logger.info(`🔄 [${platform}] Tentando renovar sessão via Puppeteer...`);
 
