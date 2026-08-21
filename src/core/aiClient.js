@@ -311,7 +311,7 @@ async function callCerebras(prompt, systemPrompt, apiKey) {
       { role: 'system', content: systemPrompt },
       { role: 'user',   content: prompt },
     ],
-    max_tokens: 8000,
+    max_tokens: maxTokens,
     temperature: 0.7,
   }, {
     headers: {
@@ -325,8 +325,53 @@ async function callCerebras(prompt, systemPrompt, apiKey) {
   return response.data.choices[0].message.content;
 }
 
+// Modelos do Groq em ordem de preferencia.
+//
+// POR QUE UMA LISTA E NAO UM NOME FIXO: o default era 'llama-3.3-70b-versatile',
+// que o Groq DESCONTINUOU. A API respondia 404 "model does not exist" —
+// erro de MODELO, nao de chave nem de cota — mas o cliente tratava como falha
+// do provider e marcava o Groq como degradado. Com Gemini em 429 e Cerebras em
+// 402 (fim do tier gratuito), o Groq era o unico caminho vivo e estava fora por
+// um nome de modelo velho: 189 ciclos seguidos falharam com "Todos os providers
+// de AI falharam" (21/08/2026). Provedor gratuito aposenta modelo sem aviso,
+// entao um nome fixo e uma bomba-relogio: cair para o proximo da lista custa
+// uma requisicao e evita derrubar o pipeline inteiro.
+const GROQ_MODELS = (process.env.GROQ_MODEL ? [process.env.GROQ_MODEL] : [])
+  .concat(['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'groq/compound-mini']);
+
+// Teto de saida do Groq.
+//
+// O default do cliente era 8000, mas o limite da organizacao e de 8000 tokens
+// POR MINUTO somando prompt + resposta: a API devolvia 413 "Request too large
+// (Limit 8000, Requested 8086)". Erro de TAMANHO, nao de chave — e o cliente
+// marcava as 8 chaves como degradadas, tirando o provider inteiro do ar.
+const GROQ_MAX_TOKENS = parseInt(process.env.GROQ_MAX_TOKENS || '4096', 10);
+
 async function callGroq(prompt, systemPrompt, apiKey) {
-  const model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  let ultimoErro = null;
+  for (const model of GROQ_MODELS) {
+    for (const teto of [GROQ_MAX_TOKENS, Math.floor(GROQ_MAX_TOKENS / 2)]) {
+      try {
+        return await callGroqComModelo(prompt, systemPrompt, apiKey, model, teto);
+      } catch (e) {
+        const st = e?.response?.status;
+        const msg = e?.response?.data?.error?.message || e.message || '';
+        ultimoErro = e;
+        // 413 = prompt+resposta nao cabem na janela; vale reduzir o teto e
+        // tentar de novo antes de desistir do provider.
+        if (st === 413 || /too large|reduce your message/i.test(msg)) continue;
+        // Modelo aposentado -> proximo modelo. Qualquer outro erro (429/402/401)
+        // e do provider: insistir so gasta cota.
+        const modeloInvalido = st === 404 || /does not exist|decommissioned|not found/i.test(msg);
+        if (modeloInvalido) break;
+        throw e;
+      }
+    }
+  }
+  throw ultimoErro || new Error('groq: nenhum modelo disponivel');
+}
+
+async function callGroqComModelo(prompt, systemPrompt, apiKey, model, maxTokens) {
   const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
     model,
     messages: [
