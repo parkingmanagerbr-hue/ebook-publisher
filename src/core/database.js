@@ -123,11 +123,31 @@ function seedTopics() {
 
 // ========= TOPICS =========
 function getNextTopic() {
-  return db.prepare(`
+  const preferido = db.prepare(`
     SELECT *, (demand_score * 0.4 + ml_score * 0.4 + (10 - times_used) * 0.2) as final_score
     FROM topics
     WHERE (last_used IS NULL OR last_used < datetime('now', '-48 hours'))
     ORDER BY final_score DESC
+    LIMIT 1
+  `).get();
+  if (preferido) return preferido;
+
+  // Nenhum topico fora da janela de 48h -> devolve o MENOS RECENTE em vez de
+  // nada.
+  //
+  // POR QUE (caso real, 21/08/2026): a janela de 48h existe para dar
+  // diversidade, mas quando ela zera o chamador caia num topico FIXO
+  // hardcoded ("Como ganhar dinheiro com IA em 2026") e passava a gerar o
+  // mesmo e-book repetidamente — o pior resultado possivel para um catalogo.
+  // E zerou de um jeito banal: a IA ficou fora do ar por 9 dias, cada um dos
+  // 189 ciclos que falhou ainda assim marcava o topico como usado, e os 329
+  // topicos foram consumidos dentro da janela.
+  // Reciclar o mais antigo mantem a rotacao e nunca produz duplicata fixa;
+  // a preferencia por diversidade continua valendo sempre que houver folga.
+  return db.prepare(`
+    SELECT *, (demand_score * 0.4 + ml_score * 0.4 + (10 - times_used) * 0.2) as final_score
+    FROM topics
+    ORDER BY last_used ASC, final_score DESC
     LIMIT 1
   `).get();
 }
