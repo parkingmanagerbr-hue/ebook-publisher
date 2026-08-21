@@ -144,12 +144,18 @@ function getNextTopic() {
   // topicos foram consumidos dentro da janela.
   // Reciclar o mais antigo mantem a rotacao e nunca produz duplicata fixa;
   // a preferencia por diversidade continua valendo sempre que houver folga.
-  return db.prepare(`
+  const reciclado = db.prepare(`
     SELECT *, (demand_score * 0.4 + ml_score * 0.4 + (10 - times_used) * 0.2) as final_score
     FROM topics
     ORDER BY last_used ASC, final_score DESC
     LIMIT 1
   `).get();
+  // Sinaliza que o pool de topicos "frescos" acabou. Sem isso o chamador nao
+  // teria como saber: reciclar e silencioso por natureza, e o gatilho que
+  // reabastece o banco (expandTopics) so era acionado quando isto devolvia
+  // NULL — o que, depois da reciclagem, nunca mais aconteceria.
+  if (reciclado) reciclado.reciclado = true;
+  return reciclado;
 }
 
 function markTopicUsed(topic) {

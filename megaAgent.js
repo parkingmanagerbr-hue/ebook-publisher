@@ -214,6 +214,15 @@ async function runCycle() {
     const t = db.getNextTopic();
     if (t) {
       topic = t.topic;
+      // Topico reciclado = acabaram os inditos. Reabastece para os proximos
+      // ciclos (a expansao por IA cuida disso quando a lista estatica esgota).
+      if (t.reciclado) {
+        log('[Topics] pool de ineditos esgotado — reabastecendo em segundo plano...');
+        const { expandTopics } = require('./src/agents/topicExpander');
+        expandTopics()
+          .then(r => log(`[Topics] reabastecimento: +${r.added} (total ${r.total})`))
+          .catch(e => log(`[Topics] reabastecimento falhou (nao critico): ${e.message.slice(0, 90)}`));
+      }
     } else {
       // Expand topics if DB is empty
       log('[Topics] DB vazio — expandindo tópicos...');

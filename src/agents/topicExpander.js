@@ -334,9 +334,74 @@ async function expandTopics() {
     if (result.changes > 0) added++;
   }
 
+  // A lista estatica e finita: em 21/08/2026 os 329 topicos dela ja estavam
+  // todos no banco e expandTopics passou a devolver 0 novos indefinidamente.
+  // Com o banco sem topico livre, o pipeline caia num titulo fixo e gerava
+  // e-books duplicados. Quando a fonte estatica nao rende nada, pedir topicos
+  // novos a IA mantem o catalogo crescendo sozinho.
+  let addedIA = 0;
+  if (added === 0 && process.env.TOPIC_AI_EXPAND !== 'false') {
+    addedIA = await gerarTopicosPorIA(sqliteDb, insert);
+  }
+
   const total = sqliteDb.prepare('SELECT COUNT(*) as c FROM topics').get().c;
-  logger.info(`📚 Tópicos: ${added} novos adicionados, ${total} total no banco`);
-  return { added, total };
+  logger.info(`📚 Tópicos: ${added} estáticos + ${addedIA} por IA adicionados, ${total} total no banco`);
+  return { added: added + addedIA, addedEstaticos: added, addedIA, total };
+}
+
+// Pede topicos novos ao LLM, evitando o que ja existe no banco.
+//
+// Nunca derruba o chamador: se a IA estiver fora (o caso comum justamente
+// quando isto e mais necessario), retorna 0 e o pipeline segue com a rotacao
+// dos topicos existentes.
+async function gerarTopicosPorIA(sqliteDb, insert) {
+  const QUANTIDADE = parseInt(process.env.TOPIC_AI_BATCH || '25', 10);
+  try {
+    const { generate } = require('../core/aiClient');
+
+    const categorias = sqliteDb.prepare('SELECT DISTINCT category FROM topics').all()
+      .map(r => r.category).filter(Boolean);
+    // Amostra dos mais recentes para o modelo nao repetir o que ja temos.
+    const existentes = sqliteDb.prepare('SELECT topic FROM topics ORDER BY id DESC LIMIT 60').all()
+      .map(r => '- ' + r.topic).join('\n');
+
+    const prompt = `Gere ${QUANTIDADE} temas NOVOS de e-book com boa demanda comercial.
+Categorias disponiveis: ${categorias.join(', ')}.
+
+Ja existem no catalogo (NAO repita nem varie levemente):
+${existentes}
+
+Responda APENAS um array JSON, sem texto ao redor, no formato:
+[{"topic":"...","category":"<uma das categorias>","demand_score":8.5}]
+demand_score entre 6 e 10. Temas praticos, especificos e atemporais.`;
+
+    const bruto = await generate(prompt, 'Voce e um estrategista de produtos digitais.');
+    const texto = typeof bruto === 'string' ? bruto : (bruto && bruto.text) || '';
+
+    // Modelos sem structured output embrulham o JSON em markdown/prosa —
+    // extrair o primeiro array em vez de confiar no formato.
+    const m = texto.match(/\[[\s\S]*\]/);
+    if (!m) { logger.warn('[topicExpander] IA nao devolveu JSON reconhecivel'); return 0; }
+
+    let lista;
+    try { lista = JSON.parse(m[0]); } catch { logger.warn('[topicExpander] JSON da IA invalido'); return 0; }
+    if (!Array.isArray(lista)) return 0;
+
+    let n = 0;
+    for (const item of lista) {
+      const topico = ((item && item.topic) || '').trim();
+      if (topico.length < 8 || topico.length > 160) continue;   // lixo obvio
+      const categoria = ((item && item.category) || 'geral').trim();
+      let score = Number(item && item.demand_score);
+      if (!Number.isFinite(score) || score < 1 || score > 10) score = 7.5;
+      if (insert.run(topico, categoria, score).changes > 0) n++;
+    }
+    logger.info(`[topicExpander] IA propos ${lista.length}, ${n} eram ineditos`);
+    return n;
+  } catch (e) {
+    logger.warn(`[topicExpander] expansao por IA falhou (nao critico): ${e.message.slice(0, 120)}`);
+    return 0;
+  }
 }
 
 /**
@@ -350,4 +415,4 @@ function getCategoryStats() {
   ).all();
 }
 
-module.exports = { expandTopics, getCategoryStats, ALL_TOPICS };
+module.exports = { expandTopics, getCategoryStats, gerarTopicosPorIA, ALL_TOPICS };
