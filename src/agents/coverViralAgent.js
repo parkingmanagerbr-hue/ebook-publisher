@@ -87,6 +87,30 @@ function coverHTML({ title, subtitle, kicker, badge, st, imgB64 }) {
 </div></body></html>`;
 }
 
+// Sorteia uma imagem do acervo curado para a categoria.
+//
+// Sorteio (e nao rodizio sequencial) de proposito: o pipeline roda varios
+// processos e um contador compartilhado exigiria estado; com sorteio, capas
+// seguidas do mesmo tema ja saem diferentes sem coordenacao nenhuma.
+const COVER_POOL = process.env.COVER_POOL_DIR
+  || path.join(__dirname, '..', '..', 'data', 'cover_pool');
+
+function escolherDoPool(category) {
+  try {
+    const candidatos = [category, 'default', 'geral'].filter(Boolean);
+    for (const c of candidatos) {
+      const dir = path.join(COVER_POOL, String(c));
+      if (!fs.existsSync(dir)) continue;
+      const arquivos = fs.readdirSync(dir).filter(f => /\.(jpe?g|png|webp)$/i.test(f));
+      if (!arquivos.length) continue;
+      return path.join(dir, arquivos[Math.floor(Math.random() * arquivos.length)]);
+    }
+  } catch (e) {
+    log.warn(`acervo indisponivel (${e.message.slice(0, 60)}) — gerando por API`);
+  }
+  return null;
+}
+
 async function generateViralCover(title, subtitle, topic, category, coversDir) {
   if (!puppeteer) { log.warn('sem puppeteer'); return null; }
   const st = STYLE[category] || STYLE.default;
@@ -94,9 +118,25 @@ async function generateViralCover(title, subtitle, topic, category, coversDir) {
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `viral_bg_${Date.now()}.jpg`);
   try {
-    // 1. imagem IA (rosto/cena por categoria)
-    const prompt = `${st.img}. Professional book cover photography, ultra detailed, 8k, high contrast, dramatic. Negative: ${NEG}`;
-    await generateImage({ prompt, width: 1024, height: 1536, outputPath: tmp });
+    // 1. fundo: acervo curado primeiro, geracao por API depois.
+    //
+    // O acervo (COVER_POOL) sao imagens geradas no Google Flow (Nano Banana 2),
+    // que sai bem melhor que os provedores de API disponiveis hoje: enquadra a
+    // pessoa nos dois tercos de cima e deixa o terco de baixo escuro e limpo,
+    // que e exatamente onde a composicao escreve o titulo. Gerar no Flow nao da
+    // para automatizar (nao tem API publica, so navegador), mas o acervo se
+    // reabastece em lote e serve muitos e-books.
+    //
+    // Sem imagem para a categoria, cai na geracao por API — o pipeline nunca
+    // depende do acervo estar populado.
+    const doPool = escolherDoPool(category);
+    if (doPool) {
+      fs.copyFileSync(doPool, tmp);
+      log.info(`fundo do acervo Flow: ${path.basename(doPool)}`);
+    } else {
+      const prompt = `${st.img}. Professional book cover photography, ultra detailed, 8k, high contrast, dramatic. Negative: ${NEG}`;
+      await generateImage({ prompt, width: 1024, height: 1536, outputPath: tmp });
+    }
     if (!fs.existsSync(tmp) || fs.statSync(tmp).size < 6000) throw new Error('imagem vazia/falhou');
     const imgB64 = fs.readFileSync(tmp).toString('base64');
 
