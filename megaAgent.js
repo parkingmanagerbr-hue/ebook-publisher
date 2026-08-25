@@ -214,6 +214,15 @@ async function runCycle() {
     const t = db.getNextTopic();
     if (t) {
       topic = t.topic;
+      // Marca o uso JA, antes de comecar o pipeline.
+      //
+      // Com ciclos em paralelo (CYCLE_CONCURRENCY), dois ciclos que comecam
+      // juntos chamariam getNextTopic antes de qualquer um marcar — e sairiam
+      // com o MESMO topico, gerando e-book duplicado. A marcacao adiantada faz
+      // o segundo ciclo ja enxergar o topico como usado e escolher outro.
+      // (O pipeline tambem marca, mas so mais adiante; marcar duas vezes e
+      // inofensivo — o efeito e apenas somar em times_used.)
+      try { db.markTopicUsed(topic); } catch (e) { log(`[Topics] falha ao marcar uso: ${e.message.slice(0, 60)}`); }
       // Topico reciclado = acabaram os inditos. Reabastece para os proximos
       // ciclos (a expansao por IA cuida disso quando a lista estatica esgota).
       if (t.reciclado) {
@@ -307,11 +316,31 @@ async function startLoop() {
       // Afiliados: discovery + landing pages + backlinks (intervalo próprio)
       await runAffiliatesIfNeeded();
 
-      const result = await runCycle();
+      // Ciclos em PARALELO.
+      //
+      // O ciclo e majoritariamente espera de rede (LLM escrevendo capitulos,
+      // TTS do audiobook, Puppeteer publicando) — nao CPU. Rodar em serie
+      // deixava a maquina ociosa: 824MB de 11.6GB e ~4% de CPU com 6 nucleos.
+      //
+      // Concorrencia BAIXA de proposito (2 por padrao): cada pipeline sobe
+      // Chromium para capa e para publicar, e o publisher do Cakto faz login
+      // com 2FA — dois logins simultaneos disputariam o mesmo codigo de e-mail.
+      // Subir isso sem medir troca throughput por corrida de sessao.
+      //
+      // RESSALVA HONESTA: se o gargalo for a cota do LLM (foi o caso em 25/08,
+      // com o Groq esgotando), paralelizar NAO aumenta o total do dia — apenas
+      // antecipa a producao e o esgotamento. Ajuda enquanto ha cota.
+      const PARALELO = Math.max(1, parseInt(process.env.CYCLE_CONCURRENCY || '2', 10));
+      const resultados = await Promise.all(
+        Array.from({ length: PARALELO }, () =>
+          runCycle().catch(e => { log(`[Loop] ciclo paralelo falhou: ${e.message.slice(0, 90)}`); return null; })
+        )
+      );
+      const result = resultados.some(Boolean);
       if (result) {
         errorStreak = 0;
-        // Continuous mode: minimal cooldown between cycles
-        log('[Loop] Ciclo completo — próximo em 5s...');
+        const ok = resultados.filter(Boolean).length;
+        log(`[Loop] ${ok}/${PARALELO} ciclos completos — próximo lote em 5s...`);
         await sleep(5000);
       } else {
         errorStreak++;
