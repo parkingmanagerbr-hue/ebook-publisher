@@ -209,6 +209,11 @@ function isDegraded(state, key) {
   const ultima = d.lastProbe || d.since_ms || 0;
   if (Date.now() - ultima >= PROBE_MS) {
     d.lastProbe = Date.now();
+    // PRECISA persistir: o estado e relido do disco a cada chamada, entao um
+    // lastProbe so em memoria se perde e a sondagem volta a disparar em toda
+    // tentativa. Observado em producao: "Sondando gemini" a cada 30s, ou seja,
+    // martelando o provider justamente o que o intervalo existia para evitar.
+    saveState(state);
     logger.info(`🔍 Sondando ${key} (degradado, mas pode ter resetado)`);
     return false;
   }
