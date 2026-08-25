@@ -54,6 +54,15 @@ function coverHTML({ title, subtitle, kicker, badge, st, imgB64 }) {
   const sub = (subtitle || '').slice(0, 90);
   // fonte auto-ajustada: limitada pelo total E pela palavra mais longa (Anton ~0.55em/char em caixa alta)
   const maxWord = Math.max(...(main + ' ' + accent).trim().split(/\s+/).map(w => w.length));
+  // Kicker: com o texto fixo "Metodo Pratico" (14 chars) nunca havia colisao.
+  // Com a dor escrita pelo LLM ele chega a 40 chars e passava POR BAIXO do
+  // badge — verificado a olho numa capa real: "VIVENDO DE SALARIO MINIM" com o
+  // selo por cima. Agora a fonte e o espacamento encolhem conforme o tamanho, e
+  // o bloco reserva a faixa do badge dos dois lados (ver .top no CSS).
+  const kickLen = String(kicker || '').length;
+  const kickSize = kickLen > 30 ? 26 : kickLen > 22 ? 31 : 38;
+  const kickSpacing = kickLen > 30 ? 4 : kickLen > 22 ? 6 : 10;
+
   let big = (main + accent).length > 14 ? 200 : 250;
   big = Math.max(90, Math.min(big, Math.floor(1380 / (0.55 * maxWord))));
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -67,8 +76,8 @@ function coverHTML({ title, subtitle, kicker, badge, st, imgB64 }) {
 .scrim{position:absolute;left:0;right:0;bottom:0;height:1520px;background:linear-gradient(180deg,transparent 0%,rgba(5,7,13,.55) 38%,rgba(5,7,13,.93) 66%,#05070d 100%)}
 .topfade{position:absolute;left:0;right:0;top:0;height:520px;background:linear-gradient(180deg,rgba(5,7,13,.78),transparent)}
 .grain{position:absolute;inset:0;opacity:.05;mix-blend-mode:overlay;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>")}
-.top{position:absolute;top:120px;left:0;right:0;text-align:center;z-index:6}
-.kick{font-family:'Space Grotesk';font-weight:700;letter-spacing:10px;font-size:38px;color:#eaf2ff;text-transform:uppercase;text-shadow:0 2px 20px rgba(0,0,0,.85)}
+.top{position:absolute;top:120px;left:360px;right:360px;text-align:center;z-index:6}
+.kick{font-family:'Space Grotesk';font-weight:700;letter-spacing:${kickSpacing}px;font-size:${kickSize}px;color:#eaf2ff;text-transform:uppercase;text-shadow:0 2px 20px rgba(0,0,0,.85)}
 .badge{position:absolute;top:116px;right:105px;z-index:6;background:${st.a1};color:#0a0a0a;font-family:'Space Grotesk';font-weight:700;letter-spacing:3px;font-size:31px;text-transform:uppercase;padding:17px 28px;border-radius:14px;transform:rotate(5deg);box-shadow:0 14px 40px ${st.a1}66}
 .mid{position:absolute;left:100px;right:100px;bottom:360px;text-align:center;z-index:6}
 .bar{width:120px;height:10px;margin:0 auto 40px;border-radius:6px;background:${st.a1};box-shadow:0 0 40px ${st.a1}}
@@ -140,8 +149,26 @@ async function generateViralCover(title, subtitle, topic, category, coversDir) {
     if (!fs.existsSync(tmp) || fs.statSync(tmp).size < 6000) throw new Error('imagem vazia/falhou');
     const imgB64 = fs.readFileSync(tmp).toString('base64');
 
-    // 2. composição HTML premium
-    const html = coverHTML({ title, subtitle, kicker: badgeKicker(topic), badge: badgeFor(subtitle, topic), st, imgB64 });
+    // 2. embalagem VIRAL (dor + promessa) e composição HTML premium
+    //
+    // O texto padrao era o titulo do e-book + kicker fixo "Metodo Pratico" —
+    // embalagem sem angulo, que o playbook viral do GENIA descarta de saida.
+    // Aqui o LLM escreve mirando a DOR, e a tecnica de gancho vem de um bandit
+    // que aprende com o resultado. Se a IA falhar, cai no texto de antes: capa
+    // com titulo comum e melhor que pipeline parado.
+    let pk = null;
+    try {
+      const { gerarPackaging } = require('./coverPackaging');
+      pk = await gerarPackaging({ titulo: title, subtitulo: subtitle, topico: topic, categoria: category });
+    } catch (e) { log.warn(`packaging indisponivel: ${e.message.slice(0, 70)}`); }
+
+    const html = coverHTML({
+      title:    pk ? pk.titulo    : title,
+      subtitle: pk ? pk.subtitulo : subtitle,
+      kicker:   pk ? pk.kicker    : badgeKicker(topic),
+      badge:    pk ? pk.badge     : badgeFor(subtitle, topic),
+      st, imgB64,
+    });
     const browser = await puppeteer.launch({ headless: 'new', executablePath: CHROME, args: ['--no-sandbox', '--disable-setuid-sandbox', '--force-color-profile=srgb'] });
     try {
       const page = await browser.newPage();
