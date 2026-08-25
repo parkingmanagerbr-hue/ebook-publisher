@@ -176,16 +176,42 @@ function markDegraded(state, key, hours = 1) {
   state.degraded[key] = {
     until: Date.now() + hours * 3_600_000,
     since: new Date().toISOString(),
+    // Instante numerico: o isDegraded usa isto para so sondar depois de
+    // PROBE_MS. Sem ele, uma degradacao recem-criada seria sondada na hora.
+    since_ms: Date.now(),
     hours,
   };
   logger.warn(`⛔ Degradado: ${key} por ${hours}h`);
   saveState(state);
 }
 
+// Intervalo entre sondagens de um provider degradado (circuito meio-aberto).
+//
+// POR QUE: um 429 cujo corpo cita "day" era tratado como cota diaria e o
+// provider ficava degradado ate a meia-noite UTC — sem NUNCA ser re-testado.
+// Caso real (25/08/2026): o Groq bateu limite as 00:56, levou 23h de castigo, e
+// aos 17:15 as OITO chaves ja respondiam 200 ha horas. O pipeline passou ~200
+// ciclos falhando com "todos os providers falharam" enquanto havia um provider
+// vivo bloqueado por um prazo chutado.
+//
+// Prazo de provider gratuito e sempre chute: a janela real de reset nao vem na
+// resposta. Uma sondagem de vez em quando custa uma requisicao e devolve horas
+// de producao. Se falhar de novo, o prazo se renova e nada se perde.
+const PROBE_MS = parseInt(process.env.AI_PROBE_INTERVAL_MS || String(20 * 60 * 1000), 10);
+
 function isDegraded(state, key) {
   const d = state.degraded[key];
   if (!d) return false;
   if (Date.now() > d.until) { delete state.degraded[key]; return false; }
+
+  // Meio-aberto: passado PROBE_MS desde a ultima tentativa, libera UMA sondagem.
+  // Marca o instante para nao virar enxurrada de tentativas em paralelo.
+  const ultima = d.lastProbe || d.since_ms || 0;
+  if (Date.now() - ultima >= PROBE_MS) {
+    d.lastProbe = Date.now();
+    logger.info(`🔍 Sondando ${key} (degradado, mas pode ter resetado)`);
+    return false;
+  }
   return true;
 }
 
