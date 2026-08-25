@@ -648,6 +648,20 @@ async function generate(prompt, systemPrompt = '', options = {}) {
       const elapsed = Date.now() - t0;
       logger.info(`✅ ${provider} respondeu em ${elapsed}ms (${result.length} chars)`);
 
+      // Sondagem que deu certo ENCERRA a degradacao, do provider e da chave.
+      // Sem isto o circuito meio-aberto so rende uma requisicao a cada 20min:
+      // o provider responde 200 e mesmo assim continua marcado como degradado
+      // ate o prazo original — que e justamente o chute que se quer corrigir.
+      const chaveId = apiKey ? `${provider}:${apiKey.slice(-8)}` : null;
+      let limpou = false;
+      for (const k of [provider, chaveId].filter(Boolean)) {
+        if (state.degraded[k]) { delete state.degraded[k]; limpou = true; }
+      }
+      if (limpou) {
+        logger.info(`♻️  ${provider} reabilitado (sondagem respondeu)`);
+        saveState(state);
+      }
+
       return { text: result, provider, elapsed };
 
     } catch (err) {
