@@ -391,10 +391,17 @@ async function callGroq(prompt, systemPrompt, apiKey) {
         // 413 = prompt+resposta nao cabem na janela; vale reduzir o teto e
         // tentar de novo antes de desistir do provider.
         if (st === 413 || /too large|reduce your message/i.test(msg)) continue;
-        // Modelo aposentado -> proximo modelo. Qualquer outro erro (429/402/401)
-        // e do provider: insistir so gasta cota.
+        // Modelo aposentado -> proximo modelo.
         const modeloInvalido = st === 404 || /does not exist|decommissioned|not found/i.test(msg);
         if (modeloInvalido) break;
+        // 429 no Groq e cota POR MODELO, nao por chave. Medido: gpt-oss-120b
+        // devolvia 429 enquanto gpt-oss-20b respondia 200 com a MESMA chave.
+        // Antes esse `throw` abortava o laco no primeiro 429, entao o modelo
+        // menor — que ainda tinha cota — nunca era tentado, e o chamador ainda
+        // degradava a chave inteira por horas. Oito chaves boas ficaram
+        // bloqueadas assim, com a geracao parada. Agora o 429 so passa para o
+        // proximo modelo; a chave so cai quando TODOS os modelos recusarem.
+        if (st === 429) break;
         throw e;
       }
     }
@@ -409,7 +416,10 @@ async function callGroqComModelo(prompt, systemPrompt, apiKey, model, maxTokens)
       { role: 'system', content: systemPrompt },
       { role: 'user',   content: prompt },
     ],
-    max_tokens: 8000,
+    // Usar o teto recebido, nao um 8000 fixo: o 8000 ignorava o parametro e
+    // deixava INERTE a re-tentativa com metade do teto no 413 — o retry
+    // reenviava exatamente a mesma requisicao e falhava igual.
+    max_tokens: maxTokens || 8000,
     temperature: 0.7,
   }, {
     headers: {
