@@ -31,6 +31,46 @@ function arg(nome, padrao) {
   return p ? p.split('=')[1] : padrao;
 }
 
+/**
+ * Reserva um e-book para publicacao, de forma atomica entre processos.
+ *
+ * Sem isto, dois lotes concorrentes SELECIONAM o mesmo candidato: a marcacao so
+ * acontece depois que o publish retorna, e ate la a linha continua elegivel.
+ * Aconteceu de verdade — o e-book abaee126 ("Investir em Acoes com R$100") virou
+ * DOIS produtos no Hotmart (8419956 e 8419962) porque um lote manual rodou junto
+ * com o do cron. Produto duplicado em marketplace nao se desfaz sozinho.
+ *
+ * O INSERT numa tabela com PRIMARY KEY e a primitiva de exclusao: quem inserir
+ * primeiro leva; o segundo recebe violacao de UNIQUE e pula. A reserva expira
+ * para nao vazar item quando um lote morre no meio (SIGTERM ja aconteceu aqui).
+ */
+const RESERVA_MIN = parseInt(process.env.PUBLISH_CLAIM_MINUTES || '30', 10);
+
+function garantirTabela(db) {
+  db.prepare(
+    'CREATE TABLE IF NOT EXISTS publish_claims (' +
+    'chave TEXT PRIMARY KEY, quando INTEGER NOT NULL)'
+  ).run();
+}
+
+function reservar(db, ebookId, plataforma) {
+  const chave = plataforma + ':' + ebookId;
+  const agora = Date.now();
+  const limite = agora - RESERVA_MIN * 60 * 1000;
+  db.prepare('DELETE FROM publish_claims WHERE quando < ?').run(limite);
+  try {
+    db.prepare('INSERT INTO publish_claims (chave, quando) VALUES (?, ?)').run(chave, agora);
+    return true;
+  } catch (e) {
+    return false;   // outro lote pegou primeiro
+  }
+}
+
+function liberar(db, ebookId, plataforma) {
+  try { db.prepare('DELETE FROM publish_claims WHERE chave = ?').run(plataforma + ':' + ebookId); }
+  catch { /* reserva expira sozinha */ }
+}
+
 /** Busca e-books com PDF em disco e sem URL na plataforma alvo. */
 function buscarPendentes(plataforma, limite) {
   const fs = require('fs');
@@ -51,14 +91,17 @@ function buscarPendentes(plataforma, limite) {
     'AND pdf_path IS NOT NULL ORDER BY rowid DESC LIMIT ?'
   ).all(limite * 4);
 
+  garantirTabela(db);
   const validos = [];
-  let semArquivo = 0;
+  let semArquivo = 0, reservados = 0;
   for (const e of cand) {
     if (validos.length >= limite) break;
-    if (e.pdf_path && fs.existsSync(e.pdf_path)) validos.push(e);
-    else semArquivo++;
+    if (!e.pdf_path || !fs.existsSync(e.pdf_path)) { semArquivo++; continue; }
+    if (!reservar(db, e.id, plataforma)) { reservados++; continue; }
+    validos.push(e);
   }
   if (semArquivo) log.info('ignorados ' + semArquivo + ' sem PDF em disco (retencao ja apagou)');
+  if (reservados) log.info('ignorados ' + reservados + ' ja reservados por outro lote');
   return validos;
 }
 
@@ -128,8 +171,13 @@ async function publicarBacklog(opts) {
   log.info('backlog ' + plataforma + ': ' + pendentes.length + ' e-books, ' + paralelo + ' em paralelo');
   const t0 = Date.now();
 
+  const { getDb } = require('../core/database');
   const res = await comLimite(pendentes, paralelo, async (eb) => {
     const r = await publicarUm(eb, plataforma);
+    // Falha nao deve segurar a reserva ate expirar: o proximo lote tenta de novo.
+    // Sucesso mantem a reserva ate ela expirar — a essa altura a URL ja esta no
+    // banco e o item nem aparece mais na busca.
+    if (!r.ok) { try { liberar(getDb(), eb.id, plataforma); } catch {} }
     log.info((r.ok ? 'OK  ' : 'FALHA ') + '[' + eb.id + '] ' + String(eb.title).slice(0, 45) + (r.ok ? ' -> ' + r.url : ' :: ' + r.motivo));
     return r;
   });
