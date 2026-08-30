@@ -105,6 +105,26 @@ function buscarPendentes(plataforma, limite) {
   return validos;
 }
 
+/**
+ * A sessao esta morta a ponto de nao adiantar tentar os proximos itens?
+ *
+ * O publisher tem uma sonda de sessao (sessaoHotmartViva) que consulta o CAS.
+ * Ela deu FALSO POSITIVO: o TGT era valido, o CAS devolvia ST 200, e mesmo
+ * assim o wizard caia em sso.hotmart.com/login. A sonda respondia `true`, cada
+ * item gastava 90s esperando uma tela que nunca renderiza, e o lote inteiro
+ * levava 13 minutos para publicar zero.
+ *
+ * O erro do proprio wizard e o sinal confiavel, porque vem de onde o trabalho
+ * de fato acontece: se a pagina parou no SSO, nenhum item do lote vai passar.
+ * Melhor abortar em ~1 min com motivo claro do que insistir 12 vezes.
+ */
+function sessaoMorta(motivo) {
+  const m = String(motivo || '');
+  return /sso\.hotmart\.com\/login/i.test(m)
+    || /wizard not rendered/i.test(m)
+    || /SESSAO_EXPIRADA/i.test(m);
+}
+
 async function publicarUm(ebook, plataforma) {
   const { updateEbookStatus } = require('../core/database');
   const dados = {
@@ -172,15 +192,32 @@ async function publicarBacklog(opts) {
   const t0 = Date.now();
 
   const { getDb } = require('../core/database');
+  let abortado = null;
+
   const res = await comLimite(pendentes, paralelo, async (eb) => {
-    const r = await publicarUm(eb, plataforma);
-    // Falha nao deve segurar a reserva ate expirar: o proximo lote tenta de novo.
-    // Sucesso mantem a reserva ate ela expirar — a essa altura a URL ja esta no
-    // banco e o item nem aparece mais na busca.
+    // Sessao ja provada morta por um item anterior: os proximos so gastariam
+    // 90s cada para falhar igual.
+    if (abortado) return { ok: false, motivo: 'abortado: ' + abortado };
+
+    let r;
+    try {
+      r = await publicarUm(eb, plataforma);
+    } catch (e) {
+      // O publisher LANCA em vez de devolver erro. Antes a excecao subia direto
+      // para o comLimite e a linha de log abaixo nunca rodava: o lote fechava
+      // "0/12" sem uma unica linha dizendo por que. Foi o que impediu o
+      // diagnostico pelo log durante horas.
+      r = { ok: false, motivo: (e && e.message ? e.message : String(e)).slice(0, 120) };
+    }
+
     if (!r.ok) { try { liberar(getDb(), eb.id, plataforma); } catch {} }
+    if (!r.ok && sessaoMorta(r.motivo)) abortado = r.motivo.slice(0, 60);
+
     log.info((r.ok ? 'OK  ' : 'FALHA ') + '[' + eb.id + '] ' + String(eb.title).slice(0, 45) + (r.ok ? ' -> ' + r.url : ' :: ' + r.motivo));
     return r;
   });
+
+  if (abortado) log.warn('lote abortado — sessao inutilizavel: ' + abortado);
 
   const ok = res.filter(r => r && r.ok).length;
   const min = ((Date.now() - t0) / 60000).toFixed(1);
@@ -188,7 +225,7 @@ async function publicarBacklog(opts) {
   return { total: pendentes.length, ok, minutos: Number(min) };
 }
 
-module.exports = { publicarBacklog, buscarPendentes };
+module.exports = { publicarBacklog, buscarPendentes, sessaoMorta, comLimite, reservar, liberar, garantirTabela };
 
 if (require.main === module) {
   publicarBacklog({

@@ -378,6 +378,30 @@ const GROQ_MODELS = (process.env.GROQ_MODEL ? [process.env.GROQ_MODEL] : [])
 // marcava as 8 chaves como degradadas, tirando o provider inteiro do ar.
 const GROQ_MAX_TOKENS = parseInt(process.env.GROQ_MAX_TOKENS || '4096', 10);
 
+/**
+ * Decide o que fazer com um erro do Groq, sem tocar em rede.
+ *
+ * Estava embutido no laco e por isso ninguem conseguia testar o caso que
+ * derrubou a geracao: um 429 abortava TUDO com `throw`, entao o modelo menor —
+ * que ainda tinha cota — nunca era tentado, e o chamador ainda degradava a
+ * chave por horas. Oito chaves boas ficaram bloqueadas assim.
+ *
+ * Devolve: 'reduzir-teto' | 'proximo-modelo' | 'desistir'.
+ */
+function acaoParaErroGroq(status, mensagem) {
+  const msg = String(mensagem || '');
+  // 413: o prompt mais a resposta nao cabem na janela. Vale reduzir o teto e
+  // tentar de novo com o MESMO modelo.
+  if (status === 413 || /too large|reduce your message/i.test(msg)) return 'reduzir-teto';
+  // 404: modelo aposentado — nao adianta insistir nele.
+  if (status === 404 || /does not exist|decommissioned|not found/i.test(msg)) return 'proximo-modelo';
+  // 429: cota do Groq e POR MODELO. Medido: gpt-oss-120b devolvia 429 enquanto
+  // gpt-oss-20b respondia 200 com a MESMA chave.
+  if (status === 429) return 'proximo-modelo';
+  // 401/402/403 e o resto sao da chave ou da conta: trocar de modelo so gasta cota.
+  return 'desistir';
+}
+
 async function callGroq(prompt, systemPrompt, apiKey) {
   let ultimoErro = null;
   for (const model of GROQ_MODELS) {
@@ -388,20 +412,9 @@ async function callGroq(prompt, systemPrompt, apiKey) {
         const st = e?.response?.status;
         const msg = e?.response?.data?.error?.message || e.message || '';
         ultimoErro = e;
-        // 413 = prompt+resposta nao cabem na janela; vale reduzir o teto e
-        // tentar de novo antes de desistir do provider.
-        if (st === 413 || /too large|reduce your message/i.test(msg)) continue;
-        // Modelo aposentado -> proximo modelo.
-        const modeloInvalido = st === 404 || /does not exist|decommissioned|not found/i.test(msg);
-        if (modeloInvalido) break;
-        // 429 no Groq e cota POR MODELO, nao por chave. Medido: gpt-oss-120b
-        // devolvia 429 enquanto gpt-oss-20b respondia 200 com a MESMA chave.
-        // Antes esse `throw` abortava o laco no primeiro 429, entao o modelo
-        // menor — que ainda tinha cota — nunca era tentado, e o chamador ainda
-        // degradava a chave inteira por horas. Oito chaves boas ficaram
-        // bloqueadas assim, com a geracao parada. Agora o 429 so passa para o
-        // proximo modelo; a chave so cai quando TODOS os modelos recusarem.
-        if (st === 429) break;
+        const acao = acaoParaErroGroq(st, msg);
+        if (acao === 'reduzir-teto') continue;
+        if (acao === 'proximo-modelo') break;
         throw e;
       }
     }
@@ -835,4 +848,6 @@ function resetDegraded(provider = null) {
   saveState(state);
 }
 
-module.exports = { generate, getStatus, resetDegraded, PROVIDERS, LIMITS };
+module.exports = { generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
+  // exportados para teste: e onde moraram os defeitos que pararam a geracao
+  acaoParaErroGroq, isDegraded, getNextKey };

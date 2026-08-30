@@ -1931,4 +1931,78 @@ async function publishToHotmart(ebook) {
   }
 }
 
-module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook, sessaoHotmartViva };
+/**
+ * Reenvia a capa de produtos JA publicados que ficaram sem imagem.
+ *
+ * Verificado a olho na lista de produtos do Hotmart: 11 dos 12 primeiros
+ * mostram o placeholder cinza. O envio de capa so passou a funcionar depois, e
+ * nada volta para preencher o que ficou para tras — o produto fica no ar com
+ * um icone generico, que e justamente o que decide o clique.
+ *
+ * UM navegador para o lote inteiro. Subir o Chrome e estabelecer a sessao custa
+ * dezenas de segundos; pagar isso por item transformaria o backfill em algo
+ * inviavel para milhares de produtos.
+ *
+ * @param itens [{ numericId, coverPath, titulo }]
+ * @param aoTerminar callback(item, ok) chamado por item, para o chamador
+ *        persistir progresso SEM esperar o lote acabar — um lote morto no meio
+ *        nao pode perder o que ja deu certo.
+ */
+async function backfillCapas(itens, aoTerminar) {
+  const lista = (itens || []).filter(i => i && i.numericId && i.coverPath && fs.existsSync(i.coverPath));
+  if (!lista.length) { log.info('backfill: nada com capa em disco'); return { total: 0, ok: 0 }; }
+
+  const viva = await sessaoHotmartViva();
+  if (viva === false) { log.warn('backfill: sessao expirada — exige login humano'); return { total: lista.length, ok: 0, error: 'SESSAO_EXPIRADA_LOGIN_HUMANO' }; }
+
+  const session = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+  const browser = await puppeteer.launch({
+    headless: true, executablePath: process.env.CHROME_EXECUTABLE || process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu',
+           '--disable-blink-features=AutomationControlled','--window-size=1280,900'],
+    defaultViewport: { width: 1280, height: 900 },
+  });
+
+  let ok = 0;
+  try {
+    const jwt = await refreshJWT(browser, session);
+    const page = await browser.newPage();
+    await setupPage(page, session, jwt);
+
+    await page.goto('https://app.hotmart.com/products/producer', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    let pronta = false;
+    for (let i = 0; i < 35 && !pronta; i++) {
+      await sleep(1000);
+      pronta = await page.evaluate(() => !!document.querySelector('#search-input')).catch(() => false);
+    }
+    if (!pronta) {
+      // Cair no SSO aqui significa que NENHUM item vai passar: abortar em vez
+      // de gastar minutos por produto contra uma parede.
+      const url = page.url();
+      if (/sso\.hotmart\.com\/login/.test(url)) {
+        log.warn('backfill: sessao caiu no SSO — abortando o lote');
+        return { total: lista.length, ok: 0, error: 'SESSAO_EXPIRADA_LOGIN_HUMANO' };
+      }
+      log.warn('backfill: sessao nao confirmada — seguindo mesmo assim');
+    }
+
+    for (const item of lista) {
+      let sucesso = false;
+      try {
+        sucesso = await uploadCoverImage(page, String(item.numericId), item.coverPath);
+      } catch (e) {
+        log.warn('backfill capa ' + item.numericId + ' falhou: ' + String(e.message).slice(0, 90));
+      }
+      if (sucesso) ok++;
+      log.info('backfill ' + (sucesso ? 'OK  ' : 'FALHA ') + item.numericId + ' ' + String(item.titulo || '').slice(0, 40));
+      if (aoTerminar) { try { await aoTerminar(item, sucesso); } catch {} }
+    }
+  } finally {
+    await browser.close().catch(() => {});
+  }
+
+  log.info('backfill de capas: ' + ok + '/' + lista.length);
+  return { total: lista.length, ok };
+}
+
+module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook, sessaoHotmartViva, backfillCapas };
