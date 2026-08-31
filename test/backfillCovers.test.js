@@ -130,3 +130,28 @@ test('garantirTabela e idempotente', () => {
     assert.doesNotThrow(() => registrar(db, '1', true));
   } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('alcanca os pendentes ANTIGOS mesmo com a janela cheia de ja-processados', () => {
+  // O bug real: o descarte de processados acontecia so em JS, depois da leitura.
+  // A janela (limite*6 linhas mais recentes) enchia de itens ja feitos e a
+  // funcao devolvia ZERO — o cron anunciava "nenhum produto pendente" com ~600
+  // produtos ainda sem capa, e os antigos nunca seriam alcancados.
+  const { db, dir } = bancoTemp();
+  try {
+    // 40 recentes ja processados ficam a FRENTE na ordem rowid DESC...
+    for (let i = 0; i < 40; i++) {
+      inserir(db, 'novo' + i, '90' + i, capaFalsa(dir, 'n' + i + '.png'));
+    }
+    // ...e o pendente de verdade fica atras (inserido antes = rowid menor).
+    // Reinsere na ordem correta: o pendente primeiro.
+    db.prepare('DELETE FROM ebooks').run();
+    inserir(db, 'antigo', '7777', capaFalsa(dir, 'antigo.png'), 'O que falta capa');
+    for (let i = 0; i < 40; i++) {
+      inserir(db, 'novo' + i, '90' + i, capaFalsa(dir, 'n' + i + '.png'));
+      registrar(db, '90' + i, true);
+    }
+    const r = buscarCandidatos(db, 5);
+    assert.equal(r.length, 1, 'o pendente antigo tem de ser alcancado');
+    assert.equal(r[0].numericId, '7777');
+  } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

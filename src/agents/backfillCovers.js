@@ -53,23 +53,29 @@ function registrar(db, produto, ok) {
  */
 function buscarCandidatos(db, limite) {
   garantirTabela(db);
+  // O descarte de ja-processados PRECISA acontecer no SQL, nao em JS depois.
+  // Filtrando so em JS, a janela lida (limite*6 linhas mais recentes) enchia de
+  // itens ja feitos e a funcao passava a devolver ZERO — o cron anunciava
+  // "nenhum produto pendente" com ~600 produtos ainda sem capa, e nunca mais
+  // alcancaria os antigos. O NOT EXISTS garante que a janela so traz candidato
+  // de verdade.
   const cand = db.prepare(
-    'SELECT id, title, hotmart_product_id, cover_path FROM ebooks ' +
-    "WHERE hotmart_product_id IS NOT NULL AND hotmart_product_id <> '' " +
-    "AND cover_path IS NOT NULL AND cover_path <> '' " +
-    'ORDER BY rowid DESC LIMIT ?'
+    'SELECT e.id, e.title, e.hotmart_product_id, e.cover_path FROM ebooks e ' +
+    "WHERE e.hotmart_product_id IS NOT NULL AND e.hotmart_product_id <> '' " +
+    "AND e.cover_path IS NOT NULL AND e.cover_path <> '' " +
+    'AND NOT EXISTS (SELECT 1 FROM cover_backfill b WHERE b.produto = CAST(e.hotmart_product_id AS TEXT)) ' +
+    'ORDER BY e.rowid DESC LIMIT ?'
   ).all(limite * 6);
 
   const out = [];
-  let semArquivo = 0, jaFeito = 0;
+  let semArquivo = 0;
   for (const e of cand) {
     if (out.length >= limite) break;
+    // A capa some do disco por retencao; sem arquivo nao ha o que enviar.
     if (!fs.existsSync(e.cover_path)) { semArquivo++; continue; }
-    if (jaTentado(db, e.hotmart_product_id)) { jaFeito++; continue; }
     out.push({ ebookId: e.id, numericId: String(e.hotmart_product_id), coverPath: e.cover_path, titulo: e.title });
   }
   if (semArquivo) log.info('ignorados ' + semArquivo + ' com a capa ja apagada do disco');
-  if (jaFeito) log.info('ignorados ' + jaFeito + ' ja processados');
   return out;
 }
 
