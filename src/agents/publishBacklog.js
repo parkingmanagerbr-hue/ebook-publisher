@@ -71,6 +71,46 @@ function liberar(db, ebookId, plataforma) {
   catch { /* reserva expira sozinha */ }
 }
 
+/**
+ * Conta falhas por e-book para tirar de circulacao o que nunca vai passar.
+ *
+ * Medido: titulos em japones e chines falham SEMPRE com "No product ID after
+ * creation", nos dois lotes seguidos. Sem contador eles voltam em todo lote e
+ * queimam uma vaga cada vez — 90s por tentativa, para sempre.
+ *
+ * CUIDADO QUE DECIDE SE ISTO PRESTA: falha de SESSAO nao pode contar. Uma
+ * sessao expirada derruba os 12 itens do lote; se isso pontuasse, tres apagoes
+ * de sessao envenenariam o backlog inteiro e o sistema pararia de publicar
+ * e-books perfeitamente bons. So conta falha propria do item.
+ */
+const MAX_FALHAS = parseInt(process.env.PUBLISH_MAX_FALHAS || '3', 10);
+
+function garantirTabelaFalhas(db) {
+  db.prepare(
+    'CREATE TABLE IF NOT EXISTS publish_failures (' +
+    'chave TEXT PRIMARY KEY, falhas INTEGER NOT NULL, ultimo_motivo TEXT, quando INTEGER)'
+  ).run();
+}
+
+function registrarFalha(db, ebookId, plataforma, motivo) {
+  // Sessao morta e problema do ambiente, nao do e-book.
+  if (sessaoMorta(motivo)) return;
+  try {
+    garantirTabelaFalhas(db);
+    db.prepare(
+      'INSERT INTO publish_failures (chave, falhas, ultimo_motivo, quando) VALUES (?, 1, ?, ?) ' +
+      'ON CONFLICT(chave) DO UPDATE SET falhas = falhas + 1, ultimo_motivo = excluded.ultimo_motivo, quando = excluded.quando'
+    ).run(plataforma + ':' + ebookId, String(motivo || '').slice(0, 120), Date.now());
+  } catch { /* contador e otimizacao, nunca pode derrubar o lote */ }
+}
+
+function esgotado(db, ebookId, plataforma) {
+  try {
+    const r = db.prepare('SELECT falhas FROM publish_failures WHERE chave = ?').get(plataforma + ':' + ebookId);
+    return !!r && r.falhas >= MAX_FALHAS;
+  } catch { return false; }
+}
+
 /** Busca e-books com PDF em disco e sem URL na plataforma alvo. */
 function buscarPendentes(plataforma, limite) {
   const fs = require('fs');
@@ -92,16 +132,19 @@ function buscarPendentes(plataforma, limite) {
   ).all(limite * 4);
 
   garantirTabela(db);
+  garantirTabelaFalhas(db);
   const validos = [];
-  let semArquivo = 0, reservados = 0;
+  let semArquivo = 0, reservados = 0, queimados = 0;
   for (const e of cand) {
     if (validos.length >= limite) break;
     if (!e.pdf_path || !fs.existsSync(e.pdf_path)) { semArquivo++; continue; }
+    if (esgotado(db, e.id, plataforma)) { queimados++; continue; }
     if (!reservar(db, e.id, plataforma)) { reservados++; continue; }
     validos.push(e);
   }
   if (semArquivo) log.info('ignorados ' + semArquivo + ' sem PDF em disco (retencao ja apagou)');
   if (reservados) log.info('ignorados ' + reservados + ' ja reservados por outro lote');
+  if (queimados) log.info('ignorados ' + queimados + ' que ja falharam ' + MAX_FALHAS + 'x (nao e sessao)');
   return validos;
 }
 
@@ -210,7 +253,10 @@ async function publicarBacklog(opts) {
       r = { ok: false, motivo: (e && e.message ? e.message : String(e)).slice(0, 120) };
     }
 
-    if (!r.ok) { try { liberar(getDb(), eb.id, plataforma); } catch {} }
+    if (!r.ok) {
+      try { liberar(getDb(), eb.id, plataforma); } catch {}
+      registrarFalha(getDb(), eb.id, plataforma, r.motivo);
+    }
     if (!r.ok && sessaoMorta(r.motivo)) abortado = r.motivo.slice(0, 60);
 
     log.info((r.ok ? 'OK  ' : 'FALHA ') + '[' + eb.id + '] ' + String(eb.title).slice(0, 45) + (r.ok ? ' -> ' + r.url : ' :: ' + r.motivo));
@@ -225,7 +271,8 @@ async function publicarBacklog(opts) {
   return { total: pendentes.length, ok, minutos: Number(min) };
 }
 
-module.exports = { publicarBacklog, buscarPendentes, sessaoMorta, comLimite, reservar, liberar, garantirTabela };
+module.exports = { publicarBacklog, buscarPendentes, sessaoMorta, comLimite, reservar, liberar, garantirTabela,
+  registrarFalha, esgotado, garantirTabelaFalhas };
 
 if (require.main === module) {
   publicarBacklog({

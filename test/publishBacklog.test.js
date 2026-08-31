@@ -160,3 +160,66 @@ test('reservar nao lanca quando o banco esta em somente-leitura', () => {
     assert.doesNotThrow(() => liberar(ro, 'x', 'hotmart'));
   } finally { ro.close(); fs.unlinkSync(f); }
 });
+
+// ── contador de falhas ──────────────────────────────────────────────────────
+// Titulos em japones e chines falham SEMPRE com "No product ID after creation".
+// Sem contador eles voltam em todo lote e queimam uma vaga de 90s, para sempre.
+
+const { registrarFalha, esgotado, garantirTabelaFalhas } = require('../src/agents/publishBacklog');
+
+function dbFalhas() {
+  const f = path.join(os.tmpdir(), 'pf-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.db');
+  const db = new Database(f);
+  garantirTabelaFalhas(db);
+  return { db, f };
+}
+
+test('item so e descartado depois de falhar 3 vezes', () => {
+  const { db, f } = dbFalhas();
+  try {
+    registrarFalha(db, 'e1', 'hotmart', 'No product ID after creation');
+    assert.equal(esgotado(db, 'e1', 'hotmart'), false, 'uma falha pode ser transitoria');
+    registrarFalha(db, 'e1', 'hotmart', 'No product ID after creation');
+    assert.equal(esgotado(db, 'e1', 'hotmart'), false);
+    registrarFalha(db, 'e1', 'hotmart', 'No product ID after creation');
+    assert.equal(esgotado(db, 'e1', 'hotmart'), true, 'na terceira sai de circulacao');
+  } finally { db.close(); fs.unlinkSync(f); }
+});
+
+test('FALHA DE SESSAO NAO CONTA — senao um apagao envenena o backlog inteiro', () => {
+  // Este e o caso que decide se o contador presta. Uma sessao expirada derruba
+  // os 12 itens do lote; se pontuasse, tres apagoes tirariam de circulacao
+  // e-books perfeitamente publicaveis e o sistema pararia sozinho.
+  const { db, f } = dbFalhas();
+  try {
+    for (let i = 0; i < 8; i++) registrarFalha(db, 'e2', 'hotmart', 'SESSAO_EXPIRADA_LOGIN_HUMANO');
+    assert.equal(esgotado(db, 'e2', 'hotmart'), false);
+    for (let i = 0; i < 8; i++) {
+      registrarFalha(db, 'e2', 'hotmart', 'eBook card not found after 90s -- wizard not rendered. URL: https://sso.hotmart.com/login');
+    }
+    assert.equal(esgotado(db, 'e2', 'hotmart'), false, 'queda no SSO tambem e ambiente, nao o e-book');
+  } finally { db.close(); fs.unlinkSync(f); }
+});
+
+test('o contador e por plataforma', () => {
+  const { db, f } = dbFalhas();
+  try {
+    for (let i = 0; i < 3; i++) registrarFalha(db, 'e3', 'hotmart', 'erro proprio');
+    assert.equal(esgotado(db, 'e3', 'hotmart'), true);
+    assert.equal(esgotado(db, 'e3', 'cakto'), false, 'falhar no Hotmart nao impede o Cakto');
+  } finally { db.close(); fs.unlinkSync(f); }
+});
+
+test('item nunca visto nao esta esgotado', () => {
+  const { db, f } = dbFalhas();
+  try { assert.equal(esgotado(db, 'nunca-visto', 'hotmart'), false); }
+  finally { db.close(); fs.unlinkSync(f); }
+});
+
+test('registrarFalha nunca lanca — contador e otimizacao, nao pode derrubar o lote', () => {
+  const { db, f } = dbFalhas();
+  db.close();
+  const ro = new Database(f, { readonly: true });
+  try { assert.doesNotThrow(() => registrarFalha(ro, 'x', 'hotmart', 'erro')); }
+  finally { ro.close(); fs.unlinkSync(f); }
+});
