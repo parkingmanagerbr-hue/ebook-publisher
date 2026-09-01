@@ -1852,13 +1852,22 @@ async function publishToHotmart(ebook) {
     const page=await browser.newPage();
     await setupPage(page,session,jwt);
     page.on('framenavigated',f=>{if(f===page.mainFrame())log.info('NAV',f.url().slice(0,90));});
-    // Establish session on products/producer (wait for #search-input = session ready)
+    // Establish session on products/producer (a pagina renderizou = sessao viva)
     log.info('Establishing session on products/producer...');
     await page.goto('https://app.hotmart.com/products/producer',{waitUntil:'domcontentloaded',timeout:20000}).catch(()=>{});
     let sessionReady = false;
     for(let i=0;i<35;i++){
       await sleep(1000);
-      sessionReady = await page.evaluate(()=>!!document.querySelector('#search-input')).catch(()=>false);
+      sessionReady = await page.evaluate(()=>!!(
+        // #search-input NAO EXISTE MAIS na pagina de produtos — verificado no DOM
+        // ao vivo em 30/08. Enquanto a checagem apontava para ele, ela SEMPRE
+        // dava falso, e a decisao caia toda no teste de URL. Aqui o sinal e o
+        // que a pagina realmente tem: o campo de busca de produto ou os proprios
+        // links de produto.
+        document.querySelector('input[placeholder*="produto" i]') ||
+        document.querySelector('a[href*="/products/"]') ||
+        document.querySelector('[data-testid*="product" i]')
+      )).catch(()=>false);
       if(sessionReady){log.info('Session established t='+(i+1)+'s'); break;}
     }
     if (!sessionReady) log.warn('Session not confirmed -- proceeding anyway');
@@ -1973,7 +1982,16 @@ async function backfillCapas(itens, aoTerminar) {
     let pronta = false;
     for (let i = 0; i < 35 && !pronta; i++) {
       await sleep(1000);
-      pronta = await page.evaluate(() => !!document.querySelector('#search-input')).catch(() => false);
+      pronta = await page.evaluate(() => !!(
+        // #search-input NAO EXISTE MAIS na pagina de produtos — verificado no DOM
+        // ao vivo em 30/08. Enquanto a checagem apontava para ele, ela SEMPRE
+        // dava falso, e a decisao caia toda no teste de URL. Aqui o sinal e o
+        // que a pagina realmente tem: o campo de busca de produto ou os proprios
+        // links de produto.
+        document.querySelector('input[placeholder*="produto" i]') ||
+        document.querySelector('a[href*="/products/"]') ||
+        document.querySelector('[data-testid*="product" i]')
+      )).catch(() => false);
     }
     if (!pronta) {
       // Cair no SSO aqui significa que NENHUM item vai passar: abortar em vez
