@@ -2023,4 +2023,8 @@ async function backfillCapas(itens, aoTerminar) {
   return { total: lista.length, ok };
 }
 
-module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook, sessaoHotmartViva, backfillCapas };
+module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook, sessaoHotmartViva, backfillCapas,
+  // exportado para o executor LOCAL: a Hotmart amarra a sessao a origem, entao
+  // o reenvio de capa roda na maquina que fez o login, conectando ao Chrome ja
+  // aberto em vez de subir um navegador com cookies transplantados.
+  uploadCoverImage };
