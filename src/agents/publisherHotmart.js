@@ -1834,30 +1834,56 @@ async function sessaoHotmartViva() {
   return resultado;
 }
 
-async function publishToHotmart(ebook) {
+/**
+ * @param opts.browser  navegador JA ABERTO para reaproveitar.
+ *   A Hotmart amarra a sessao a origem: sessao capturada e levada para o VPS e
+ *   recusada (provado com os mesmos cookies no mesmo instante). Publicar da
+ *   maquina que fez o login, conectando ao Chrome do usuario, e o unico caminho
+ *   que a plataforma aceita. Quando o navegador vem de fora, NAO se fecha ele —
+ *   e do usuario, e fecha-lo mataria a sessao.
+ */
+async function publishToHotmart(ebook, opts) {
   const { title, topic, pdfPath, coverPath, description, audiobookPath } = ebook;
-  if(!fs.existsSync(SESSION_FILE)) throw new Error('Session not found: '+SESSION_FILE);
+  const browserExterno = !!(opts && opts.browser);
 
-  // Fast-fail: so aborta quando o CAS respondeu explicitamente que o TGT morreu.
-  // `null` (indeterminado) segue o fluxo normal de proposito.
-  const viva = await sessaoHotmartViva();
-  if (viva === false) {
-    log.warn('Sessao Hotmart EXPIRADA (TGT invalido no CAS) — pulando sem gastar o ciclo. Exige login humano.');
-    return { success:false, platform:'hotmart', error:'SESSAO_EXPIRADA_LOGIN_HUMANO',
-             hotmartProductId:null, url:null, needsHumanLogin:true };
+  // Com navegador externo NAO ha arquivo de sessao nem sonda que faca sentido:
+  // a sessao vive no proprio Chrome do usuario. A sonda le o arquivo do VPS e
+  // responderia `false` justamente na maquina onde a sessao FUNCIONA — barrando
+  // o unico caminho que a Hotmart aceita.
+  if (!browserExterno) {
+    if (!fs.existsSync(SESSION_FILE)) throw new Error('Session not found: ' + SESSION_FILE);
+    // Fast-fail: so aborta quando o CAS respondeu explicitamente que o TGT morreu.
+    // `null` (indeterminado) segue o fluxo normal de proposito.
+    const viva = await sessaoHotmartViva();
+    if (viva === false) {
+      log.warn('Sessao Hotmart EXPIRADA (TGT invalido no CAS) — pulando sem gastar o ciclo. Exige login humano.');
+      return { success:false, platform:'hotmart', error:'SESSAO_EXPIRADA_LOGIN_HUMANO',
+               hotmartProductId:null, url:null, needsHumanLogin:true };
+    }
   }
   if(!pdfPath||!fs.existsSync(pdfPath)) throw new Error('PDF not found: '+pdfPath);
-  const session=JSON.parse(fs.readFileSync(SESSION_FILE,'utf8'));
-  const browser=await puppeteer.launch({
+  const session = browserExterno ? { cookies: [], localStorage: {} }
+                                 : JSON.parse(fs.readFileSync(SESSION_FILE,'utf8'));
+  const browser = browserExterno ? opts.browser : await puppeteer.launch({
     headless:true, executablePath:process.env.CHROME_EXECUTABLE||process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',
     args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu',
           '--disable-blink-features=AutomationControlled','--window-size=1280,900'],
     defaultViewport:{width:1280,height:900}
   });
+  // Fechar so o que este codigo abriu.
+  const fecharBrowser = async () => { if (!browserExterno) await browser.close().catch(()=>{}); };
   try {
-    const jwt=await refreshJWT(browser,session);
-    const page=await browser.newPage();
-    await setupPage(page,session,jwt);
+    // Com navegador EXTERNO nao se injeta nada: o Chrome do usuario ja esta
+    // autenticado, e sobrescrever cookies/localStorage com os do arquivo
+    // trocaria uma sessao viva por uma que a Hotmart recusa. So o navegador
+    // proprio (headless, sem sessao) precisa do transplante.
+    const page = await browser.newPage();
+    if (browserExterno) {
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36').catch(()=>{});
+    } else {
+      const jwt = await refreshJWT(browser, session);
+      await setupPage(page, session, jwt);
+    }
     page.on('framenavigated',f=>{if(f===page.mainFrame())log.info('NAV',f.url().slice(0,90));});
     // Establish session on products/producer (a pagina renderizou = sessao viva)
     log.info('Establishing session on products/producer...');
@@ -1926,7 +1952,7 @@ async function publishToHotmart(ebook) {
     }
     // Step 5: Screenshot
     const screenshot=await screenshotLandingPage(page,numericId,title);
-    await browser.close();
+    await fecharBrowser();
     log.info('Done: "'+title+'" id='+numericId+' finalized='+finalized+' cover='+coverUploaded);
     // Only return url if finalized — if not finalized, product is in draft and cannot be purchased.
     // Returning url=null when not finalized ensures autonomousAgent retries finalization next cycle.
@@ -1941,7 +1967,7 @@ async function publishToHotmart(ebook) {
       : `rascunho criado (id=${numericId}) mas nao finalizado — PDF ainda em processamento; o finalizeAgent aprova no proximo passe`;
     return{success:finalized,error:erro,hotmartProductId:numericId,url:finalized?'https://hotmart.com/product/'+numericId:null,screenshot,category,platform:'hotmart',uploaded,coverUploaded,audiobookUploaded};
   }catch(err){
-    await browser.close().catch(()=>{});
+    await fecharBrowser();
     log.error('publishToHotmart error: '+err.message);
     throw err;
   }
