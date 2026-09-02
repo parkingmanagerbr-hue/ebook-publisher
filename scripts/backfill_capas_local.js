@@ -76,19 +76,40 @@ function buscarPendentes(limite) {
   return m ? JSON.parse(m[0]) : [];
 }
 
-/** Manda o VPS regerar capas dos produtos cujo PNG a retencao apagou. */
-function regerarNoVps(quantos) {
+/**
+ * Manda o VPS regerar capas — DESTACADO, e depois espera a fila encher.
+ *
+ * Segurar o ssh aberto durante a regeracao ja derrubou o processo: com a IA de
+ * volta, cada capa passa pelo LLM do packaging e o lote estourou o timeout do
+ * ssh, matando o backfill inteiro no meio ("nada regerado; encerrando"). O
+ * trabalho remoto nao pode depender da duracao de uma conexao local.
+ *
+ * Entao dispara com nohup e PERGUNTA A FILA a cada 20s ate aparecer trabalho.
+ */
+/**
+ * Espera SINCRONA sem processo externo. O `timeout` do Windows exige console
+ * interativo e falha com stdio redirecionado; `sleep` nao existe la. Atomics
+ * funciona igual nos dois e nao gasta CPU.
+ */
+function dormir(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function regerarNoVps(quantos, esperaMax) {
+  const limite = esperaMax || 20 * 60 * 1000;
   try {
-    const saida = ssh(
-      `docker exec ${CONTAINER} sh -c "cd /app && node src/agents/regenCovers.js --limite=${quantos}"`,
-      600000
-    );
-    const m = saida.match(/regeracao: (\d+)\/(\d+)/);
-    return m ? parseInt(m[1], 10) : 0;
+    ssh(`nohup docker exec ${CONTAINER} sh -c "cd /app && node src/agents/regenCovers.js --limite=${quantos}" >> /opt/platform/logs/regen_covers.log 2>&1 &`, 60000);
   } catch (e) {
-    console.log('  (regeracao falhou: ' + String(e.message).slice(0, 80) + ')');
+    console.log('  (nao consegui disparar a regeracao: ' + String(e.message).slice(0, 70) + ')');
     return 0;
   }
+  const t0 = Date.now();
+  while (Date.now() - t0 < limite) {
+    dormir(20000);
+    const fila = buscarPendentes(quantos);
+    if (fila.length) return fila.length;
+  }
+  return 0;
 }
 
 function baixarCapa(remoto, destino) {
