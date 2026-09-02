@@ -50,10 +50,15 @@ function buscarPendentes(limite) {
     const db = new D('/app/data/metrics.db', { readonly: true });
     db.pragma('busy_timeout = 5000');
     const rows = db.prepare(
-      "SELECT id, title, subtitle, topic, description, pdf_path, cover_path, price, language " +
-      "FROM ebooks WHERE (hotmart_url IS NULL OR hotmart_url = '') " +
-      "AND (hotmart_product_id IS NULL OR hotmart_product_id = '') " +
-      "AND pdf_path IS NOT NULL ORDER BY rowid DESC LIMIT ?"
+      "SELECT e.id, e.title, e.subtitle, e.topic, e.description, e.pdf_path, e.cover_path, e.price, e.language " +
+      "FROM ebooks e WHERE (e.hotmart_url IS NULL OR e.hotmart_url = '') " +
+      "AND (e.hotmart_product_id IS NULL OR e.hotmart_product_id = '') " +
+      // Nao republicar titulo que ja tem produto no ar: auditoria de 02/09/2026
+      // achou 51 titulos duplicados no Hotmart, um com DEZOITO copias. A causa e
+      // o reciclo de topicos gerando o mesmo titulo, sem ninguem checar.
+      "AND NOT EXISTS (SELECT 1 FROM ebooks d WHERE d.title = e.title " +
+      "  AND d.hotmart_product_id IS NOT NULL AND d.hotmart_product_id <> '') " +
+      "AND e.pdf_path IS NOT NULL ORDER BY e.rowid DESC LIMIT ?"
     ).all(${limite} * 8);
     const ok = rows.filter(r => fs.existsSync(r.pdf_path)).slice(0, ${limite});
     console.log(JSON.stringify(ok));

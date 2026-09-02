@@ -103,13 +103,22 @@ function regerarNoVps(quantos, esperaMax) {
     console.log('  (nao consegui disparar a regeracao: ' + String(e.message).slice(0, 70) + ')');
     return 0;
   }
+  // Esperar o LOTE, nao o primeiro item. Voltar assim que aparece 1 capa fazia
+  // o ciclo processar um item por vez e pagar o custo fixo do ciclo (consulta +
+  // conexao) a cada capa — o ciclo 3 rodou com exatamente 1 item.
+  const alvo = Math.max(2, Math.ceil(quantos * 0.6));
   const t0 = Date.now();
+  let ultima = 0;
   while (Date.now() - t0 < limite) {
     dormir(20000);
     const fila = buscarPendentes(quantos);
-    if (fila.length) return fila.length;
+    if (fila.length >= alvo) return fila.length;
+    // Regeracao terminou (parou de crescer por 2 rodadas) e ja ha trabalho:
+    // seguir com o que tem em vez de esperar o limite inteiro.
+    if (fila.length && fila.length === ultima) return fila.length;
+    ultima = fila.length;
   }
-  return 0;
+  return ultima;
 }
 
 function baixarCapa(remoto, destino) {

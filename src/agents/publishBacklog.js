@@ -121,14 +121,23 @@ function buscarPendentes(plataforma, limite) {
   // Pega mais que o limite: parte tem PDF registrado mas sumido do disco
   // (retencao de artefatos apaga PDF antigo), e esses nao servem.
   const cand = db.prepare(
-    'SELECT id, title, subtitle, topic, description, pdf_path, cover_path, price, language ' +
-    'FROM ebooks WHERE (' + coluna + ' IS NULL OR ' + coluna + " = '') " +
+    'SELECT e.id, e.title, e.subtitle, e.topic, e.description, e.pdf_path, e.cover_path, e.price, e.language ' +
+    'FROM ebooks e WHERE (e.' + coluna + ' IS NULL OR e.' + coluna + " = '') " +
+    // NAO republicar titulo que ja tem produto na plataforma.
+    //
+    // Auditoria de 02/09/2026: 51 titulos duplicados no Hotmart, um deles com
+    // DEZOITO copias ("Ganhe Dinheiro com IA em 2026"). A causa e o reciclo de
+    // topicos: o mesmo topico volta, gera o mesmo titulo, e nada checava se
+    // aquele titulo ja estava no ar. Produto duplicado em marketplace nao se
+    // desfaz sozinho e polui a vitrine do produtor.
+    'AND NOT EXISTS (SELECT 1 FROM ebooks d WHERE d.title = e.title ' +
+    '  AND d.' + coluna + " IS NOT NULL AND d." + coluna + " <> '') " +
     // ORDER BY rowid, nao por id: o id e UUID, entao ordenar por ele e ordem
     // ALFABETICA, nao cronologica. Com id DESC eu pescava e-books antigos, cujo
     // PDF a retencao ja apagou — 18 de 20 candidatos vinham sem arquivo e o
     // backlog parecia impublicavel. rowid DESC traz os mais recentes, que sao
     // justamente os que ainda tem PDF em disco.
-    'AND pdf_path IS NOT NULL ORDER BY rowid DESC LIMIT ?'
+    'AND e.pdf_path IS NOT NULL ORDER BY e.rowid DESC LIMIT ?'
   ).all(limite * 4);
 
   garantirTabela(db);
