@@ -1870,14 +1870,24 @@ async function publishToHotmart(ebook, opts) {
           '--disable-blink-features=AutomationControlled','--window-size=1280,900'],
     defaultViewport:{width:1280,height:900}
   });
-  // Fechar so o que este codigo abriu.
-  const fecharBrowser = async () => { if (!browserExterno) await browser.close().catch(()=>{}); };
+  // Fechar so o que este codigo abriu — MAS a aba SEMPRE.
+  //
+  // Com navegador externo o `browser.close()` nao roda (correto: e do usuario),
+  // e antes disso a aba tambem nao era fechada: cada publicacao deixava uma aba
+  // orfa. Chegaram a 22 abas abertas e o Chrome empacou — a publicacao ficou
+  // 10 minutos sem sair do lugar. Aba e recurso do processo, nao do usuario.
+  let _paginaAberta = null;
+  const fecharBrowser = async () => {
+    if (_paginaAberta) await _paginaAberta.close().catch(()=>{});
+    if (!browserExterno) await browser.close().catch(()=>{});
+  };
   try {
     // Com navegador EXTERNO nao se injeta nada: o Chrome do usuario ja esta
     // autenticado, e sobrescrever cookies/localStorage com os do arquivo
     // trocaria uma sessao viva por uma que a Hotmart recusa. So o navegador
     // proprio (headless, sem sessao) precisa do transplante.
     const page = await browser.newPage();
+    _paginaAberta = page;
     if (browserExterno) {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36').catch(()=>{});
     } else {
