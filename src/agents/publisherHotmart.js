@@ -1422,19 +1422,22 @@ async function uploadCoverImage(page, numericId, coverPath) {
     }).catch(()=>{});
     await sleep(1500);
 
-    // Try approach A (file chooser) — works even with deep shadow DOM
-    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
-
-    // Try approach B (shadow DOM input expose) — last-resort DOM approach
+    // Shadow DOM PRIMEIRO: e o que de fato resolve. O file chooser falha sempre
+    // (12s de espera inutil por capa) e fica so como alternativa.
     if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
 
     // Re-navigate (not reload — reload triggers OAM redirect to home) — SPA can take >45s to mount on slow VPS
     log.info('Cover: re-navigating to /info to help SPA mount...');
     await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',
       {waitUntil:'domcontentloaded', timeout:20000}).catch(()=>{});
     await sleep(3000);
-    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    // SHADOW DOM PRIMEIRO, file chooser depois. Medido no reenvio em lote: o
+    // file chooser falha SEMPRE ("Waiting for FileChooser failed: 12000ms") e so
+    // entao o shadow DOM resolve. Tentar o que falha primeiro custava 12s por
+    // capa — quase 2h no passivo de 570 produtos.
     if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
 
     // Warm up via /overview → tab-click to /info as soft SPA nav, then retry
     await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
@@ -1449,8 +1452,12 @@ async function uploadCoverImage(page, numericId, coverPath) {
     });
     log.info('Informações tab clicked: ' + tabClicked);
     await sleep(3000);
-    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    // SHADOW DOM PRIMEIRO, file chooser depois. Medido no reenvio em lote: o
+    // file chooser falha SEMPRE ("Waiting for FileChooser failed: 12000ms") e so
+    // entao o shadow DOM resolve. Tentar o que falha primeiro custava 12s por
+    // capa — quase 2h no passivo de 570 produtos.
     if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
 
     // Debug what we actually see
     const dbg = await page.evaluate(() => {
