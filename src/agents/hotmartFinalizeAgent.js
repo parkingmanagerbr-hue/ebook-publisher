@@ -29,8 +29,43 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let _tokenMemoria = '';
 
+// Arquivo de token: alternativa a variavel de ambiente.
+//
+// O access_token vive ~2 dias e a renovacao automatica via CAS parou de
+// funcionar — a Hotmart amarra a sessao a origem, entao o TGT guardado no VPS
+// e recusado (o CAS responde 404). O token novo so se obtem na maquina do
+// login, lendo localStorage["token"] do navegador autenticado.
+//
+// Trocar variavel de ambiente exigiria RECRIAR o container, e segredo que mora
+// dentro do container se perde nisso. Um arquivo permite renovar o token sem
+// derrubar nada.
+const TOKEN_FILE = process.env.HOTMART_TOKEN_FILE || '/app/data/hotmart_access_token.txt';
+
+/**
+ * Um JWT utilizavel: tres partes e `exp` no futuro.
+ *
+ * Precedencia cega por ordem de fonte nao serve aqui. O ambiente do container
+ * tinha HOTMART_ACCESS_TOKEN com 42 caracteres — nem JWT era — e vencia o
+ * arquivo com o token bom de 2.146. O agente reportava "token expirado (401)"
+ * enquanto o token valido estava em disco, ao lado.
+ */
+function jwtUtilizavel(t) {
+  if (!t || t.length < 100) return false;
+  const partes = t.split('.');
+  if (partes.length !== 3) return false;
+  try {
+    const p = JSON.parse(Buffer.from(partes[1], 'base64').toString());
+    // 60s de folga: token que morre no meio do lote nao serve.
+    return !p.exp || p.exp * 1000 > Date.now() + 60_000;
+  } catch { return false; }
+}
+
 function token() {
-  return _tokenMemoria || (process.env.HOTMART_ACCESS_TOKEN || '').trim();
+  const candidatos = [_tokenMemoria, (process.env.HOTMART_ACCESS_TOKEN || '').trim()];
+  try { candidatos.push(require('fs').readFileSync(TOKEN_FILE, 'utf8').trim()); } catch {}
+  // Escolhe pelo que PRESTA, nao pela ordem da fonte.
+  for (const c of candidatos) if (jwtUtilizavel(c)) return c;
+  return '';
 }
 
 /**
