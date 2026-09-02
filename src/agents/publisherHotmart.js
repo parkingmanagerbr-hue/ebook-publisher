@@ -1229,6 +1229,12 @@ async function createProduct(page, session, ebook) {
     const token = await page.evaluate(()=>localStorage.getItem('token')).catch(()=>null);
     if (token) {
       const listUrls = [
+        // Este endpoint E o que responde. Medido em 02/09/2026 com Bearer puro:
+        // HTTP 200 com {"data":[{id, name, situation, ...}]}. Os dois abaixo
+        // devolviam HTML (a pagina de login), e o log registrava
+        // '{"ok":false,"raw":"<!DOCTYPE ..."}' — o produto tinha sido criado e o
+        // id se perdia, virando produto orfao no marketplace.
+        'https://api-product.vulcano.hotmart.com/product/v2/product?page=1',
         'https://api-product.vulcano.hotmart.com/product/v2/user/product/list?max=10&page=0',
         'https://api-product.vulcano.hotmart.com/product/v1/user/product/list?max=10&page=0',
         'https://app.hotmart.com/api/v1/products?max=10&page=0',
@@ -1243,10 +1249,21 @@ async function createProduct(page, session, ebook) {
           log.info('List URL '+url.slice(40)+' => '+JSON.stringify(resp).slice(0,120));
           if (resp.ok) {
             const data = resp.data;
-            const items = data.items || data.list || data.content || data.products || [];
+            // `data.data` PRECISA estar aqui: e a forma do endpoint que de fato
+            // responde ({"data":[{id,name,situation}]}). Sem isso o fallback
+            // recebia 200 e mesmo assim nao achava produto nenhum.
+            const items = data.data || data.items || data.list || data.content || data.products || [];
             if (items.length > 0) {
               const match = items.find(x => (x.name||x.productName||'').toLowerCase().includes((title||'').toLowerCase().slice(0,15)));
-              const candidate = match || items[0];
+              // EXIGIR casamento por titulo. O `items[0]` as cegas so seria
+              // seguro numa lista ordenada por recencia; no endpoint que de fato
+              // responde a ordem nao e essa, e pegar o primeiro gravaria o id de
+              // OUTRO produto no e-book — pior que falhar, porque o erro fica
+              // invisivel e o link aponta para o produto errado.
+              const candidate = match || null;
+              if (!candidate && items.length) {
+                log.warn('lista devolveu ' + items.length + ' produtos mas nenhum casa com o titulo — nao arrisco gravar id errado');
+              }
               if (candidate && (candidate.id||candidate.productId)) {
                 capturedNumericId = String(candidate.id || candidate.productId);
                 log.info('ID from list ('+url.slice(40)+'): '+capturedNumericId+' name='+(candidate.name||candidate.productName));
