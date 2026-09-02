@@ -137,22 +137,29 @@ function buscarPendentes(plataforma, limite) {
     // PDF a retencao ja apagou — 18 de 20 candidatos vinham sem arquivo e o
     // backlog parecia impublicavel. rowid DESC traz os mais recentes, que sao
     // justamente os que ainda tem PDF em disco.
-    'AND e.pdf_path IS NOT NULL ORDER BY e.rowid DESC LIMIT ?'
+    // PORTAO: so publica com CAPA em disco. Produto entra no marketplace uma
+    // vez so — subir com o placeholder cinza deixa o produto competindo com um
+    // icone generico, e nao ha segunda impressao.
+    'AND e.pdf_path IS NOT NULL AND e.cover_path IS NOT NULL' +
+    " AND e.cover_path <> '' " +
+    'ORDER BY e.rowid DESC LIMIT ?'
   ).all(limite * 4);
 
   garantirTabela(db);
   garantirTabelaFalhas(db);
   const validos = [];
-  let semArquivo = 0, reservados = 0, queimados = 0;
+  let semArquivo = 0, reservados = 0, queimados = 0, semCapa = 0;
   for (const e of cand) {
     if (validos.length >= limite) break;
     if (!e.pdf_path || !fs.existsSync(e.pdf_path)) { semArquivo++; continue; }
+    if (!e.cover_path || !fs.existsSync(e.cover_path)) { semCapa++; continue; }
     if (esgotado(db, e.id, plataforma)) { queimados++; continue; }
     if (!reservar(db, e.id, plataforma)) { reservados++; continue; }
     validos.push(e);
   }
   if (semArquivo) log.info('ignorados ' + semArquivo + ' sem PDF em disco (retencao ja apagou)');
   if (reservados) log.info('ignorados ' + reservados + ' ja reservados por outro lote');
+  if (semCapa) log.info('ignorados ' + semCapa + ' sem capa viral em disco');
   if (queimados) log.info('ignorados ' + queimados + ' que ja falharam ' + MAX_FALHAS + 'x (nao e sessao)');
   return validos;
 }

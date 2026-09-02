@@ -58,9 +58,16 @@ function buscarPendentes(limite) {
       // o reciclo de topicos gerando o mesmo titulo, sem ninguem checar.
       "AND NOT EXISTS (SELECT 1 FROM ebooks d WHERE d.title = e.title " +
       "  AND d.hotmart_product_id IS NOT NULL AND d.hotmart_product_id <> '') " +
-      "AND e.pdf_path IS NOT NULL ORDER BY e.rowid DESC LIMIT ?"
-    ).all(${limite} * 8);
-    const ok = rows.filter(r => fs.existsSync(r.pdf_path)).slice(0, ${limite});
+      "AND e.pdf_path IS NOT NULL AND e.cover_path IS NOT NULL AND e.cover_path <> '' " +
+      "ORDER BY e.rowid DESC LIMIT ?"
+    ).all(${limite} * 10);
+    // PORTAO: so publica com CAPA VIRAL em disco. Produto entra no marketplace
+    // uma vez so — se subir com o placeholder cinza, fica competindo com um
+    // icone generico e nao ha segunda impressao. Melhor nao publicar hoje do
+    // que publicar sem capa.
+    const ok = rows
+      .filter(r => fs.existsSync(r.pdf_path) && fs.existsSync(r.cover_path))
+      .slice(0, ${limite});
     console.log(JSON.stringify(ok));
   `);
   const m = saida.match(/\[.*\]/s);
@@ -116,11 +123,12 @@ async function main() {
       let r = null;
       try {
         if (!baixar(e.pdf_path, pdfLocal)) throw new Error('PDF nao veio do VPS');
-        const temCapa = e.cover_path ? baixar(e.cover_path, capaLocal) : false;
+        // A capa deixou de ser opcional: sem ela, nao publica.
+        if (!baixar(e.cover_path, capaLocal)) throw new Error('capa viral nao veio do VPS — nao publico sem capa');
 
         r = await publishToHotmart({
           title: e.title, subtitle: e.subtitle, topic: e.topic, description: e.description,
-          pdfPath: pdfLocal, coverPath: temCapa ? capaLocal : null,
+          pdfPath: pdfLocal, coverPath: capaLocal,
           price: e.price, language: e.language,
         }, { browser });   // <- navegador do usuario: sessao nativa
 
