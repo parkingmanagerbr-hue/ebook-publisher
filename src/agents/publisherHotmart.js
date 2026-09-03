@@ -1281,6 +1281,39 @@ async function createProduct(page, session, ebook) {
   return { numericId: capturedNumericId, category, wizardCoverUploaded };
 }
 
+/**
+ * A capa REALMENTE entrou? Pergunta a API do produto, nao ao navegador.
+ *
+ * Em 03/09/2026 descobri que esta funcao vinha devolvendo `true` sem efeito
+ * nenhum: 585 capas registradas como enviadas e `urlCoverPhoto=null` em TODAS.
+ * O arquivo injetado no input vira um preview blob: local e o upload para o
+ * servidor nunca dispara — e um dos endpoints tentados responde 200 sem fazer
+ * nada, o que bastava para o codigo cantar vitoria.
+ *
+ * Reportar sucesso falso e pior do que falhar: esconde o problema e faz o
+ * chamador marcar o item como resolvido, tirando-o da fila para sempre.
+ */
+async function capaConfirmadaNaApi(page, numericId) {
+  try {
+    const r = await page.evaluate(async (id) => {
+      const tok = localStorage.getItem('token');
+      if (!tok) return { erro: 'sem token no localStorage' };
+      const resp = await fetch('https://api-product.vulcano.hotmart.com/product/v1/product/' + id + '/basic-information',
+        { headers: { Authorization: 'Bearer ' + tok } });
+      if (!resp.ok) return { erro: 'HTTP ' + resp.status };
+      const j = await resp.json();
+      const p = j.data || j;
+      return { webPath: (p.coverPhoto && p.coverPhoto.webPath) || null };
+    }, String(numericId));
+    if (r && r.erro) { log.warn('Cover: nao consegui confirmar na API (' + r.erro + ')'); return null; }
+    return !!(r && r.webPath);
+  } catch (e) {
+    // Indeterminado != falso: sem confirmacao, o chamador decide.
+    log.warn('Cover: confirmacao falhou: ' + String(e.message).slice(0, 60));
+    return null;
+  }
+}
+
 async function uploadCoverImage(page, numericId, coverPath) {
   if (!coverPath || !fs.existsSync(coverPath)) { log.warn('No cover image at: '+coverPath); return false; }
   log.info('Uploading cover to product '+numericId+'...');
@@ -1441,8 +1474,16 @@ async function uploadCoverImage(page, numericId, coverPath) {
 
     // Shadow DOM PRIMEIRO: e o que de fato resolve. O file chooser falha sempre
     // (12s de espera inutil por capa) e fica so como alternativa.
-    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
-    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
 
     // Re-navigate (not reload — reload triggers OAM redirect to home) — SPA can take >45s to mount on slow VPS
     log.info('Cover: re-navigating to /info to help SPA mount...');
@@ -1453,8 +1494,16 @@ async function uploadCoverImage(page, numericId, coverPath) {
     // file chooser falha SEMPRE ("Waiting for FileChooser failed: 12000ms") e so
     // entao o shadow DOM resolve. Tentar o que falha primeiro custava 12s por
     // capa — quase 2h no passivo de 570 produtos.
-    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
-    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
 
     // Warm up via /overview → tab-click to /info as soft SPA nav, then retry
     await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/overview',
@@ -1473,8 +1522,16 @@ async function uploadCoverImage(page, numericId, coverPath) {
     // file chooser falha SEMPRE ("Waiting for FileChooser failed: 12000ms") e so
     // entao o shadow DOM resolve. Tentar o que falha primeiro custava 12s por
     // capa — quase 2h no passivo de 570 produtos.
-    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
-    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+    if (await tryShadowDomInput()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
+    if (await tryFileChooser()) { if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
 
     // Debug what we actually see
     const dbg = await page.evaluate(() => {
@@ -1564,12 +1621,24 @@ async function uploadCoverImage(page, numericId, coverPath) {
         results: (apiResult.results||[]).map(r=>r.method+' '+r.status+' '+r.url).join(' | ')
       }).slice(0, 400));
 
-      if (apiResult && apiResult.ok) { log.info('Cover uploaded via API!'); if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+      if (apiResult && apiResult.ok) { log.info('Cover uploaded via API!'); if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
       // Even if page.evaluate returned ok:false, CDP may have seen 200 — trust CDP
-      if (_coverApiSuccessViaCdp) { log.info('Cover uploaded via API (CDP 200 confirmed)!'); if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+      if (_coverApiSuccessViaCdp) { log.info('Cover uploaded via API (CDP 200 confirmed)!'); if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
     } catch(e) {
       // "Execution context was destroyed" means a navigation fired mid-evaluate — check CDP flag
-      if (_coverApiSuccessViaCdp) { log.info('Cover API 200 confirmed via CDP (context destroyed mid-eval)'); if (_coverCdp) await _coverCdp.detach().catch(()=>{}); return true; }
+      if (_coverApiSuccessViaCdp) { log.info('Cover API 200 confirmed via CDP (context destroyed mid-eval)'); if (_coverCdp) await _coverCdp.detach().catch(()=>{});
+      // NAO confiar no retorno do metodo: confirmar na API antes de dizer sim.
+      { const ok = await capaConfirmadaNaApi(page, numericId);
+        if (ok === false) { log.warn('Cover: metodo reportou sucesso mas a API diz que NAO entrou'); return false; }
+        return true; } }
       log.warn('API cover upload error: ' + e.message.slice(0, 100));
     }
 
