@@ -185,12 +185,18 @@ function saveEbook(ebook) {
     db.prepare(`INSERT OR IGNORE INTO topics (topic, category) VALUES (?, ?)`)
       .run(ebook.topic, ebook.category || 'geral');
   }
+  // `language` PRECISA entrar aqui. Sem ela a coluna caía no default 'pt-BR' e
+  // TODAS as 8.050 linhas ficaram marcadas como portugues — inclusive e-books
+  // escritos em japones, chines, alemao. O pipeline escolhe o idioma por ciclo
+  // (getNextLanguage) e o log ate mostra "[idioma=pl]", mas o valor morria aqui
+  // e o produto era cadastrado no Hotmart como Portugues/Brasil.
   db.prepare(`
     INSERT OR REPLACE INTO ebooks
-    (id, topic, title, subtitle, description, cover_path, pdf_path, status, price, ai_provider)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, topic, title, subtitle, description, cover_path, pdf_path, status, price, ai_provider, language)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(ebook.id, ebook.topic, ebook.title, ebook.subtitle, ebook.description,
-         ebook.coverPath, ebook.pdfPath, ebook.status || 'pending', ebook.price || 4.99, ebook.aiProvider);
+         ebook.coverPath, ebook.pdfPath, ebook.status || 'pending', ebook.price || 4.99, ebook.aiProvider,
+         ebook.language || 'pt-BR');
 }
 
 function updateEbookStatus(id, status, extra = {}) {

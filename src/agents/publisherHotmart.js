@@ -151,8 +151,98 @@ async function handleSessionDialog(page) {
   }).catch(() => null);
 }
 
+/**
+ * Rotulo do idioma como a Hotmart mostra no seletor (interface em PT).
+ * Medido no banco: 3.123 e-books estavam com idioma errado — o pipeline gera em
+ * varios idiomas mas o produto sempre nascia "Portugues (Brasil)", porque
+ * ninguem tocava neste campo. Resultado visivel: e-book em japones anunciado
+ * como portugues, com Brasil de pais principal.
+ */
+const ROTULO_IDIOMA = {
+  'pt-BR': 'Português', 'en-US': 'Inglês',   'es-ES': 'Espanhol',
+  'de-DE': 'Alemão',    'fr-FR': 'Francês',  'it-IT': 'Italiano',
+  'nl-NL': 'Holandês',  'pl-PL': 'Polonês',  'ja-JP': 'Japonês',
+  'zh-CN': 'Chinês',    'ko-KR': 'Coreano',  'ru-RU': 'Russo',
+};
+
+/**
+ * Escolhe o idioma do produto no wizard.
+ *
+ * Mesma tecnica da categoria: os `hot-select` da Hotmart checam
+ * `event.isTrusted`, entao a selecao tem de vir de page.mouse.click() com as
+ * coordenadas lidas do DOM — clique sintetico e ignorado em silencio.
+ *
+ * NUNCA lanca: idioma errado e ruim, produto nao publicado e pior.
+ */
+async function selecionarIdioma(page, language) {
+  const rotulo = ROTULO_IDIOMA[language || 'pt-BR'];
+  if (!rotulo || rotulo === 'Português') return false;   // ja e o padrao
+  try {
+    const abrir = await page.evaluate(() => {
+      function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');}
+      // O seletor de idioma fica sob o rotulo "Idioma do produto".
+      // PRECISA atravessar shadow DOM: os hot-select da Hotmart ficam dentro de
+      // shadow roots aninhados, e querySelectorAll NAO entra neles — foi por
+      // isso que a primeira versao nunca achou o campo e o idioma continuou
+      // saindo PT_BR mesmo com o codigo no lugar.
+      function varrer(raiz, prof, achados) {
+        if (prof > 12) return achados;
+        for (const el of raiz.querySelectorAll('hot-select, select, [role=combobox]')) achados.push(el);
+        for (const el of raiz.querySelectorAll('*')) if (el.shadowRoot) varrer(el.shadowRoot, prof + 1, achados);
+        return achados;
+      }
+      const todos = varrer(document, 0, []);
+      const alvo = todos.find(el => {
+        const ph = norm((el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || ''));
+        return /idioma|language/.test(ph) && el.getBoundingClientRect().width > 0;
+      }) || todos.find(el => {
+        const volta = norm(el.textContent || '');
+        return /portugu/.test(volta) && el.getBoundingClientRect().width > 0;
+      });
+      if (!alvo) return null;
+      alvo.scrollIntoView({ behavior: 'instant', block: 'center' });
+      const r = alvo.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }).catch(() => null);
+    if (!abrir) { log.info('Idioma: seletor nao encontrado — mantendo padrao'); return false; }
+
+    await page.mouse.click(abrir.x, abrir.y);
+    await sleep(900);
+
+    const opcao = await page.evaluate((rot) => {
+      function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
+      const alvoN = norm(rot);
+      function varrerOpc(raiz, prof, achados) {
+        if (prof > 12) return achados;
+        for (const el of raiz.querySelectorAll('button, li, [role=option], hot-select-option, span, div')) achados.push(el);
+        for (const el of raiz.querySelectorAll('*')) if (el.shadowRoot) varrerOpc(el.shadowRoot, prof + 1, achados);
+        return achados;
+      }
+      const cand = varrerOpc(document, 0, []);
+      const el = cand.find(b => {
+        const t = norm(b.textContent || '');
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.height < 80 && b.children.length < 3 && (t === alvoN || t.startsWith(alvoN));
+      });
+      if (!el) return null;
+      el.scrollIntoView({ behavior: 'instant', block: 'center' });
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, texto: el.textContent.trim().slice(0, 30) };
+    }, rotulo).catch(() => null);
+
+    if (!opcao) { log.info('Idioma: opcao "' + rotulo + '" nao encontrada — mantendo padrao'); return false; }
+    await page.mouse.click(opcao.x, opcao.y);
+    await sleep(700);
+    log.info('Idioma selecionado: ' + opcao.texto);
+    return true;
+  } catch (e) {
+    log.warn('Idioma: falhou (' + String(e.message).slice(0, 60) + ') — mantendo padrao');
+    return false;
+  }
+}
+
 async function createProduct(page, session, ebook) {
-  const { title, description, topic, coverPath } = ebook;
+  const { title, description, topic, coverPath, language } = ebook;
   const category = getCategoryPT(title, topic);
   log.info('Creating: "' + title + '" => ' + category);
 
@@ -340,9 +430,25 @@ async function createProduct(page, session, ebook) {
   const catTriggerRect = await page.evaluate((catKw) => {
     function norm(s){return(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
     // Priority 1: ANY hot-select element — search light DOM + shadow DOM (Hotmart nests components)
+    // O primeiro hot-select da tela e o de IDIOMA ("Qual o idioma do seu
+    // produto"), nao o de categoria. Pegar "qualquer hot-select" abria o
+    // dropdown errado — o log registrava
+    // 'Category trigger clicked: hot-select(ph=Qual o idioma...)'. Agora
+    // escolhe pelo placeholder e DESCARTA explicitamente o de idioma.
+    function ehIdioma(el) {
+      const t = ((el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+      return /idioma|language/.test(t);
+    }
+    function ehCategoria(el) {
+      const t = ((el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+      return /categor/.test(t);
+    }
     function findHotSelect(root) {
       const els = Array.from(root.querySelectorAll ? root.querySelectorAll('hot-select') : []);
-      for (const el of els) { const r = el.getBoundingClientRect(); if (r.width > 50) return el; }
+      // 1) o que se identifica como categoria
+      for (const el of els) { const r = el.getBoundingClientRect(); if (r.width > 50 && ehCategoria(el)) return el; }
+      // 2) qualquer um que NAO seja o de idioma
+      for (const el of els) { const r = el.getBoundingClientRect(); if (r.width > 50 && !ehIdioma(el)) return el; }
       const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
       for (const el of all) {
         if (el.shadowRoot) { const r = findHotSelect(el.shadowRoot); if (r) return r; }
@@ -450,6 +556,11 @@ async function createProduct(page, session, ebook) {
   } else {
     log.warn('Category NOT found — debug: ' + JSON.stringify(catRect).slice(0,200));
   }
+
+  // Idioma DEPOIS da categoria e ANTES do Continuar: e o ultimo instante em que
+  // o campo ainda esta na tela. Nao bloqueia — se falhar, o produto sai com o
+  // padrao (portugues), que e o comportamento de antes.
+  await selecionarIdioma(page, language);
 
   // After category click, Hotmart may show a 2-step panel:
   // Step A — category panel has its OWN Continuar (confirms category selection)
@@ -2011,7 +2122,10 @@ async function publishToHotmart(ebook, opts) {
       category = ebook.category || 'Outros';
       wizardCoverUploaded = false;
     } else {
-      const created = await createProduct(page,session,{title,topic,description,coverPath,pdfPath});
+      // `language` PRECISA vir junto: o objeto era montado a mao e omitia o
+      // idioma, entao selecionarIdioma recebia undefined e saia calado — o
+      // produto nascia sempre Portugues/Brasil mesmo com o codigo no lugar.
+      const created = await createProduct(page,session,{title,topic,description,coverPath,pdfPath,language:ebook.language});
       numericId = created.numericId; category = created.category; wizardCoverUploaded = created.wizardCoverUploaded;
       if(!numericId || !/^\d+$/.test(String(numericId))) throw new Error('No product ID after creation (got: '+numericId+')');
     }
