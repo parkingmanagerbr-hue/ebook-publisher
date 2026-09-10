@@ -32,12 +32,46 @@ const STYLE = {
 };
 const NEG = 'blurry, distorted face, deformed, extra fingers, watermark, text, letters, logo, low quality, cartoon';
 
-function badgeFor(subtitle, topic) {
+/**
+ * Rotulos da capa por idioma.
+ *
+ * O badge e o kicker eram texto fixo em portugues, entao livro em ingles saia
+ * com "PASSO A PASSO" e "METODO PRATICO" na capa — o comprador ve a capa antes
+ * de qualquer outra coisa, e ela dizia que o livro era portugues.
+ *
+ * Idioma nao mapeado cai no INGLES, nao no portugues: para um livro em holandes
+ * o rotulo em ingles passa despercebido, o em portugues denuncia erro.
+ */
+const ROTULOS = {
+  'pt-BR': { passo: 'Passo a Passo', zero: 'Do Zero ao Pro', completo: 'Guia Completo', guia: 'Guia 2026', kicker: 'Método Prático' },
+  'en-US': { passo: 'Step by Step',  zero: 'Zero to Pro',    completo: 'Complete Guide', guia: '2026 Guide', kicker: 'Practical Method' },
+  'es-ES': { passo: 'Paso a Paso',   zero: 'De Cero a Pro',  completo: 'Guía Completa',  guia: 'Guía 2026',  kicker: 'Método Práctico' },
+  'fr-FR': { passo: 'Pas à Pas',     zero: 'De Zéro à Pro',  completo: 'Guide Complet',  guia: 'Guide 2026', kicker: 'Méthode Pratique' },
+  'de-DE': { passo: 'Schritt für Schritt', zero: 'Von Null auf Pro', completo: 'Kompletter Leitfaden', guia: 'Leitfaden 2026', kicker: 'Praktische Methode' },
+  'it-IT': { passo: 'Passo per Passo', zero: 'Da Zero a Pro', completo: 'Guida Completa', guia: 'Guida 2026', kicker: 'Metodo Pratico' },
+  'nl-NL': { passo: 'Stap voor Stap', zero: 'Van Nul naar Pro', completo: 'Complete Gids', guia: 'Gids 2026', kicker: 'Praktische Methode' },
+  'pl-PL': { passo: 'Krok po Kroku', zero: 'Od Zera do Pro', completo: 'Kompletny Przewodnik', guia: 'Przewodnik 2026', kicker: 'Metoda Praktyczna' },
+  'ja-JP': { passo: 'ステップバイステップ', zero: 'ゼロからプロへ', completo: '完全ガイド', guia: '2026年ガイド', kicker: '実践メソッド' },
+  'zh-CN': { passo: '循序渐进', zero: '从零到专业', completo: '完整指南', guia: '2026指南', kicker: '实用方法' },
+  'ko-KR': { passo: '단계별 가이드', zero: '제로부터 프로까지', completo: '완벽 가이드', guia: '2026 가이드', kicker: '실전 방법' },
+  'ru-RU': { passo: 'Шаг за Шагом', zero: 'С Нуля до Про', completo: 'Полное Руководство', guia: 'Руководство 2026', kicker: 'Практический Метод' },
+};
+function rotulos(idioma) { return ROTULOS[idioma] || ROTULOS['en-US']; }
+
+function badgeFor(subtitle, topic, idioma) {
+  const r = rotulos(idioma);
   const t = ((topic || '') + ' ' + (subtitle || '')).toLowerCase();
-  if (/passo|método|guia prático/.test(t)) return 'Passo a Passo';
-  if (/iniciante|zero|começar/.test(t))    return 'Do Zero ao Pro';
-  if (/completo|definitivo/.test(t))        return 'Guia Completo';
-  return 'Guia 2026';
+  // As pistas so existem em portugues, entao so valem quando o livro e portugues.
+  if (idioma === 'pt-BR') {
+    if (/passo|método|guia prático/.test(t)) return r.passo;
+    if (/iniciante|zero|começar/.test(t))    return r.zero;
+    if (/completo|definitivo/.test(t))        return r.completo;
+  } else {
+    if (/step|paso|schritt|passo/.test(t))            return r.passo;
+    if (/beginner|zero|principiante|anfänger/.test(t)) return r.zero;
+    if (/complete|completo|komplett/.test(t))          return r.completo;
+  }
+  return r.guia;
 }
 // separa o título: última palavra (ou palavra-chave) vira o destaque colorido
 function splitTitle(title) {
@@ -130,7 +164,8 @@ function escolherDoPool(category) {
   return null;
 }
 
-async function generateViralCover(title, subtitle, topic, category, coversDir) {
+async function generateViralCover(title, subtitle, topic, category, coversDir, idioma) {
+  const lang = idioma || 'pt-BR';
   if (!puppeteer) { log.warn('sem puppeteer'); return null; }
   const st = STYLE[category] || STYLE.default;
   const dir = coversDir || path.join(__dirname, '..', '..', 'data', 'covers');
@@ -169,7 +204,7 @@ async function generateViralCover(title, subtitle, topic, category, coversDir) {
     let pk = null;
     try {
       const { gerarPackaging } = require('./coverPackaging');
-      pk = await gerarPackaging({ titulo: title, subtitulo: subtitle, topico: topic, categoria: category });
+      pk = await gerarPackaging({ titulo: title, subtitulo: subtitle, topico: topic, categoria: category, idioma: lang });
     } catch (e) { log.warn(`packaging indisponivel: ${e.message.slice(0, 70)}`); }
     // Registrar se o gancho veio mesmo da IA. Sem isto, uma capa feita durante
     // queda de provedor sai com o titulo comum e ainda assim seria marcada como
@@ -179,8 +214,8 @@ async function generateViralCover(title, subtitle, topic, category, coversDir) {
     const html = coverHTML({
       title:    pk ? pk.titulo    : title,
       subtitle: pk ? pk.subtitulo : subtitle,
-      kicker:   pk ? pk.kicker    : badgeKicker(topic),
-      badge:    pk ? pk.badge     : badgeFor(subtitle, topic),
+      kicker:   pk ? pk.kicker    : badgeKicker(topic, lang),
+      badge:    pk ? pk.badge     : badgeFor(subtitle, topic, lang),
       st, imgB64,
     });
     const browser = await puppeteer.launch({ headless: 'new', executablePath: CHROME, args: ['--no-sandbox', '--disable-setuid-sandbox', '--force-color-profile=srgb'] });
@@ -200,8 +235,8 @@ async function generateViralCover(title, subtitle, topic, category, coversDir) {
     return null;
   } finally { try { fs.unlinkSync(tmp); } catch (_) {} }
 }
-function badgeKicker(topic) {
-  return 'Método Prático';
+function badgeKicker(topic, idioma) {
+  return rotulos(idioma).kicker;
 }
 
 let _ultimoComGancho = false;

@@ -28,19 +28,37 @@ function ssh(cmd, timeout) {
     { encoding: 'utf8', timeout: timeout || 180000, maxBuffer: 8 * 1024 * 1024 });
 }
 
-/** Dispara a regeracao DESTACADA: segurar o ssh aberto ja derrubou o processo. */
+/**
+ * Regera um bloco e ESPERA terminar, devolvendo o resultado.
+ *
+ * Antes isto era disparado destacado (`nohup ... &`) e o orquestrador seguia sem
+ * saber o que aconteceu — decidia "acabou" pela fila de UPLOAD, que so enche
+ * quando a capa sai COM gancho. Numa janela de IA fraca, 4 de 40 ganhavam gancho
+ * e o loop lia isso como catalogo terminado. Quem manda no fim e a regeracao.
+ */
 function regerar(quantos) {
   try {
-    // --todas: troca a capa ANTIGA pela viral tambem em quem ja tem arquivo.
-    // Sem esta flag o regenerador so atende quem perdeu o PNG pela retencao, e
-    // o catalogo antigo ficaria com a capa velha para sempre.
-    ssh(`nohup docker exec ${CONTAINER} sh -c "cd /app && node src/agents/regenCovers.js --limite=${quantos} --todas" ` +
-        `>> /opt/platform/logs/regen_covers.log 2>&1 &`, 60000);
-    return true;
+    const saida = ssh(
+      `docker exec ${CONTAINER} sh -c "cd /app && node src/agents/regenCovers.js --limite=${quantos} --todas"`,
+      50 * 60 * 1000);
+    const m = saida.match(/\{"total":(\d+),"ok":(\d+),"semGancho":(\d+)/);
+    if (!m) return { total: 0, ok: 0, semGancho: 0 };
+    return { total: +m[1], ok: +m[2], semGancho: +m[3] };
   } catch (e) {
-    console.log('  (nao consegui disparar a regeracao: ' + String(e.message).slice(0, 70) + ')');
-    return false;
+    console.log('  (regeracao falhou: ' + String(e.message).slice(0, 70) + ')');
+    return null;
   }
+}
+
+/**
+ * Destrava provedor de IA que ja voltou.
+ *
+ * Sem isto o gancho para de sair no meio do passe: um 429 passageiro marca o
+ * provedor por horas e as capas seguintes saem com o titulo comum. A sondagem
+ * pergunta a API antes de liberar, entao rodar de rotina nao mascara queda real.
+ */
+function destravarIA() {
+  try { ssh(`docker exec ${CONTAINER} sh -c "cd /app && node destravar_ia.js"`, 180000); } catch {}
 }
 
 function dormir(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -58,26 +76,31 @@ function aplicarLote(lote) {
 async function main() {
   const lote = parseInt(arg('lote', '40'), 10);
   const ciclos = parseInt(arg('ciclos', '200'), 10);
-  let totalOk = 0, secasSeguidas = 0;
+  let totalOk = 0, totalGeradas = 0, semGanchoAcum = 0;
   const t0 = Date.now();
 
   for (let c = 1; c <= ciclos; c++) {
+    destravarIA();                          // gancho depende de provedor vivo
+    const g = regerar(lote);
+    if (!g) break;
+
+    // total === 0 e o UNICO fim legitimo: nao ha mais e-book sem capa viral.
+    if (g.total === 0) { console.log('catalogo inteiro com capa viral — encerrando'); break; }
+
     const r = aplicarLote(lote);
     totalOk += r.ok;
+    totalGeradas += g.ok;
+    semGanchoAcum += g.semGancho;
     const min = ((Date.now() - t0) / 60000).toFixed(0);
-    console.log(`[ciclo ${c}] ${r.ok}/${r.total} | acumulado ${totalOk} | ${min} min`);
+    console.log(`[ciclo ${c}] geradas ${g.ok}/${g.total}` +
+      (g.semGancho ? ` (${g.semGancho} sem gancho, voltam)` : '') +
+      ` | subidas ${r.ok}/${r.total} | acumulado ${totalGeradas} geradas / ${totalOk} subidas | ${min} min`);
 
-    if (r.vazio || r.total === 0) {
-      // Fila seca quase sempre significa capa apagada pela retencao, nao
-      // trabalho concluido — a diferenca ja me custou um diagnostico errado.
-      console.log('  fila seca — regerando ' + lote + ' capas no VPS...');
-      if (!regerar(lote)) break;
-      dormir(90000);                       // tempo de a regeracao produzir
-      secasSeguidas++;
-      // Tres secas seguidas mesmo apos regerar = nao ha mais o que alcancar.
-      if (secasSeguidas >= 3) { console.log('nada mais a regerar — encerrando'); break; }
-    } else {
-      secasSeguidas = 0;
+    // Passe inteiro sem gancho = provedor de texto fora. Insistir so gasta
+    // imagem para refazer tudo depois; melhor esperar a cota respirar.
+    if (g.ok > 0 && g.semGancho === g.ok) {
+      console.log('  nenhum gancho neste passe — esperando a IA de texto voltar');
+      dormir(180000);
     }
   }
   console.log(`\nTOTAL GERAL: ${totalOk} capas em ${((Date.now() - t0) / 60000).toFixed(0)} min`);

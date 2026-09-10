@@ -47,7 +47,7 @@ function buscarSemArquivo(db, limite) {
     // Nao existe coluna `category` na tabela: a categoria e DERIVADA do topico
     // pela mesma funcao que o publisher usa (getCategory), entao a capa regerada
     // fica coerente com a categoria em que o produto foi cadastrado.
-    'SELECT e.id, e.title, e.subtitle, e.topic, e.hotmart_product_id AS pid, e.cover_path ' +
+    'SELECT e.id, e.title, e.subtitle, e.topic, e.language, e.hotmart_product_id AS pid, e.cover_path ' +
     'FROM ebooks e ' +
     "WHERE e.hotmart_product_id IS NOT NULL AND e.hotmart_product_id <> '' " +
     'AND NOT EXISTS (SELECT 1 FROM cover_backfill b WHERE b.produto = CAST(e.hotmart_product_id AS TEXT)) ' +
@@ -77,7 +77,7 @@ function buscarTodas(db, limite) {
   ).run();
 
   return db.prepare(
-    'SELECT e.id, e.title, e.subtitle, e.topic, e.hotmart_product_id AS pid, e.cover_path ' +
+    'SELECT e.id, e.title, e.subtitle, e.topic, e.language, e.hotmart_product_id AS pid, e.cover_path ' +
     'FROM ebooks e ' +
     "WHERE e.hotmart_product_id IS NOT NULL AND e.hotmart_product_id <> '' " +
     'AND NOT EXISTS (SELECT 1 FROM cover_viral_v2 v WHERE v.ebook_id = e.id) ' +
@@ -107,7 +107,10 @@ async function regerar(opts) {
       const caminho = await generateViralCover(
         e.title, e.subtitle || '', e.topic || e.title,
         (() => { try { return getCategory(e.topic || e.title) || 'Outros'; } catch { return 'Outros'; } })(),
-        COVERS_DIR
+        COVERS_DIR,
+        // Idioma do e-book: sem ele a capa de livro em ingles saia com badge e
+        // kicker em portugues, contradizendo o proprio livro na primeira olhada.
+        e.language || 'pt-BR'
       );
       if (caminho && fs.existsSync(caminho)) {
         // Gravar o caminho novo: e por ele que o backfill vai encontrar a capa.
