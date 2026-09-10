@@ -83,7 +83,11 @@ function buscarPendentes(limite) {
       "SELECT e.hotmart_product_id AS pid, e.title, e.cover_path, e.language FROM ebooks e " +
       "WHERE e.hotmart_product_id IS NOT NULL AND e.hotmart_product_id <> '' " +
       "AND e.cover_path IS NOT NULL AND e.cover_path <> '' " +
-      "AND NOT EXISTS (SELECT 1 FROM cover_backfill b WHERE b.produto = CAST(e.hotmart_product_id AS TEXT)) " +
+      // ok = 1: so quem SUBIU de verdade sai da fila. Antes o registro entrava
+      // em qualquer desfecho, entao falha de upload virava "processado" e o
+      // produto sumia para sempre — 25 ficaram presos assim, sem nunca
+      // reaparecer para nova tentativa.
+      "AND NOT EXISTS (SELECT 1 FROM cover_backfill b WHERE b.produto = CAST(e.hotmart_product_id AS TEXT) AND b.ok = 1) " +
       "ORDER BY e.rowid DESC LIMIT ?"
     ).all(${limite} * 6);
     console.log(JSON.stringify(rows.filter(r => fs.existsSync(r.cover_path)).slice(0, ${limite})));
@@ -113,7 +117,10 @@ function registrar(produto, ok) {
 async function aplicar(page, id, b64, locale) {
   return await page.evaluate(async (dados, produto, loc) => {
     const tok = localStorage.getItem('token');
-    if (!tok) return { erro: 'sem token' };
+    // SESSAO_MORTA e diferente de falha do produto: quando a sessao cai, TODOS
+    // falham igual, e insistir so consumiria a fila inteira em erro. Quem chama
+    // aborta o lote em vez de marcar produto por produto.
+    if (!tok) return { erro: 'SESSAO_MORTA' };
     const bin = Uint8Array.from(atob(dados), c => c.charCodeAt(0));
     // File (nao Blob): o Blob anonimo vira midia name="blob" e o PUT da 500.
     const arquivo = new File([bin], 'capa.png', { type: 'image/png' });
@@ -186,6 +193,10 @@ async function main() {
       }
       try { fs.unlinkSync(local); } catch {}
 
+      if (r && r.erro === 'SESSAO_MORTA') {
+        console.log('  sessao do Hotmart caiu — abortando o lote (nada e marcado)');
+        break;
+      }
       const bom = !!r.capa;
       if (bom) ok++;
       if (bom && r.locale && r.locale !== 'PT_BR') idiomasCorrigidos++;
