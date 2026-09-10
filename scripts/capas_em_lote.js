@@ -96,20 +96,66 @@ function buscarPendentes(limite) {
   return m ? JSON.parse(m[0]) : [];
 }
 
-function baixarCapa(remoto, destino) {
-  ssh(`docker cp ${CONTAINER}:${remoto} /tmp/capa_lote.png`);
-  execFileSync('scp', [`${VPS}:/tmp/capa_lote.png`, destino], { timeout: 120000 });
-  return fs.existsSync(destino) && fs.statSync(destino).size > 1000;
+/**
+ * Traz TODAS as capas do lote num pacote so.
+ *
+ * Uma por uma custava duas viagens de SSH cada (copiar do container, depois
+ * puxar para ca) — quarenta viagens num lote de vinte, boa parte do tempo de
+ * ciclo gasta em handshake. Aqui e um tar unico: duas viagens para o lote
+ * inteiro.
+ *
+ * Nomeia cada arquivo pelo id do produto, e nao pelo nome original: dois
+ * e-books podem apontar para a mesma capa em disco, e o nome original faria um
+ * sobrescrever o outro dentro do tar.
+ */
+function baixarCapasEmLote(itens, destinoDir) {
+  fs.mkdirSync(destinoDir, { recursive: true });
+  const copias = itens
+    .map(i => `cp '${i.cover_path}' /tmp/lotecapas/${i.pid}.png 2>/dev/null || true`)
+    .join('; ');
+  ssh(`docker exec ${CONTAINER} sh -c "rm -rf /tmp/lotecapas && mkdir -p /tmp/lotecapas && ${copias}" && ` +
+      `rm -rf /tmp/lotecapas && docker cp ${CONTAINER}:/tmp/lotecapas /tmp/lotecapas && ` +
+      `tar -czf /tmp/lotecapas.tgz -C /tmp/lotecapas .`, 600000);
+  const tgz = path.join(destinoDir, 'lote.tgz');
+  execFileSync('scp', [`${VPS}:/tmp/lotecapas.tgz`, tgz], { timeout: 600000 });
+  // --force-local: o tar do Git Bash le "C:\..." como host remoto por causa
+  // dos dois-pontos e tenta resolver "C" pela rede. Sem esta flag o comando
+  // falha com "Cannot connect to C: resolve failed" em qualquer caminho Windows.
+  execFileSync('tar', ['--force-local', '-xzf', tgz, '-C', destinoDir], { timeout: 300000 });
+  try { fs.unlinkSync(tgz); } catch {}
+
+  const mapa = new Map();
+  for (const i of itens) {
+    const f = path.join(destinoDir, i.pid + '.png');
+    if (fs.existsSync(f) && fs.statSync(f).size > 1000) mapa.set(String(i.pid), f);
+  }
+  return mapa;
 }
 
-function registrar(produto, ok) {
+/**
+ * Grava o resultado de VARIOS produtos numa unica ida ao container.
+ *
+ * Antes cada produto custava tres viagens de SSH so para ser marcado (escrever o
+ * script, copiar para dentro do container, executar). Com vinte por lote isso
+ * eram sessenta round-trips gastos em contabilidade, mais que o proprio upload.
+ *
+ * O preco de agrupar: se o processo morrer no meio do lote, as marcas ainda nao
+ * gravadas se perdem e esses produtos serao refeitos. Refazer e barato e
+ * idempotente; sessenta viagens por ciclo, nao.
+ */
+function registrarLote(resultados) {
+  if (!resultados.length) return;
+  const linhas = resultados
+    .map(r => `['${String(r.produto).replace(/'/g, '')}', ${r.quando}, ${r.ok ? 1 : 0}]`)
+    .join(',');
   rodarNoContainer(`
     const D = require('better-sqlite3');
     const db = new D('/app/data/metrics.db');
     db.prepare('CREATE TABLE IF NOT EXISTS cover_backfill (produto TEXT PRIMARY KEY, quando INTEGER NOT NULL, ok INTEGER NOT NULL)').run();
-    db.prepare('INSERT OR REPLACE INTO cover_backfill (produto, quando, ok) VALUES (?,?,?)')
-      .run('${produto}', ${Date.now()}, ${ok ? 1 : 0});
-    console.log('ok');
+    const ins = db.prepare('INSERT OR REPLACE INTO cover_backfill (produto, quando, ok) VALUES (?,?,?)');
+    const gravar = db.transaction(rows => { for (const r of rows) ins.run(r[0], r[1], r[2]); });
+    gravar([${linhas}]);
+    console.log('gravados ' + ${resultados.length});
   `);
 }
 
@@ -175,23 +221,28 @@ async function main() {
   fs.mkdirSync(TMP, { recursive: true });
 
   let ok = 0, idiomasCorrigidos = 0;
+  const pendentes = [];   // gravados de uma vez no fim (ver registrarLote)
   const t0 = Date.now();
   try {
     // Uma pagina do dominio serve para todos: o fetch e por produto, nao por URL.
     await page.goto('https://app.hotmart.com/products/producer', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 12000));
 
+    // Um pacote para o lote inteiro, antes de comecar a subir.
+    const capas = baixarCapasEmLote(itens, TMP);
+    console.log(capas.size + '/' + itens.length + ' capas baixadas do VPS');
+
     for (const [i, item] of itens.entries()) {
-      const local = path.join(TMP, 'c_' + item.pid + '.png');
+      const local = capas.get(String(item.pid));
       let r = { erro: 'nao processado' };
       try {
-        if (!baixarCapa(item.cover_path, local)) throw new Error('capa nao veio do VPS');
+        if (!local) throw new Error('capa nao veio do VPS');
         const b64 = fs.readFileSync(local).toString('base64');
         r = await aplicar(page, item.pid, b64, paraLocaleHotmart(item.language));
       } catch (e) {
         r = { erro: String(e.message).slice(0, 80) };
       }
-      try { fs.unlinkSync(local); } catch {}
+      try { if (local) fs.unlinkSync(local); } catch {}
 
       if (r && r.erro === 'SESSAO_MORTA') {
         console.log('  sessao do Hotmart caiu — abortando o lote (nada e marcado)');
@@ -200,7 +251,7 @@ async function main() {
       const bom = !!r.capa;
       if (bom) ok++;
       if (bom && r.locale && r.locale !== 'PT_BR') idiomasCorrigidos++;
-      try { registrar(item.pid, bom); } catch {}
+      pendentes.push({ produto: item.pid, quando: Date.now(), ok: bom });
 
       console.log(`  [${i + 1}/${itens.length}] ${bom ? 'OK  ' : 'FALHA'} ${item.pid} ${String(item.title).slice(0, 34)}` +
         (bom ? '  locale=' + r.locale : '  :: ' + r.erro));
@@ -208,6 +259,9 @@ async function main() {
   } finally {
     await page.close().catch(() => {});
     browser.disconnect();
+    // No finally: um erro no meio do lote nao pode jogar fora o que ja subiu,
+    // senao esses produtos seriam reprocessados na proxima rodada.
+    try { registrarLote(pendentes); } catch (e) { console.log('nao consegui gravar o lote: ' + e.message.slice(0, 60)); }
   }
   console.log(`\nTOTAL: ${ok}/${itens.length} capas em ${((Date.now() - t0) / 60000).toFixed(1)} min` +
     (idiomasCorrigidos ? ` | ${idiomasCorrigidos} com idioma nao-portugues gravado` : ''));
