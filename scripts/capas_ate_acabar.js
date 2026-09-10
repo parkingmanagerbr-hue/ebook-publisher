@@ -58,7 +58,7 @@ function regerar(quantos) {
  * pergunta a API antes de liberar, entao rodar de rotina nao mascara queda real.
  */
 function destravarIA() {
-  try { ssh(`docker exec ${CONTAINER} sh -c "cd /app && node destravar_ia.js"`, 180000); } catch {}
+  try { ssh(`docker exec ${CONTAINER} sh -c "cd /app && node scripts/destravar_ia.js"`, 180000); } catch {}
 }
 
 function dormir(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -96,9 +96,9 @@ async function main() {
       (g.semGancho ? ` (${g.semGancho} sem gancho, voltam)` : '') +
       ` | subidas ${r.ok}/${r.total} | acumulado ${totalGeradas} geradas / ${totalOk} subidas | ${min} min`);
 
-    // Passe inteiro sem gancho = provedor de texto fora. Insistir so gasta
-    // imagem para refazer tudo depois; melhor esperar a cota respirar.
-    if (g.ok > 0 && g.semGancho === g.ok) {
+    // Passe inteiro sem gancho = provedor de texto fora. Com o pulo antes da
+    // imagem, isso agora aparece como ok=0 — insistir so roda o laco a vazio.
+    if (g.ok === 0 && g.total > 0) {
       console.log('  nenhum gancho neste passe — esperando a IA de texto voltar');
       dormir(180000);
     }

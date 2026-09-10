@@ -164,14 +164,33 @@ function escolherDoPool(category) {
   return null;
 }
 
-async function generateViralCover(title, subtitle, topic, category, coversDir, idioma) {
+async function generateViralCover(title, subtitle, topic, category, coversDir, idioma, opts) {
   const lang = idioma || 'pt-BR';
+  const exigirGancho = !!(opts && opts.exigirGancho);
   if (!puppeteer) { log.warn('sem puppeteer'); return null; }
   const st = STYLE[category] || STYLE.default;
   const dir = coversDir || path.join(__dirname, '..', '..', 'data', 'covers');
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `viral_bg_${Date.now()}.jpg`);
   try {
+    // 0. TEXTO ANTES DA IMAGEM.
+    //
+    // A ordem era o contrario, e custava caro: com a IA de texto fora, a capa
+    // saia com o titulo comum, era descartada pelo chamador e a imagem ja tinha
+    // sido gerada a toa. Num passe medido, 19 de 20 imagens foram jogadas fora
+    // assim. Perguntar primeiro pelo texto — que e o barato — evita pagar pelo
+    // caro quando o resultado ja nasceria descartavel.
+    let pkPrev = null;
+    try {
+      const { gerarPackaging } = require('./coverPackaging');
+      pkPrev = await gerarPackaging({ titulo: title, subtitulo: subtitle, topico: topic, categoria: category, idioma: lang });
+    } catch (e) { log.warn(`packaging indisponivel: ${e.message.slice(0, 70)}`); }
+    _ultimoComGancho = !!(pkPrev && pkPrev.titulo);
+    if (exigirGancho && !_ultimoComGancho) {
+      log.warn('sem gancho de IA — pulando antes de gastar imagem');
+      return null;
+    }
+
     // 1. fundo: acervo curado primeiro, geracao por API depois.
     //
     // O acervo (COVER_POOL) sao imagens geradas no Google Flow (Nano Banana 2),
@@ -201,15 +220,7 @@ async function generateViralCover(title, subtitle, topic, category, coversDir, i
     // Aqui o LLM escreve mirando a DOR, e a tecnica de gancho vem de um bandit
     // que aprende com o resultado. Se a IA falhar, cai no texto de antes: capa
     // com titulo comum e melhor que pipeline parado.
-    let pk = null;
-    try {
-      const { gerarPackaging } = require('./coverPackaging');
-      pk = await gerarPackaging({ titulo: title, subtitulo: subtitle, topico: topic, categoria: category, idioma: lang });
-    } catch (e) { log.warn(`packaging indisponivel: ${e.message.slice(0, 70)}`); }
-    // Registrar se o gancho veio mesmo da IA. Sem isto, uma capa feita durante
-    // queda de provedor sai com o titulo comum e ainda assim seria marcada como
-    // pronta — e nunca mais refeita. Quem chama precisa poder distinguir.
-    _ultimoComGancho = !!(pk && pk.titulo);
+    const pk = pkPrev;   // ja pedido antes da imagem (ver etapa 0)
 
     const html = coverHTML({
       title:    pk ? pk.titulo    : title,

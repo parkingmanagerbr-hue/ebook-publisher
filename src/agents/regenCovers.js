@@ -110,7 +110,10 @@ async function regerar(opts) {
         COVERS_DIR,
         // Idioma do e-book: sem ele a capa de livro em ingles saia com badge e
         // kicker em portugues, contradizendo o proprio livro na primeira olhada.
-        e.language || 'pt-BR'
+        e.language || 'pt-BR',
+        // No passe TODAS a capa so vale com gancho — sem ele ela voltaria para a
+        // fila e a imagem teria sido gerada em vao.
+        { exigirGancho: todas }
       );
       if (caminho && fs.existsSync(caminho)) {
         // Gravar o caminho novo: e por ele que o backfill vai encontrar a capa.
@@ -129,6 +132,10 @@ async function regerar(opts) {
         ok++;
         log.info('OK  ' + e.pid + ' ' + String(e.title).slice(0, 42) + ' -> ' + path.basename(caminho));
       } else {
+        // No passe TODAS o gerador devolve null justamente quando pulou por
+        // falta de gancho — contar como "sem gancho" e nao como falha do
+        // e-book, senao o relatorio esconde que o problema e a IA de texto.
+        if (todas) semGancho++;
         log.warn('FALHA ' + e.pid + ' — gerador nao devolveu arquivo');
       }
     } catch (err) {
