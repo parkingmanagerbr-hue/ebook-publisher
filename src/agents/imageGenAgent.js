@@ -492,7 +492,17 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
 
   const providers = [
     {
-      name: 'HuggingFace FLUX',   // ✅ PRIMÁRIO — router.huggingface.co, 6 chaves com rotação
+      // PRIMEIRO por medicao, nao por preferencia (09/09/2026): das nove opcoes,
+      // so esta respondeu 200. HuggingFace devolve 410 — o FLUX.1-schnell SAIU
+      // daquele endpoint, nao e falta de credito — e Gemini free devolve 429 nas
+      // chaves todas. Deixar os mortos na frente custava sete timeouts por capa.
+      // Os outros continuam abaixo de proposito: cota volta, endpoint ressuscita.
+      name: 'Pollinations.ai',    // grátis, sem chave
+      enabled: true,
+      fn: () => generateWithPollinations(prompt, width, height),
+    },
+    {
+      name: 'HuggingFace FLUX',   // router.huggingface.co, 6 chaves com rotação (410 em 09/09/2026)
       enabled: !!hfKey,
       fn: () => generateWithFlux(prompt, width, height, hfKey),
     },
@@ -536,11 +546,6 @@ async function generateImage({ prompt, width = 1024, height = 1024, outputPath }
       name: 'DALL-E 3',           // pago (~$0.04/img) — só se billing ok
       enabled: !!openaiKey,
       fn: () => generateWithDallE3(prompt, width, height, openaiKey),
-    },
-    {
-      name: 'Pollinations.ai',    // ✅ grátis, sem chave, fallback garantido
-      enabled: true,
-      fn: () => generateWithPollinations(prompt, width, height),
     },
     {
       name: 'Magic Hour',         // rede de segurança final (créditos), 8 contas

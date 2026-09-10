@@ -65,6 +65,16 @@ function coverHTML({ title, subtitle, kicker, badge, st, imgB64 }) {
 
   let big = (main + accent).length > 14 ? 200 : 250;
   big = Math.max(90, Math.min(big, Math.floor(1380 / (0.55 * maxWord))));
+
+  // ALTURA DE LINHA: 0.9 sobrepunha as linhas — visto a olho numa capa real
+  // ("NA PESQUISA" / "ACADEMICA": o circunflexo do A batia na perna do Q).
+  // Em caixa alta acentuada o Anton passa da caixa em cima (acento) e embaixo
+  // (Q, J), entao 0.9 nao cabe. 1.06 e o menor valor que separa os dois casos.
+  // Titulo com 3+ linhas fica mais alto, entao a fonte encolhe para o bloco
+  // continuar cabendo — senao consertar a sobreposicao criaria transbordo.
+  const charsPorLinha = Math.max(1, Math.floor(1380 / (0.55 * big)));
+  const linhas = Math.ceil((main + ' ' + accent).trim().length / charsPorLinha);
+  if (linhas >= 3) big = Math.max(90, Math.floor(big * 0.86));
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@700;800&family=Space+Grotesk:wght@600;700&display=swap');
@@ -81,7 +91,7 @@ function coverHTML({ title, subtitle, kicker, badge, st, imgB64 }) {
 .badge{position:absolute;top:116px;right:105px;z-index:6;background:${st.a1};color:#0a0a0a;font-family:'Space Grotesk';font-weight:700;letter-spacing:3px;font-size:31px;text-transform:uppercase;padding:17px 28px;border-radius:14px;transform:rotate(5deg);box-shadow:0 14px 40px ${st.a1}66}
 .mid{position:absolute;left:100px;right:100px;bottom:360px;text-align:center;z-index:6}
 .bar{width:120px;height:10px;margin:0 auto 40px;border-radius:6px;background:${st.a1};box-shadow:0 0 40px ${st.a1}}
-.title{font-family:'Anton';color:#fff;line-height:.9;letter-spacing:1px;font-size:${big}px;text-transform:uppercase;text-shadow:0 18px 70px rgba(0,0,0,.85)}
+.title{font-family:'Anton';color:#fff;line-height:1.06;letter-spacing:1px;font-size:${big}px;text-transform:uppercase;text-shadow:0 18px 70px rgba(0,0,0,.85)}
 .title b{color:${st.accent};text-shadow:0 0 55px ${st.a1}88}
 .sub{margin-top:44px;font-family:'Archivo';font-weight:800;font-size:58px;line-height:1.22;color:#e8eefc;max-width:1320px;margin:44px auto 0;text-shadow:0 4px 24px rgba(0,0,0,.85)}
 .foot{position:absolute;bottom:110px;left:0;right:0;text-align:center;z-index:6}
@@ -161,6 +171,10 @@ async function generateViralCover(title, subtitle, topic, category, coversDir) {
       const { gerarPackaging } = require('./coverPackaging');
       pk = await gerarPackaging({ titulo: title, subtitulo: subtitle, topico: topic, categoria: category });
     } catch (e) { log.warn(`packaging indisponivel: ${e.message.slice(0, 70)}`); }
+    // Registrar se o gancho veio mesmo da IA. Sem isto, uma capa feita durante
+    // queda de provedor sai com o titulo comum e ainda assim seria marcada como
+    // pronta — e nunca mais refeita. Quem chama precisa poder distinguir.
+    _ultimoComGancho = !!(pk && pk.titulo);
 
     const html = coverHTML({
       title:    pk ? pk.titulo    : title,
@@ -190,4 +204,8 @@ function badgeKicker(topic) {
   return 'Método Prático';
 }
 
-module.exports = { generateViralCover, STYLE };
+let _ultimoComGancho = false;
+/** A ULTIMA capa gerada saiu com gancho de IA? (false = titulo comum) */
+function ultimoTeveGancho() { return _ultimoComGancho; }
+
+module.exports = { generateViralCover, STYLE, ultimoTeveGancho };

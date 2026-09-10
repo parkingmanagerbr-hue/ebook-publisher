@@ -29,19 +29,66 @@ const PROVEDORES = {
   },
   cerebras: {
     url: 'https://api.cerebras.ai/v1/chat/completions',
-    modelos: ['llama3.1-8b', 'llama-3.3-70b'],
+    modelos: ['gpt-oss-120b', 'zai-glm-4.7'],
     env: 'CEREBRAS_API_KEY',
+    // Cloudflare do Cerebras devolve 403 code 1010 sem User-Agent de browser.
+    // Sem isto a sondagem le "fora do ar" numa conta perfeitamente viva.
+    ua: true,
+  },
+  sambanova: {
+    url: 'https://api.sambanova.ai/v1/chat/completions',
+    modelos: ['Meta-Llama-3.3-70B-Instruct'],
+    env: 'SAMBANOVA_API_KEY',
+  },
+  gemini: {
+    // Formato proprio (nao OpenAI): tratado a parte em respondeDeVerdade.
+    gemini: true,
+    modelos: ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash-lite'],
+    env: 'GEMINI_API_KEY',
   },
 };
 
-async function respondeDeVerdade(cfg) {
-  const chave = process.env[cfg.env];
+/** Todas as chaves do provedor: BASE, BASE_2, BASE_3... sem furo. */
+function chavesDe(base) {
+  const out = [];
+  for (let i = 1; i <= 12; i++) {
+    const v = (process.env[i === 1 ? base : base + '_' + i] || '').trim();
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+/**
+ * Sonda UMA chave especifica.
+ *
+ * Antes daqui so a primeira chave era testada, e a resposta dela decidia o
+ * destino de todas as outras. Medido em 10/09/2026: das chaves Gemini, as duas
+ * primeiras devolviam 429 e a TERCEIRA respondia 200 — o provedor inteiro ficava
+ * preso por causa das duas da frente. Cota e por chave; a sondagem tambem tem
+ * de ser.
+ */
+async function respondeDeVerdade(cfg, chave) {
   if (!chave) return false;
+  if (cfg.gemini) {
+    for (const modelo of cfg.modelos) {
+      try {
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + modelo + ':generateContent?key=' + chave, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: 'Responda apenas: ok' }] }] }),
+          signal: AbortSignal.timeout(30000),
+        });
+        if (r.ok) return modelo;
+      } catch { /* proximo modelo */ }
+    }
+    return false;
+  }
   for (const modelo of cfg.modelos) {
     try {
+      const cab = { Authorization: 'Bearer ' + chave, 'Content-Type': 'application/json' };
+      if (cfg.ua) cab['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
       const r = await fetch(cfg.url, {
         method: 'POST',
-        headers: { Authorization: 'Bearer ' + chave, 'Content-Type': 'application/json' },
+        headers: cab,
         // Tamanho parecido com o do pipeline: uma requisicao minuscula pode
         // passar sob um limite de tokens/dia que a real nao passaria, e ai a
         // sondagem mentiria a favor.
@@ -70,12 +117,26 @@ async function main() {
       .filter(k => k === nome || k.startsWith(nome + ':'));
     if (!marcados.length) continue;
 
-    const modelo = await respondeDeVerdade(cfg);
-    if (!modelo) { console.log(nome + ': segue fora (' + marcados.length + ' marcados, mantidos)'); continue; }
+    // Varre TODAS as chaves: basta uma responder para o provedor voltar a ser
+    // tentavel. Libera a entrada generica e as das chaves que responderam.
+    const chaves = chavesDe(cfg.env);
+    let vivo = false, vivas = 0;
+    for (const c of chaves) {
+      const m = await respondeDeVerdade(cfg, c);
+      if (m) {
+        vivo = vivo || m; vivas++;
+        // A marca por chave usa o final da credencial como sufixo.
+        const suf = c.slice(-8);
+        for (const k of marcados) if (k.endsWith(':' + suf)) delete estado.degraded[k];
+      }
+    }
+    if (!vivo) { console.log(nome + ': segue fora (' + marcados.length + ' marcados, mantidos)'); continue; }
 
-    for (const k of marcados) delete estado.degraded[k];
-    liberou += marcados.length;
-    console.log(nome + ': RESPONDEU via ' + modelo + ' — liberadas ' + marcados.length + ' entradas');
+    delete estado.degraded[nome];                 // trava do provedor inteiro
+    const restantes = Object.keys(estado.degraded).filter(k => k.startsWith(nome + ':')).length;
+    liberou += marcados.length - restantes;
+    console.log(nome + ': RESPONDEU via ' + vivo + ' — ' + vivas + '/' + chaves.length +
+      ' chaves vivas, ' + restantes + ' seguem marcadas');
   }
 
   if (liberou) {
