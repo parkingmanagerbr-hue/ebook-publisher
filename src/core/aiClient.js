@@ -322,15 +322,48 @@ process.on('SIGINT', () => { if (_tunnelProc) _tunnelProc.kill(); process.exit()
 // CHAMADAS POR PROVIDER
 // ═══════════════════════════════════════════════════
 
+/**
+ * Modelos Gemini tentados EM SEQUENCIA para a mesma chave.
+ *
+ * A cota do free tier e por projeto E POR MODELO (o quotaId do 429 termina em
+ * PerProjectPerModel). Com um modelo so, quando o gemini-2.5-flash esgotava o dia
+ * a chave inteira dava 429 e o provedor era marcado como morto — enquanto
+ * gemini-flash-latest e gemini-2.5-flash-lite, baldes SEPARADOS, respondiam 200
+ * na mesma chave e no mesmo minuto (medido pelo destravar_ia em 10-11/09/2026).
+ * Na pratica: capas saindo sem gancho, 0 a 7 de cada 40.
+ *
+ * GEMINI_MODEL, se definido, vai na frente — mas nao fica sozinho.
+ */
+const MODELOS_GEMINI = [...new Set([
+  process.env.GEMINI_MODEL,
+  'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-2.0-flash',
+].filter(Boolean))];
+
+function ehCotaOuModeloIndisponivel(e) {
+  const msg = String((e && e.message) || '');
+  const st = e && (e.status || (e.response && e.response.status));
+  return st === 429 || st === 404 || /429|quota|RESOURCE_EXHAUSTED|not found|is not supported/i.test(msg);
+}
+
 async function callGemini(prompt, systemPrompt, apiKey) {
   const { GoogleGenerativeAI } = require('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
-    systemInstruction: systemPrompt,
-  });
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  let ultimo;
+  for (const nome of MODELOS_GEMINI) {
+    try {
+      const model = genAI.getGenerativeModel({ model: nome, systemInstruction: systemPrompt });
+      const result = await model.generateContent(prompt);
+      return result.response.text();
+    } catch (e) {
+      ultimo = e;
+      // Cota/modelo: proximo balde. Qualquer outra coisa (chave invalida, rede)
+      // nao melhora trocando de modelo — propaga para o chamador rotacionar.
+      if (!ehCotaOuModeloIndisponivel(e)) throw e;
+    }
+  }
+  // Todos os baldes desta chave esgotados: devolve o ultimo 429 intacto, para a
+  // logica de degradacao do chamador reconhecer como cota.
+  throw ultimo;
 }
 
 async function callCerebras(prompt, systemPrompt, apiKey) {
