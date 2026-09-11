@@ -70,19 +70,51 @@ function buscarSemArquivo(db, limite) {
  * e uma tabela propria. Sem ela, uma segunda execucao regeraria as mesmas de
  * novo e o passe nunca terminaria.
  */
-function buscarTodas(db, limite) {
+// Depois de tantas tentativas sem gancho, a capa sai com o titulo do proprio
+// livro. Cada tentativa cai num ciclo diferente, e as cotas renovam (Gemini de
+// madrugada, Groq em janela deslizante): 12 cobre mais de um dia de renovacoes.
+// Sem este teto, livro que nunca ganha gancho — tema de saude que o filtro de
+// alegacao sempre recusa, por exemplo — impediria o passe de terminar.
+const MAX_TENTATIVAS_GANCHO = parseInt(process.env.MAX_TENTATIVAS_GANCHO || '12', 10);
+
+function garantirTabelas(db) {
   db.prepare(
     'CREATE TABLE IF NOT EXISTS cover_viral_v2 (' +
     'ebook_id TEXT PRIMARY KEY, quando INTEGER NOT NULL)'
   ).run();
+  db.prepare(
+    'CREATE TABLE IF NOT EXISTS cover_viral_tentativas (' +
+    'ebook_id TEXT PRIMARY KEY, n INTEGER NOT NULL, ultimo INTEGER NOT NULL)'
+  ).run();
+}
 
+/**
+ * Menos tentado primeiro.
+ *
+ * A ordem era so por rowid: o item sem gancho nao era marcado e voltava no
+ * ciclo seguinte, entao os 40 do topo se repetiam e a janela andava apenas
+ * pelo que dava certo (~3 por ciclo). Um livro que nunca ganha gancho ficava na
+ * frente para sempre, e o resto do catalogo so era alcancado quando a cota
+ * sobrava. Ordenando pelo numero de tentativas, todo livro recebe a sua vez.
+ */
+function buscarTodas(db, limite) {
+  garantirTabelas(db);
   return db.prepare(
-    'SELECT e.id, e.title, e.subtitle, e.topic, e.language, e.hotmart_product_id AS pid, e.cover_path ' +
+    'SELECT e.id, e.title, e.subtitle, e.topic, e.language, e.hotmart_product_id AS pid, e.cover_path, ' +
+    'COALESCE(t.n, 0) AS tentativas ' +
     'FROM ebooks e ' +
+    'LEFT JOIN cover_viral_tentativas t ON t.ebook_id = e.id ' +
     "WHERE e.hotmart_product_id IS NOT NULL AND e.hotmart_product_id <> '' " +
     'AND NOT EXISTS (SELECT 1 FROM cover_viral_v2 v WHERE v.ebook_id = e.id) ' +
-    'ORDER BY e.rowid DESC LIMIT ?'
+    'ORDER BY COALESCE(t.n, 0) ASC, e.rowid DESC LIMIT ?'
   ).all(limite);
+}
+
+function contarTentativa(db, ebookId) {
+  db.prepare(
+    'INSERT INTO cover_viral_tentativas (ebook_id, n, ultimo) VALUES (?, 1, ?) ' +
+    'ON CONFLICT(ebook_id) DO UPDATE SET n = n + 1, ultimo = excluded.ultimo'
+  ).run(ebookId, Date.now());
 }
 
 async function regerar(opts) {
@@ -121,7 +153,9 @@ async function regerar(opts) {
         e.language || 'pt-BR',
         // No passe TODAS a capa so vale com gancho — sem ele ela voltaria para a
         // fila e a imagem teria sido gerada em vao.
-        { exigirGancho: todas }
+        // Esgotado o teto de tentativas, sai com o titulo do proprio livro:
+        // capa com rosto unico e titulo simples ainda e melhor que a antiga.
+        { exigirGancho: todas && (e.tentativas || 0) < MAX_TENTATIVAS_GANCHO }
       );
       if (caminho && fs.existsSync(caminho)) {
         // Gravar o caminho novo: e por ele que o backfill vai encontrar a capa.
@@ -131,7 +165,9 @@ async function regerar(opts) {
         // comum — deixar sem marca faz o proximo passe refazer com gancho.
         const comGancho = (() => { try { return ultimoTeveGancho(); } catch { return false; } })();
         if (!comGancho) semGancho++;
-        if (todas && comGancho) {
+        const porTeto = todas && !comGancho && (e.tentativas || 0) >= MAX_TENTATIVAS_GANCHO;
+        if (porTeto) log.warn('teto de tentativas: ' + e.pid + ' sai com o titulo do livro');
+        if (todas && (comGancho || porTeto)) {
           db.prepare('INSERT OR REPLACE INTO cover_viral_v2 (ebook_id, quando) VALUES (?,?)').run(e.id, Date.now());
           // Reabrir para upload: sem isso o aplicador pula o produto por ja
           // constar como feito, e a capa nova ficaria so no disco do VPS.
@@ -143,7 +179,7 @@ async function regerar(opts) {
         // No passe TODAS o gerador devolve null justamente quando pulou por
         // falta de gancho — contar como "sem gancho" e nao como falha do
         // e-book, senao o relatorio esconde que o problema e a IA de texto.
-        if (todas) semGancho++;
+        if (todas) { semGancho++; try { contarTentativa(db, e.id); } catch {} }
         log.warn('FALHA ' + e.pid + ' — gerador nao devolveu arquivo');
       }
     } catch (err) {
@@ -157,7 +193,7 @@ async function regerar(opts) {
   return { total: itens.length, ok, semGancho, minutos: Number(min) };
 }
 
-module.exports = { regerar, buscarSemArquivo, buscarTodas };
+module.exports = { regerar, buscarSemArquivo, buscarTodas, contarTentativa, garantirTabelas, MAX_TENTATIVAS_GANCHO };
 
 if (require.main === module) {
   regerar({ limite: arg('limite', '20'), todas: process.argv.includes('--todas') })
