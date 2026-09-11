@@ -79,17 +79,38 @@ function buscarPendentes(limite) {
     const fs = require('fs');
     const db = new D('/app/data/metrics.db');
     db.prepare('CREATE TABLE IF NOT EXISTS cover_backfill (produto TEXT PRIMARY KEY, quando INTEGER NOT NULL, ok INTEGER NOT NULL)').run();
-    const rows = db.prepare(
-      "SELECT e.hotmart_product_id AS pid, e.title, e.cover_path, e.language FROM ebooks e " +
-      "WHERE e.hotmart_product_id IS NOT NULL AND e.hotmart_product_id <> '' " +
-      "AND e.cover_path IS NOT NULL AND e.cover_path <> '' " +
-      // ok = 1: so quem SUBIU de verdade sai da fila. Antes o registro entrava
-      // em qualquer desfecho, entao falha de upload virava "processado" e o
-      // produto sumia para sempre — 25 ficaram presos assim, sem nunca
-      // reaparecer para nova tentativa.
-      "AND NOT EXISTS (SELECT 1 FROM cover_backfill b WHERE b.produto = CAST(e.hotmart_product_id AS TEXT) AND b.ok = 1) " +
-      "ORDER BY e.rowid DESC LIMIT ?"
+    // ok = 1: so quem SUBIU de verdade sai da fila. Antes o registro entrava
+    // em qualquer desfecho, entao falha de upload virava "processado" e o
+    // produto sumia para sempre — 25 ficaram presos assim, sem nunca
+    // reaparecer para nova tentativa.
+    const naoSubiu = "AND NOT EXISTS (SELECT 1 FROM cover_backfill b WHERE b.produto = CAST(e.hotmart_product_id AS TEXT) AND b.ok = 1) ";
+    const valido = "e.hotmart_product_id IS NOT NULL AND e.hotmart_product_id <> '' AND e.cover_path IS NOT NULL AND e.cover_path <> '' ";
+
+    // PRIMEIRO: capa viral ja gerada e ainda nao enviada, direto pela tabela da
+    // regeneracao. A busca olhava so as linhas mais recentes do catalogo; quando
+    // a regeneracao passou a atender os livros MENOS tentados (os antigos), a
+    // capa nova ficava fora da janela e nao subia — medido: "geradas 3, subidas
+    // 0/0" no primeiro ciclo depois da mudanca.
+    let virais = [];
+    try {
+      virais = db.prepare(
+        "SELECT e.hotmart_product_id AS pid, e.title, e.cover_path, e.language FROM cover_viral_v2 v " +
+        "JOIN ebooks e ON e.id = v.ebook_id WHERE " + valido + naoSubiu +
+        "ORDER BY v.quando DESC LIMIT ?"
+      ).all(${limite} * 6);
+    } catch (e) { /* tabela ainda nao existe: so a busca geral */ }
+
+    const geral = db.prepare(
+      "SELECT e.hotmart_product_id AS pid, e.title, e.cover_path, e.language FROM ebooks e WHERE " +
+      valido + naoSubiu + "ORDER BY e.rowid DESC LIMIT ?"
     ).all(${limite} * 6);
+
+    const vistos = new Set(), rows = [];
+    for (const r of [...virais, ...geral]) {
+      if (vistos.has(r.pid)) continue;
+      vistos.add(r.pid);
+      rows.push(r);
+    }
     console.log(JSON.stringify(rows.filter(r => fs.existsSync(r.cover_path)).slice(0, ${limite})));
   `);
   const m = saida.match(/\[.*\]/s);
