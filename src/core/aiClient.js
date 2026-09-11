@@ -753,6 +753,21 @@ async function generate(prompt, systemPrompt = '', options = {}) {
 
     } catch (err) {
       const elapsed = Date.now() - t0;
+
+      // 400/422 e defeito da REQUISICAO, nunca da chave: a mesma chamada falha
+      // igual em todas as chaves. Tratar como falha de chave derrubava as 8 do
+      // Groq em cascata, em milissegundos, cada uma presa 30 min — medido em
+      // 11/09/2026, quando uma unica chamada malformada (system prompt que nao
+      // era string) deixou o provedor inteiro fora para quem chamava certo.
+      // Aqui nao se degrada nada: registra e segue para o proximo provedor.
+      const stReq = err?.response?.status || err?.status;
+      if (stReq === 400 || stReq === 422) {
+        const det = err?.response?.data?.error?.message || err.message || '';
+        errors.push({ provider, error: String(det).slice(0, 120), reason: 'requisicao-invalida' });
+        logger.warn(`❌ ${provider} recusou a REQUISICAO (${stReq}) — chaves preservadas: ${String(det).slice(0, 90)}`);
+        continue;
+      }
+
       const { hours, reason } = getErrorTTL(err);
 
       errors.push({ provider, error: err.message?.slice(0, 120), reason });
