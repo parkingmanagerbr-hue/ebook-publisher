@@ -76,13 +76,24 @@ function aplicarLote(lote) {
 async function main() {
   const lote = parseInt(arg('lote', '40'), 10);
   const ciclos = parseInt(arg('ciclos', '200'), 10);
-  let totalOk = 0, totalGeradas = 0, semGanchoAcum = 0;
+  let totalOk = 0, totalGeradas = 0, semGanchoAcum = 0, falhasSeguidas = 0;
   const t0 = Date.now();
 
   for (let c = 1; c <= ciclos; c++) {
     destravarIA();                          // gancho depende de provedor vivo
     const g = regerar(lote);
-    if (!g) break;
+    if (!g) {
+      // Falha transitoria nao pode matar um passe de horas. A primeira queda
+      // real foi o proprio CI redeployando o container depois de um push meu:
+      // o docker exec falhou por segundos e o laco inteiro morreu no ciclo 2.
+      // So desiste depois de varias quedas SEGUIDAS — ai o problema e real.
+      falhasSeguidas++;
+      if (falhasSeguidas >= 6) { console.log('6 falhas seguidas de regeracao — desistindo'); break; }
+      console.log(`  regeracao falhou (${falhasSeguidas}/6) — nova tentativa em 2 min`);
+      dormir(120000);
+      continue;
+    }
+    falhasSeguidas = 0;
 
     // total === 0 e o UNICO fim legitimo: nao ha mais e-book sem capa viral.
     if (g.total === 0) { console.log('catalogo inteiro com capa viral — encerrando'); break; }
@@ -103,7 +114,8 @@ async function main() {
       dormir(180000);
     }
   }
-  console.log(`\nTOTAL GERAL: ${totalOk} capas em ${((Date.now() - t0) / 60000).toFixed(0)} min`);
+  console.log('\nTOTAL GERAL: ' + totalGeradas + ' capas virais geradas, ' + totalOk + ' subidas, ' +
+    semGanchoAcum + ' passagens sem gancho, em ' + ((Date.now() - t0) / 60000).toFixed(0) + ' min');
 }
 
 if (require.main === module) {
