@@ -102,7 +102,15 @@ async function regerar(opts) {
 
   let ok = 0, semGancho = 0;
   const t0 = Date.now();
+  // Espaco entre capas no passe TODAS. Pulando a imagem quando nao ha gancho,
+  // quarenta itens passavam em dois minutos — rajada suficiente para estourar o
+  // limite POR MINUTO dos provedores gratuitos e prender as chaves. 4 s mantem
+  // o ritmo abaixo de 15 chamadas/min, sem pesar no passe (a imagem ja leva ~9 s).
+  const PAUSA_MS = parseInt(process.env.REGEN_PAUSA_MS || (todas ? '4000' : '0'), 10);
+  let primeiro = true;
   for (const e of itens) {
+    if (!primeiro && PAUSA_MS > 0) await new Promise(r => setTimeout(r, PAUSA_MS));
+    primeiro = false;
     try {
       const caminho = await generateViralCover(
         e.title, e.subtitle || '', e.topic || e.title,

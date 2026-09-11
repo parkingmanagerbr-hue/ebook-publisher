@@ -622,7 +622,9 @@ function getErrorTTL(err) {
     if (body.includes('queue') && (body.includes('queue_exceeded') || body.includes('queue full') || body.includes('high traffic'))) {
       return { hours: 5/60, reason: 'quota/rate-limit' }; // 5 minutos
     }
-    const isHardQuota = body.includes('daily') || body.includes('day') || body.includes('exceeded your current quota') || body.includes('per day');
+    // 'day' solto casava por acidente ("today", nome da org). So vale o que diz
+    // explicitamente que e cota diaria.
+    const isHardQuota = /daily|per day|requests per day|tokens per day|rpd|tpd|exceeded your current quota/.test(body);
     if (isHardQuota) {
       // Quota diária → degradar até próxima meia-noite UTC
       const now = new Date();
@@ -630,8 +632,21 @@ function getErrorTTL(err) {
       const hoursUntilMidnight = (midnight - now) / 3_600_000;
       return { hours: Math.max(0.5, hoursUntilMidnight), reason: 'quota/rate-limit' };
     }
-    // Rate limit por minuto → degradar apenas 1 hora
-    return { hours: 1, reason: 'quota/rate-limit' };
+    // Rate limit POR MINUTO: a janela zera em 60 s. Degradar 1 h era 60x o
+    // necessario — com o laco de capas disparando rapido, cada chave batia no
+    // limite do minuto uma vez e ficava presa uma hora; as 5 do Groq caiam em
+    // menos de um minuto e as capas saiam sem gancho. Usa a dica do provedor
+    // ("try again in 7.5s", retry-after) quando vier; senao 2 min.
+    const dica = body.match(/try again in ([\d.]+)\s*(ms|s|m)/);
+    let seg = 120;
+    if (dica) {
+      const v = parseFloat(dica[1]);
+      seg = dica[2] === 'ms' ? v / 1000 : dica[2] === 'm' ? v * 60 : v;
+    }
+    const ra = err.response?.headers?.['retry-after'];
+    if (ra && !isNaN(parseFloat(ra))) seg = parseFloat(ra);
+    seg = Math.min(600, Math.max(15, seg + 5));   // folga de 5 s, entre 15 s e 10 min
+    return { hours: seg / 3600, reason: 'quota/rate-limit' };
   }
   if (status >= 500) return { hours: 0.5, reason: 'server-error' };
   if (msg.includes('timeout') || msg.includes('econnrefused') || msg.includes('enotfound') || msg.includes('econnreset')) {
