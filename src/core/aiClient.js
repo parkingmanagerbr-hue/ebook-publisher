@@ -122,7 +122,12 @@ function _rCmd(...args) {
   });
 }
 const _QUOTA_SYS = 'ebook';
-const _QUOTA_MAX = 200;
+// Teto diario de chamadas Gemini deste sistema (rateio entre sistemas do
+// ecossistema, via Redis). Era 200, numero de quando o e-book gerava pouco. Hoje
+// ele e o maior consumidor legitimo: cada capa viral pede um gancho, e 200/dia
+// levaria cinco dias so para o catalogo atual. Medido em 11/09/2026: systemcaster
+// 266, music 1 — sobra folga. Configuravel para reduzir sem novo deploy.
+const _QUOTA_MAX = parseInt(process.env.EBOOK_GEMINI_DAILY_MAX || '1500', 10);
 async function _isGeminiGloballyExhausted() { return !!(await _rCmd('GET', 'gemini:daily_exhausted')); }
 async function _markGeminiGloballyExhausted() {
   const now = Date.now(), r = new Date();
@@ -687,10 +692,16 @@ async function generate(prompt, systemPrompt = '', options = {}) {
     }
 
     // Cross-system quota gate for Gemini
+    //
+    // PULAR, nao degradar por 24h. A bandeira global dura no maximo 30 min (o
+    // proprio _markGeminiGloballyExhausted limita o TTL) e o teto diario zera a
+    // meia-noite UTC — ambos ja carregam a propria duracao. Marcar 24h aqui
+    // transformava uma trava de MINUTOS num dia inteiro sem Gemini: medido em
+    // 11/09/2026, bandeira com TTL de 86 s e o provedor bloqueado por 24 h,
+    // com as capas saindo sem gancho enquanto o balde ja estava livre.
     if (provider === 'gemini') {
       if (await _isGeminiGloballyExhausted() || !(await _withinDailyBudget())) {
-        markDegraded(state, 'gemini', 24);
-        continue; // skip to next provider
+        continue; // proxima chamada reavalia; a trava expira sozinha
       }
     }
 
