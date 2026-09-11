@@ -634,13 +634,13 @@ function getErrorTTL(err) {
     }
     // 'day' solto casava por acidente ("today", nome da org). So vale o que diz
     // explicitamente que e cota diaria.
-    const isHardQuota = /daily|per day|requests per day|tokens per day|rpd|tpd|exceeded your current quota/.test(body);
+    const isHardQuota = /\bdaily\b|per day|requests per day|tokens per day|\brpd\b|\btpd\b|exceeded your current quota/.test(body);
     // A dica do provedor vale TAMBEM para limite diario. O TPD do Groq e janela
     // DESLIZANTE de 24h, nao zera a meia-noite: a mensagem diz exatamente quando
     // os tokens liberam ("try again in 7m35s"). Travar ate a meia-noite ignorava
     // isso — medido em 11/09/2026: das 8 chaves presas por 10,5 h, 4 respondiam
     // 200 pedindo 5 mil tokens. So cai na meia-noite quando nao ha dica.
-    const dicaDia = body.match(/try again in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)?s?/);
+    const dicaDia = body.match(/try again in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)?s?\b/);
     if (isHardQuota && dicaDia && (dicaDia[1] || dicaDia[2] || dicaDia[3])) {
       const seg = (parseFloat(dicaDia[1] || 0) * 3600) + (parseFloat(dicaDia[2] || 0) * 60) + parseFloat(dicaDia[3] || 0);
       if (seg > 0) return { hours: Math.min(6, (seg + 30) / 3600), reason: 'quota/rate-limit' };
@@ -657,7 +657,7 @@ function getErrorTTL(err) {
     // limite do minuto uma vez e ficava presa uma hora; as 5 do Groq caiam em
     // menos de um minuto e as capas saiam sem gancho. Usa a dica do provedor
     // ("try again in 7.5s", retry-after) quando vier; senao 2 min.
-    const dica = body.match(/try again in ([\d.]+)\s*(ms|s|m)/);
+    const dica = body.match(/try again in ([\d.]+)\s*(ms|s|m)\b/);
     let seg = 120;
     if (dica) {
       const v = parseFloat(dica[1]);
@@ -942,6 +942,6 @@ function resetDegraded(provider = null) {
   saveState(state);
 }
 
-module.exports = { generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
+module.exports = { getErrorTTL, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
   // exportados para teste: e onde moraram os defeitos que pararam a geracao
   acaoParaErroGroq, isDegraded, getNextKey };

@@ -66,12 +66,31 @@ function media(h) {
  * Enquanto ninguém tem score, todas empatam em 0 e o desempate é aleatório —
  * é o comportamento certo para não cristalizar uma escolha sem evidência.
  */
-function escolherHook(memoria) {
+/**
+ * Nichos onde a capa nao pode fazer afirmacao causal.
+ *
+ * "Inimigo comum" e "contraintuitivo" funcionam apontando um culpado ou
+ * contrariando o que se sabe — em saude isso vira alegacao medica sem lastro
+ * (saiu "SUAS DORES VEM DA INDUSTRIA DE ALIMENTOS" numa capa). E risco de
+ * CDC/CONAR e de publicidade enganosa em saude. Nesses nichos as duas tecnicas
+ * saem do sorteio; as outras seis continuam.
+ */
+const TECNICAS_VEDADAS_SAUDE = new Set(['inimigo_comum', 'contraintuitivo']);
+const PISTA_SAUDE = /sa[uú]de|dieta|doen[cç]a|dor(es)?\b|inflama|ansiedade|depress|diabet|press[aã]o|colesterol|emagrec|peso|sono|ins[oô]nia|horm[oô]n|gravidez|beb[eê]|m[eé]dic|rem[eé]dio|suplement|terapia|health|diet|pain|disease|anxiety|weight|sleep/i;
+
+function ehNichoSaude(categoria, topico) {
+  return categoria === 'saude' || PISTA_SAUDE.test(String(topico || ''));
+}
+
+function escolherHook(memoria, categoria, topico) {
   const m = memoria || lerMemoria();
-  if (Math.random() < EPSILON) return HOOKS[Math.floor(Math.random() * HOOKS.length)];
-  let melhor = HOOKS[0];
+  const disponiveis = ehNichoSaude(categoria, topico)
+    ? HOOKS.filter(h => !TECNICAS_VEDADAS_SAUDE.has(h.id))
+    : HOOKS;
+  if (Math.random() < EPSILON) return disponiveis[Math.floor(Math.random() * disponiveis.length)];
+  let melhor = disponiveis[0];
   let melhorScore = -Infinity;
-  const embaralhado = HOOKS.slice().sort(() => Math.random() - 0.5); // desempate justo
+  const embaralhado = disponiveis.slice().sort(() => Math.random() - 0.5); // desempate justo
   for (const h of embaralhado) {
     const s = media(m.hooks[h.id]);
     if (s > melhorScore) { melhorScore = s; melhor = h; }
@@ -129,9 +148,39 @@ function limitar(txt, max) {
  * Gera a embalagem. NUNCA lança: sem IA, devolve null e o chamador mantém o
  * texto atual — capa boa com título comum é melhor que pipeline parado.
  */
+// Alegacao causal ou terapeutica, e culpa atribuida a terceiros.
+const ALEGACAO = /\bcur(a|ar|e|am)\b|\btrat(a|ar|amento)\b|causa(d[ao])?\b|culpa|v[eê]m d[aoe]|vem d[aoe]|ind[uú]stria|m[eé]dicos? (n[aã]o|mentem|escondem)|elimin(a|e) (a |o )?(dor|doen)|acab(a|e) com (a |o )?(dor|doen)|\bcure\b|\bcauses?\b|\bheals?\b|\bindustry\b/i;
+
+async function revisar(p, idioma) {
+  try {
+    const { generate } = require('../core/aiClient');
+    const pedido = [
+      'Revise ortografia, acentuacao e concordancia do texto de capa abaixo, no idioma ' + idioma + '.',
+      'Nao mude o sentido, nao acrescente palavras, respeite o tamanho de cada campo.',
+      'Se ja estiver correto, devolva igual.',
+      '',
+      JSON.stringify({ kicker: p.kicker, titulo: p.titulo, subtitulo: p.subtitulo, badge: p.badge }),
+      '',
+      'Responda APENAS com o JSON revisado, mesmas chaves.',
+    ].join('\n');
+    const bruto = await generate(pedido, 'Voce e um revisor de texto rigoroso.', { maxTokens: 600 });
+    const t = typeof bruto === 'string' ? bruto : (bruto && bruto.text) || '';
+    const mm = t.match(/\{[\s\S]*\}/);
+    if (!mm) return p;
+    const r = JSON.parse(mm[0]);
+    // So aceita a revisao se ela devolveu os mesmos campos preenchidos; revisor
+    // que apaga campo estragaria uma embalagem que estava boa.
+    if (!r.kicker || !r.titulo || !r.subtitulo) return p;
+    return { kicker: r.kicker, titulo: r.titulo, subtitulo: r.subtitulo, badge: r.badge || p.badge };
+  } catch (e) {
+    log.warn('revisao indisponivel, mantendo original: ' + String(e.message).slice(0, 60));
+    return p;
+  }
+}
+
 async function gerarPackaging(opts) {
   const o = opts || {};
-  const hook = escolherHook();
+  const hook = escolherHook(undefined, o.categoria, o.topico || o.titulo);
   try {
     const { generate } = require('../core/aiClient');
 
@@ -149,6 +198,10 @@ async function gerarPackaging(opts) {
       '',
       'Regras: nada generico (nao use "guia completo" nem "metodo pratico");',
       'sem aspas; sem promessa de ganho financeiro garantido nem de cura;',
+      'NUNCA afirme causa de doenca, dor ou sintoma, nem que algo cura ou trata;',
+      'NUNCA culpe industria, empresa, profissao ou grupo de pessoas;',
+      'sem superlativo sem prova ("o melhor", "numero 1", "definitivo");',
+      'ortografia e concordancia impecaveis no idioma pedido;',
       'linguagem simples, de quem fala com a pessoa que sente a dor.',
       '',
       'Responda APENAS com JSON: {"kicker":"...","titulo":"...","subtitulo":"...","badge":"..."}',
@@ -165,6 +218,26 @@ async function gerarPackaging(opts) {
 
     let p;
     try { p = JSON.parse(m[0]); } catch (e) { log.warn('JSON de packaging invalido'); return null; }
+
+    // REVISAO: segunda chamada curta, so sobre as quatro frases. Os modelos
+    // menores (os que sobram quando o Gemini esgota) erram na capa publica —
+    // sairam "MITOS" com acento, "VEM" no lugar de "vem" plural, e "FALTA
+    // CLIENTES". Custa pouco: entrada de ~60 palavras e teto de 600 tokens,
+    // contra os 1200 da geracao. Se a revisao falhar, fica o texto original —
+    // nao vale perder a capa por causa dela.
+    p = await revisar(p, o.idioma || 'pt-BR');
+
+    // Filtro local de alegacao: a instrucao no prompt reduz, mas nao garante.
+    // Em nicho de saude, qualquer frase que afirme causa, cura ou culpado
+    // derruba a embalagem inteira — melhor capa sem gancho que capa com
+    // alegacao medica. A capa volta para a fila e tenta de novo depois.
+    if (ehNichoSaude(o.categoria, o.topico || o.titulo)) {
+      const junto = [p.kicker, p.titulo, p.subtitulo, p.badge].join(' ');
+      if (ALEGACAO.test(junto)) {
+        log.warn('packaging recusado por alegacao em nicho de saude: "' + junto.slice(0, 80) + '"');
+        return null;
+      }
+    }
 
     const out = {
       kicker: limitar(p.kicker, 40).toUpperCase(),
@@ -187,4 +260,4 @@ async function gerarPackaging(opts) {
   }
 }
 
-module.exports = { gerarPackaging, escolherHook, registrarUso, pontuarHook, placar, HOOKS, limitar };
+module.exports = { gerarPackaging, escolherHook, registrarUso, pontuarHook, placar, HOOKS, limitar, ehNichoSaude, ALEGACAO, TECNICAS_VEDADAS_SAUDE };
