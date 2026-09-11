@@ -440,10 +440,20 @@ function acaoParaErroGroq(status, mensagem) {
   return 'desistir';
 }
 
-async function callGroq(prompt, systemPrompt, apiKey) {
+/**
+ * O teto pedido pelo chamador PRECISA chegar aqui.
+ *
+ * Antes, generate() chamava o provedor so com (prompt, sys, chave) e as opcoes
+ * morriam no caminho: toda chamada reservava GROQ_MAX_TOKENS (4096). O Groq
+ * desconta o max_tokens PEDIDO do limite por minuto no ato — um gancho de capa
+ * de ~50 tokens consumia o orcamento de 80, e as chaves batiam no teto do minuto
+ * em rajada. Menor teto pedido = mais chamadas cabendo no mesmo minuto.
+ */
+async function callGroq(prompt, systemPrompt, apiKey, opts) {
   let ultimoErro = null;
+  const pedido = opts && Number(opts.maxTokens) > 0 ? Math.min(Number(opts.maxTokens), GROQ_MAX_TOKENS) : GROQ_MAX_TOKENS;
   for (const model of GROQ_MODELS) {
-    for (const teto of [GROQ_MAX_TOKENS, Math.floor(GROQ_MAX_TOKENS / 2)]) {
+    for (const teto of [pedido, Math.floor(pedido / 2)]) {
       try {
         return await callGroqComModelo(prompt, systemPrompt, apiKey, model, teto);
       } catch (e) {
@@ -625,8 +635,18 @@ function getErrorTTL(err) {
     // 'day' solto casava por acidente ("today", nome da org). So vale o que diz
     // explicitamente que e cota diaria.
     const isHardQuota = /daily|per day|requests per day|tokens per day|rpd|tpd|exceeded your current quota/.test(body);
+    // A dica do provedor vale TAMBEM para limite diario. O TPD do Groq e janela
+    // DESLIZANTE de 24h, nao zera a meia-noite: a mensagem diz exatamente quando
+    // os tokens liberam ("try again in 7m35s"). Travar ate a meia-noite ignorava
+    // isso — medido em 11/09/2026: das 8 chaves presas por 10,5 h, 4 respondiam
+    // 200 pedindo 5 mil tokens. So cai na meia-noite quando nao ha dica.
+    const dicaDia = body.match(/try again in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)?s?/);
+    if (isHardQuota && dicaDia && (dicaDia[1] || dicaDia[2] || dicaDia[3])) {
+      const seg = (parseFloat(dicaDia[1] || 0) * 3600) + (parseFloat(dicaDia[2] || 0) * 60) + parseFloat(dicaDia[3] || 0);
+      if (seg > 0) return { hours: Math.min(6, (seg + 30) / 3600), reason: 'quota/rate-limit' };
+    }
     if (isHardQuota) {
-      // Quota diária → degradar até próxima meia-noite UTC
+      // Quota diária sem dica → degradar até próxima meia-noite UTC
       const now = new Date();
       const midnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
       const hoursUntilMidnight = (midnight - now) / 3_600_000;
@@ -729,8 +749,8 @@ async function generate(prompt, systemPrompt = '', options = {}) {
 
       const fn = PROVIDER_FNS[provider];
       const result = LOCAL_PROVIDERS.has(provider)
-        ? await fn(prompt, sys)
-        : await fn(prompt, sys, apiKey);
+        ? await fn(prompt, sys, undefined, options)
+        : await fn(prompt, sys, apiKey, options);
 
       const elapsed = Date.now() - t0;
       logger.info(`✅ ${provider} respondeu em ${elapsed}ms (${result.length} chars)`);
@@ -787,7 +807,7 @@ async function generate(prompt, systemPrompt = '', options = {}) {
           try {
             logger.info(`🔄 Re-tentando ${provider} com chave ...${altKey.slice(-8)}`);
             const fn = PROVIDER_FNS[provider];
-            const result = await fn(prompt, sys, altKey);
+            const result = await fn(prompt, sys, altKey, options);
             logger.info(`✅ ${provider} (chave alt) respondeu (${result.length} chars)`);
             return { text: result, provider, elapsed: Date.now() - t0 };
           } catch (errAlt) {

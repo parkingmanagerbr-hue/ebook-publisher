@@ -154,7 +154,9 @@ async function gerarPackaging(opts) {
       'Responda APENAS com JSON: {"kicker":"...","titulo":"...","subtitulo":"...","badge":"..."}',
     ].join('\n');
 
-    const bruto = await generate(prompt, 'Voce e um diretor de arte especialista em capas que vendem.');
+    // Teto pequeno: o gancho tem ~50 tokens, e o Groq desconta o max_tokens
+    // pedido do limite por minuto. Folga para modelo de raciocinio (gpt-oss).
+    const bruto = await generate(prompt, 'Voce e um diretor de arte especialista em capas que vendem.', { maxTokens: 1200 });
     const texto = typeof bruto === 'string' ? bruto : (bruto && bruto.text) || '';
 
     // Modelo sem structured output embrulha em markdown — extrair o objeto.
