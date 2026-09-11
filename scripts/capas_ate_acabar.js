@@ -70,6 +70,14 @@ function aplicarLote(lote) {
   const saida = (r.stdout || '') + (r.stderr || '');
   const m = saida.match(/TOTAL: (\d+)\/(\d+)/);
   const vazio = /nada pendente/.test(saida);
+  // Sem TOTAL e sem "nada pendente", o filho QUEBROU. Antes isso virava um
+  // "subidas 0/0" mudo: foi assim que o upload ficou parado por ciclos inteiros
+  // quando o tar do Windows recusou uma opcao — o erro existia, mas era
+  // descartado junto com o resto da saida do filho.
+  if (!m && !vazio) {
+    const fim = saida.trim().split('\n').slice(-4).join(' | ');
+    console.log('  upload QUEBROU (codigo ' + r.status + '): ' + (fim || 'sem saida').slice(0, 300));
+  }
   return { ok: m ? parseInt(m[1], 10) : 0, total: m ? parseInt(m[2], 10) : 0, vazio, saida };
 }
 

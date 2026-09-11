@@ -139,10 +139,15 @@ function baixarCapasEmLote(itens, destinoDir) {
       `tar -czf /tmp/lotecapas.tgz -C /tmp/lotecapas .`, 600000);
   const tgz = path.join(destinoDir, 'lote.tgz');
   execFileSync('scp', [`${VPS}:/tmp/lotecapas.tgz`, tgz], { timeout: 600000 });
-  // --force-local: o tar do Git Bash le "C:\..." como host remoto por causa
-  // dos dois-pontos e tenta resolver "C" pela rede. Sem esta flag o comando
-  // falha com "Cannot connect to C: resolve failed" em qualquer caminho Windows.
-  execFileSync('tar', ['--force-local', '-xzf', tgz, '-C', destinoDir], { timeout: 300000 });
+  // Extrair DENTRO da pasta, com nome relativo: sem letra de drive no
+  // argumento, nao ha dois-pontos para o tar confundir com host remoto.
+  //
+  // A versao anterior usava --force-local, que so o tar do Git Bash aceita. O
+  // vigia religa o passe via cmd.exe, onde "tar" e o do Windows (bsdtar), que
+  // responde "Option --force-local is not supported" — todo lote de upload
+  // quebrava ali e o relatorio mostrava so "subidas 0/0". Caminho relativo
+  // funciona igual nos dois.
+  execFileSync('tar', ['-xzf', 'lote.tgz'], { cwd: destinoDir, timeout: 300000 });
   try { fs.unlinkSync(tgz); } catch {}
 
   const mapa = new Map();
