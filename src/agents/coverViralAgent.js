@@ -33,6 +33,66 @@ const STYLE = {
 const NEG = 'blurry, distorted face, deformed, extra fingers, watermark, text, letters, logo, low quality, cartoon';
 
 /**
+ * Cena e luz por categoria, SEM a pessoa.
+ *
+ * O prompt antigo trazia a pessoa embutida ("confident brazilian businessman in
+ * elegant suit"), fixa por categoria. A semente aleatoria mudava detalhes, mas o
+ * arquetipo era sempre o mesmo — oitenta livros de financas com o mesmo homem de
+ * terno. Separar cena de pessoa deixa variar quem aparece sem perder o clima.
+ */
+const CENA = {
+  financas:        'subtle city skyline at golden hour behind, wealth and success, sharp cinematic lighting',
+  tecnologia:      'working with a laptop, dramatic neon blue and cyan tech lighting, futuristic digital atmosphere',
+  saude:           'bright energetic natural light, wellness and vitality, radiant healthy look',
+  negocios:        'dynamic dramatic lighting, ambition and success energy, modern setting',
+  comportamento:   'calm powerful expression, deep teal and navy dramatic rim lighting, emotional depth',
+  espiritualidade: 'soft golden light rays from above, warm spiritual atmosphere, serenity',
+  relacionamentos: 'warm intimate lighting, genuine connection, soft focus background',
+  educacao:        'studying with books, bright hopeful academic lighting, achievement and growth',
+  familia:         'warm soft golden light, genuine tenderness and care, home setting',
+  carreira:        'modern office, corporate success, sharp clean lighting',
+  default:         'calm strong expression, dramatic cinematic lighting, deep rich background',
+};
+// Categorias cujo protagonista NAO e uma pessoa: o prompt original ja serve.
+const SEM_PESSOA = new Set(['culinaria', 'pets']);
+
+const PESSOAS = [
+  'young woman in her twenties with curly hair',
+  'man in his thirties with a short beard',
+  'woman in her forties with straight dark hair',
+  'senior man in his sixties with grey hair',
+  'young man in his twenties with a friendly smile',
+  'woman in her fifties with short silver hair',
+  'man in his forties with glasses',
+  'young woman with braided hair',
+  'middle-aged woman with wavy auburn hair',
+  'man in his fifties wearing a casual shirt',
+  'woman in her thirties with a ponytail',
+  'young man with dark skin and short hair',
+  'woman with East Asian features in her thirties',
+  'man with olive skin in his thirties',
+];
+
+/** Pessoa estavel por livro: o mesmo e-book regerado mantem o rosto; livros diferentes variam. */
+function pessoaPara(chave) {
+  let h = 0;
+  for (const c of String(chave || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return PESSOAS[h % PESSOAS.length];
+}
+
+function promptDaCapa(category, title, topic) {
+  const st = STYLE[category] || STYLE.default;
+  const base = SEM_PESSOA.has(category)
+    ? st.img
+    : `portrait of a ${pessoaPara(title)}, ${CENA[category] || CENA.default}`;
+  return `${base}, theme: ${String(topic || title).slice(0, 80)}. ` +
+    // A composicao que tornava o acervo Flow melhor: pessoa nos dois tercos de
+    // cima, terco de baixo escuro e limpo — e onde o titulo e escrito.
+    'Subject framed in the upper two thirds, lower third dark and uncluttered. ' +
+    `Professional book cover photography, ultra detailed, high contrast, dramatic. Negative: ${NEG}`;
+}
+
+/**
  * Rotulos da capa por idioma.
  *
  * O badge e o kicker eram texto fixo em portugues, entao livro em ingles saia
@@ -202,13 +262,25 @@ async function generateViralCover(title, subtitle, topic, category, coversDir, i
     //
     // Sem imagem para a categoria, cai na geracao por API — o pipeline nunca
     // depende do acervo estar populado.
-    const doPool = escolherDoPool(category);
-    if (doPool) {
-      fs.copyFileSync(doPool, tmp);
-      log.info(`fundo do acervo Flow: ${path.basename(doPool)}`);
-    } else {
-      const prompt = `${st.img}. Professional book cover photography, ultra detailed, 8k, high contrast, dramatic. Negative: ${NEG}`;
-      await generateImage({ prompt, width: 1024, height: 1536, outputPath: tmp });
+    // GERAR PRIMEIRO, acervo so como reserva.
+    //
+    // A ordem era o contrario: o acervo tinha 4 imagens por categoria e era
+    // consultado antes de gerar. Com ~80 livros por categoria, cada rosto se
+    // repetia umas vinte vezes — e categoria fora da lista (educacao, por
+    // exemplo) caia no grupo "geral", mais 4 imagens dividindo o resto do
+    // catalogo. Gerando por livro, com pessoa variada e semente aleatoria, cada
+    // capa tem rosto proprio; o acervo so entra se a geracao falhar.
+    let gerou = false;
+    try {
+      await generateImage({ prompt: promptDaCapa(category, title, topic), width: 1024, height: 1536, outputPath: tmp });
+      gerou = fs.existsSync(tmp) && fs.statSync(tmp).size >= 6000;
+    } catch (e) { log.warn(`geracao falhou (${e.message.slice(0, 60)}) — tentando o acervo`); }
+    if (!gerou) {
+      const doPool = escolherDoPool(category);
+      if (doPool) {
+        fs.copyFileSync(doPool, tmp);
+        log.info(`fundo do acervo Flow (reserva): ${path.basename(doPool)}`);
+      }
     }
     if (!fs.existsSync(tmp) || fs.statSync(tmp).size < 6000) throw new Error('imagem vazia/falhou');
     const imgB64 = fs.readFileSync(tmp).toString('base64');
