@@ -31,6 +31,13 @@ const STATE_FILE = path.join(__dirname, '../../data/ai_state.json');
 // Suporte a múltiplas chaves por provider (rotação automática)
 const PROVIDER_KEYS = {
   gemini: [
+    // Chave "paga" PRIMEIRO, como manda o playbook GENIA (L2/L3). Estava no
+    // container desde junho e este cliente nunca a lia. Medido em 14/09/2026: o
+    // projeto dela ainda esta no FREE TIER (quotaId ...PerModel-FreeTier,
+    // limite 20/dia) — o faturamento nao foi ativado no projeto da chave. Fica
+    // aqui assim mesmo: no dia em que o faturamento for ligado, passa a valer
+    // sem deploy nenhum.
+    process.env.GEMINI_PAID_KEY,
     process.env.GEMINI_API_KEY,
     process.env.GEMINI_API_KEY_2,
     process.env.GEMINI_API_KEY_3,
@@ -339,9 +346,15 @@ process.on('SIGINT', () => { if (_tunnelProc) _tunnelProc.kill(); process.exit()
  *
  * GEMINI_MODEL, se definido, vai na frente — mas nao fica sozinho.
  */
+// Modelos novos entram como baldes de cota SEPARADOS. Medido em 14/09/2026:
+// gemini-3-flash-preview, gemini-3.5-flash-lite e gemini-flash-lite-latest
+// respondiam 200 em 8 de 12 chaves, e o sistema nunca os tinha usado.
+// gemini-2.5-flash-lite e gemini-2.5-pro sairam: devolvem 404 "no longer
+// available to new users" — cada tentativa era uma chamada jogada fora.
 const MODELOS_GEMINI = [...new Set([
   process.env.GEMINI_MODEL,
-  'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-2.0-flash',
+  'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-flash-latest',
+  'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.1-flash-lite', 'gemini-2.0-flash',
 ].filter(Boolean))];
 
 function ehCotaOuModeloIndisponivel(e) {
@@ -735,7 +748,15 @@ async function generate(prompt, systemPrompt = '', options = {}) {
     // 11/09/2026, bandeira com TTL de 86 s e o provedor bloqueado por 24 h,
     // com as capas saindo sem gancho enquanto o balde ja estava livre.
     if (provider === 'gemini') {
-      if (await _isGeminiGloballyExhausted() || !(await _withinDailyBudget())) {
+      // A bandeira global (gemini:daily_exhausted) NAO e mais consultada aqui.
+      // Ela nasceu quando todos os sistemas usavam as MESMAS 6 chaves: um
+      // esgotava e avisava os outros. Hoje este cliente tem rotacao por chave e
+      // por modelo, e trava cada chave pelo tempo que o provedor manda. A
+      // bandeira virou um interruptor que desligava o Gemini INTEIRO por causa
+      // do balde de outro: medido em 14/09/2026, acesa com 21 min restantes
+      // enquanto 8 de 12 chaves respondiam nos modelos gemini-3. O teto diario
+      // (_withinDailyBudget) continua — e ele que protege os outros sistemas.
+      if (!(await _withinDailyBudget())) {
         continue; // proxima chamada reavalia; a trava expira sozinha
       }
     }
@@ -817,7 +838,9 @@ async function generate(prompt, systemPrompt = '', options = {}) {
             errors.push({ provider, error: errAlt.message?.slice(0, 80), key: altKeyId });
           }
         }
-        if (provider === 'gemini') await _markGeminiGloballyExhausted();
+        // Nao acende mais a bandeira global: o esgotamento destas chaves ja fica
+        // registrado chave a chave aqui, e acender a bandeira desligava o Gemini
+        // de sistemas com outras chaves e outros modelos.
         logger.info(`   Todas as chaves de ${provider} esgotadas, indo para próximo provider...`);
       }
     }

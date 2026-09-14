@@ -43,7 +43,7 @@ const PROVEDORES = {
   gemini: {
     // Formato proprio (nao OpenAI): tratado a parte em respondeDeVerdade.
     gemini: true,
-    modelos: ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash-lite'],
+    modelos: ['gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-2.5-flash', 'gemini-flash-latest'],
     env: 'GEMINI_API_KEY',
   },
 };
