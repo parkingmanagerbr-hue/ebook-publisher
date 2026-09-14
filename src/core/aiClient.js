@@ -554,38 +554,44 @@ async function callDeepSeek(prompt, systemPrompt, apiKey) {
   return response.data.choices[0].message.content;
 }
 
-async function callHuggingFace(prompt, systemPrompt, apiKey) {
-  // NOTE: June 2026 audit — many routes permanently removed (410 Gone / 403 Forbidden):
-  //   together/Meta-Llama-3.1-70B-Instruct-Turbo        → 410
-  //   together/Qwen/Qwen2.5-72B-Instruct-Turbo          → 410
-  //   fireworks-ai/llama-v3p1-70b-instruct               → 410
-  //   nebius/Meta-Llama-3.1-70B-Instruct                 → 403
-  //   nebius/Qwen/Qwen2.5-72B-Instruct                   → 403
-  // Only hf-inference small models + cerebras-via-HF remain alive.
-  const hfRouter = [
-    // hf-inference free tier — small models (fast, limited quality)
-    ["hf-inference", "meta-llama/Llama-3.2-3B-Instruct"],
-    ["hf-inference", "HuggingFaceTB/SmolLM2-1.7B-Instruct"],
-    // cerebras provider on HF router (may overlap with direct Cerebras)
-    ["cerebras", "llama3.3-70b"],
-  ];
-  for (const [provider, model] of hfRouter) {
+// ROTEADOR UNIFICADO do HF (/v1/chat/completions, modelo no corpo). As rotas
+// antigas por provedor (/hf-inference/models/..., /cerebras/models/...) sumiram,
+// toda chamada dava 404 e o erro era engolido — o provedor ficava marcado como
+// "sem chave valida" com 6 chaves funcionando. Medido em 14/09/2026: as 6
+// respondem 200 no roteador unificado, e ele serve modelos grandes. Nesse dia
+// Cerebras, SambaNova e DeepSeek ja cobravam (402) e o pipeline de livros
+// falhava inteiro por so sobrar o Groq.
+const MODELOS_HF = [
+  process.env.HF_MODEL,
+  'openai/gpt-oss-120b',
+  'Qwen/Qwen3-235B-A22B-Instruct-2507',
+  'deepseek-ai/DeepSeek-V3.1',
+  'meta-llama/Llama-3.3-70B-Instruct',
+].filter(Boolean);
+
+async function callHuggingFace(prompt, systemPrompt, apiKey, opts) {
+  const maxTokens = (opts && opts.maxTokens) || 4000;
+  let ultimoErro;
+  for (const model of MODELOS_HF) {
     try {
-      const url = `https://router.huggingface.co/${provider}/models/${model}/v1/chat/completions`;
-      const r = await axios.post(url,
-        { model, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }], max_tokens: 4000, temperature: 0.7 },
-        { headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 60_000 }
+      const r = await axios.post('https://router.huggingface.co/v1/chat/completions',
+        { model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }], max_tokens: maxTokens, temperature: 0.7 },
+        { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, timeout: 120_000 }
       );
-      if (r.data.choices?.[0]?.message?.content) return r.data.choices[0].message.content;
+      const texto = r.data.choices?.[0]?.message?.content;
+      if (texto) return texto;
+      ultimoErro = new Error('HuggingFace ' + model + ': resposta vazia');
     } catch (e) {
-      // Log non-DNS errors to help debug
       const status = e?.response?.status;
-      if (status && status !== 400 && status !== 404) {
-        logger.warn(`HF router ${provider}/${model}: ${status}`);
-      }
+      // Credito da conta, chave invalida ou limite: e da CHAVE, nao do modelo —
+      // repassar para a rotacao marcar esta chave e seguir para a proxima.
+      if (status === 401 || status === 402 || status === 403 || status === 429) throw e;
+      // 400/404/5xx/timeout: este modelo nao serve agora, tentar o seguinte.
+      logger.warn(`HF ${model}: ${status || e.code || e.message}`);
+      ultimoErro = e;
     }
   }
-  throw new Error("HuggingFace: nenhum provider disponivel");
+  throw ultimoErro || new Error('HuggingFace: nenhum modelo respondeu');
 }
 
 async function callPollinations(prompt, systemPrompt) {
@@ -965,6 +971,6 @@ function resetDegraded(provider = null) {
   saveState(state);
 }
 
-module.exports = { getErrorTTL, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
+module.exports = { getErrorTTL, callHuggingFace, MODELOS_HF, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
   // exportados para teste: e onde moraram os defeitos que pararam a geracao
   acaoParaErroGroq, isDegraded, getNextKey };
