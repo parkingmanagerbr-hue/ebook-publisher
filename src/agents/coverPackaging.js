@@ -151,6 +151,29 @@ function limitar(txt, max) {
 // Alegacao causal ou terapeutica, e culpa atribuida a terceiros.
 const ALEGACAO = /\bcur(a|ar|e|am)\b|\btrat(a|ar|amento)\b|causa(d[ao])?\b|culpa|v[eê]m d[aoe]|vem d[aoe]|ind[uú]stria|m[eé]dicos? (n[aã]o|mentem|escondem)|elimin(a|e) (a |o )?(dor|doen)|acab(a|e) com (a |o )?(dor|doen)|\bcure\b|\bcauses?\b|\bheals?\b|\bindustry\b/i;
 
+/**
+ * Promessa de resultado, credencial ou prova social que o livro nao tem.
+ *
+ * Numero de PASSOS ou DIAS de um metodo e legitimo ("5 passos", "em 30 dias");
+ * percentual de resultado, anos de experiencia, "comprovado", "mais vendido" e
+ * contagem de alunos/clientes nao — sao afirmacoes que ninguem pode provar.
+ */
+const PROMESSA_SEM_LASTRO = new RegExp([
+  '\\d+\\s*%', '\\d+\\s*パーセント',
+  '実績', '保証', '実証', 'ナンバーワン', '売上\\s*No',
+  'certifi', 'oficial', 'aprovad', 'credenciad', 'homologad', 'garantid', 'comprovad',
+  'certified', 'official', 'approved', 'guarantee', 'proven',
+  'best.?seller', 'mais vendid', 'm[aá]s vendid',
+  // Da amostra de capas publicadas em 14/09/2026:
+  'sem rem[eé]dio', 'sem medica', 'sin medicament', 'without medication', 'sans m[eé]dicament',
+  'controla\\w*\\s+(a\\s+|o\\s+|la\\s+)?(glicose|glucosa|diabetes|press[aã]o|colesterol)',
+  'resultados?\\s+em\\s+\\d+', 'resultados?\\s+en\\s+\\d+', 'results?\\s+in\\s+\\d+', 'r[eé]sultats?\\s+en\\s+\\d+',
+  'ci[eê]ncia\\s+(pura|real|comprovada)', 'cient[ií]ficamente', 'm[eé]todo testado', 'casos reais',
+  'n[ºo°]\\s*1\\b', '#\\s*1\\b', 'n[uú]mero\\s*1\\b', 'number\\s*one', 'n[uú]mero uno',
+  'anos de experi', 'a[nñ]os de experiencia', 'years of experience', "ans d.exp",
+  '\\d+\\s*mil\\s+(alunos|clientes|vendas|pessoas|leitores)', 'thousands of (students|customers|readers)',
+].join('|'), 'i');
+
 async function revisar(p, idioma) {
   try {
     const { generate } = require('../core/aiClient');
@@ -194,13 +217,16 @@ async function gerarPackaging(opts) {
       '- kicker: a dor, ate 40 caracteres, CAIXA ALTA, sem ponto final.',
       '- titulo: a promessa, ate 28 caracteres, no maximo 4 palavras, impacto alto.',
       '- subtitulo: como se resolve, ate 60 caracteres, concreto e especifico.',
-      '- badge: selo curto de credibilidade, ate 14 caracteres, 2 palavras no maximo.',
       '',
       'Regras: nada generico (nao use "guia completo" nem "metodo pratico");',
       'sem aspas; sem promessa de ganho financeiro garantido nem de cura;',
       'NUNCA afirme causa de doenca, dor ou sintoma, nem que algo cura ou trata;',
       'NUNCA culpe industria, empresa, profissao ou grupo de pessoas;',
       'sem superlativo sem prova ("o melhor", "numero 1", "definitivo");',
+      'badge NUNCA sugere certificacao, selo oficial, aprovacao ou garantia;',
+      'use apenas palavras que existem no dicionario do idioma — nada de neologismo;',
+      'NUNCA percentual de resultado, anos de experiencia, "comprovado", "mais vendido" nem numero de alunos/clientes;',
+      'em japones, escreva com kanji e hiragana naturais — katakana so para palavra estrangeira;',
       'ortografia e concordancia impecaveis no idioma pedido;',
       'linguagem simples, de quem fala com a pessoa que sente a dor.',
       '',
@@ -227,6 +253,14 @@ async function gerarPackaging(opts) {
     // nao vale perder a capa por causa dela.
     p = await revisar(p, o.idioma || 'pt-BR');
 
+    // NFKC antes dos filtros: em japones o modelo escreve digito e simbolo em
+    // largura cheia ("１０％削減"), que o \d e o % dos regex nao reconhecem —
+    // assim passou uma promessa de 10% numa capa em 14/09/2026. Normalizar
+    // tambem uniformiza o que vai para a capa.
+    for (const k of ['kicker', 'titulo', 'subtitulo', 'badge']) {
+      if (typeof p[k] === 'string') p[k] = p[k].normalize('NFKC');
+    }
+
     // Filtro local de alegacao: a instrucao no prompt reduz, mas nao garante.
     // Em nicho de saude, qualquer frase que afirme causa, cura ou culpado
     // derruba a embalagem inteira — melhor capa sem gancho que capa com
@@ -239,11 +273,28 @@ async function gerarPackaging(opts) {
       }
     }
 
+    // Promessa sem lastro. Em 14/09/2026 sairam "CERTIFICADO" num selo, e numa
+    // capa japonesa "実績 10年" (10 anos de experiencia) e "reduza o desperdicio em
+    // 30%" — nada disso existe. Selo com promessa e so zerado (cai no rotulo
+    // neutro); promessa no titulo, kicker ou subtitulo derruba a embalagem e a
+    // capa volta para a fila, porque ali nao da para apagar sem mudar o sentido.
+    if (PROMESSA_SEM_LASTRO.test(String(p.badge || ''))) p.badge = '';
+    const corpoCapa = [p.kicker, p.titulo, p.subtitulo].join(' ');
+    if (PROMESSA_SEM_LASTRO.test(corpoCapa)) {
+      log.warn('packaging recusado por promessa sem lastro: "' + corpoCapa.slice(0, 80) + '"');
+      return null;
+    }
     const out = {
       kicker: limitar(p.kicker, 40).toUpperCase(),
       titulo: limitar(p.titulo, 28),
       subtitulo: limitar(p.subtitulo, 60),
-      badge: limitar(p.badge, 14),
+      // O selo NAO vem mais da IA. O prompt pedia um "selo curto de
+      // credibilidade" — e um modelo sem credencial nenhuma inventava:
+      // amostra de 12 capas publicadas em 14/09/2026 trouxe CIENCIA PURA,
+      // APROVACAO, METODO TESTADO, APROVADO POR, CERTIFIE 2024, ESPECIALISTA,
+      // CASOS REAIS. Vazio aqui faz o gerador usar o rotulo neutro traduzido
+      // ("Passo a Passo", "Guia 2026"), que nao afirma nada.
+      badge: '',
       hookId: hook.id,
     };
     // Embalagem incompleta é pior que a atual: melhor recusar inteira.
@@ -260,4 +311,4 @@ async function gerarPackaging(opts) {
   }
 }
 
-module.exports = { gerarPackaging, escolherHook, registrarUso, pontuarHook, placar, HOOKS, limitar, ehNichoSaude, ALEGACAO, TECNICAS_VEDADAS_SAUDE };
+module.exports = { gerarPackaging, escolherHook, registrarUso, pontuarHook, placar, HOOKS, limitar, ehNichoSaude, ALEGACAO, TECNICAS_VEDADAS_SAUDE, PROMESSA_SEM_LASTRO };

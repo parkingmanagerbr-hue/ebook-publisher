@@ -155,7 +155,7 @@ async function regerar(opts) {
         // fila e a imagem teria sido gerada em vao.
         // Esgotado o teto de tentativas, sai com o titulo do proprio livro:
         // capa com rosto unico e titulo simples ainda e melhor que a antiga.
-        { exigirGancho: todas && (e.tentativas || 0) < MAX_TENTATIVAS_GANCHO }
+        { exigirGancho: todas && (e.tentativas || 0) < MAX_TENTATIVAS_GANCHO, exigirImagemUnica: todas }
       );
       if (caminho && fs.existsSync(caminho)) {
         // Gravar o caminho novo: e por ele que o backfill vai encontrar a capa.

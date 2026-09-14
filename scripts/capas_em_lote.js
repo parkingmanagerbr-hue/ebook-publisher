@@ -72,6 +72,25 @@ function rodarNoContainer(js) {
   return ssh(`docker exec ${CONTAINER} sh -c "cd /app && node qlote.js"`);
 }
 
+/** Itens dados a mao (PRODUTO:EBOOK_ID), com capa e idioma lidos do e-book. */
+function buscarForcados(lista) {
+  const pares = lista.split(',').map(x => x.trim()).filter(Boolean).map(x => x.split(':'));
+  const saida = rodarNoContainer(`
+    const D = require('better-sqlite3');
+    const fs = require('fs');
+    const db = new D('/app/data/metrics.db', { readonly: true });
+    const pares = ${JSON.stringify(pares)};
+    const out = [];
+    for (const [pid, id] of pares) {
+      const e = db.prepare('SELECT title, cover_path, language FROM ebooks WHERE id = ?').get(id);
+      if (e && e.cover_path && fs.existsSync(e.cover_path)) out.push({ pid, title: e.title, cover_path: e.cover_path, language: e.language });
+    }
+    console.log(JSON.stringify(out));
+  `);
+  const m = saida.match(/\[.*\]/s);
+  return m ? JSON.parse(m[0]) : [];
+}
+
 /** Produtos no Hotmart que ainda nao passaram por aqui e tem capa em disco. */
 function buscarPendentes(limite) {
   const saida = rodarNoContainer(`
@@ -232,7 +251,12 @@ async function main() {
   const dryRun = process.argv.includes('--dry-run');
 
   console.log('consultando a fila...');
-  const itens = buscarPendentes(limite);
+  // --itens=PRODUTO:EBOOK_ID,... aplica a capa do e-book em produtos especificos,
+  // inclusive os que nao estao no banco. Existe para limpar produtos que
+  // receberam imagem de TESTE durante a descoberta do upload — quatro copias do
+  // mesmo e-book japones, duas delas vendendo, fora de qualquer fila.
+  const forcados = arg('itens', '');
+  const itens = forcados ? buscarForcados(forcados) : buscarPendentes(limite);
   if (!itens.length) { console.log('nada pendente'); return; }
   console.log(itens.length + ' produtos na fila');
 

@@ -19,7 +19,32 @@ const fs = require('fs');
 const path = require('path');
 
 const { getErrorTTL } = require('../src/core/aiClient');
-const { ALEGACAO, ehNichoSaude, TECNICAS_VEDADAS_SAUDE, escolherHook } = require('../src/agents/coverPackaging');
+const { ALEGACAO, ehNichoSaude, TECNICAS_VEDADAS_SAUDE, escolherHook, PROMESSA_SEM_LASTRO } = require('../src/agents/coverPackaging');
+
+test('promessa sem lastro: pega o que saiu de verdade em capas', () => {
+  for (const t of ['CERTIFICADO', '実績 10年', '無駄を30%削減する手順', 'MÉTODO COMPROVADO', 'Nº 1 EM VENDAS',
+                   '#1 BESTSELLER', 'MAIS VENDIDO', '10 anos de experiência', '5 mil alunos', 'GUARANTEED RESULTS',
+                   // amostra real de capas publicadas em 14/09/2026
+                   'Cardápio cetogênico para controlar a glicose sem remédios', 'Passo a passo diário, resultados em 30 dias',
+                   'CIÊNCIA PURA', 'MÉTODO TESTADO', 'APROVADO POR', 'CERTIFIÉ 2024', 'CASOS REAIS', 'recupera tu energía sin medicamentos'])
+    assert.ok(PROMESSA_SEM_LASTRO.test(t), 'deveria pegar: ' + t);
+});
+
+test('promessa em largura cheia so e pega depois do NFKC que o packaging aplica', () => {
+  const t = '毎月の支出を１０％削減';
+  assert.ok(!PROMESSA_SEM_LASTRO.test(t), 'controle: sem normalizar o regex nao pega');
+  assert.ok(PROMESSA_SEM_LASTRO.test(t.normalize('NFKC')));
+  const fonte = fs.readFileSync(path.join(__dirname, '..', 'src', 'agents', 'coverPackaging.js'), 'utf8');
+  assert.ok(fonte.indexOf("normalize('NFKC')") > 0 &&
+            fonte.indexOf("normalize('NFKC')") < fonte.indexOf('PROMESSA_SEM_LASTRO.test(corpoCapa)'),
+            'o NFKC tem de vir antes do filtro');
+});
+
+test('promessa sem lastro: NAO acusa numero legitimo de metodo (controle negativo)', () => {
+  for (const t of ['5 Passos Rápidos', 'Plano de 30 Dias', 'Saia das Dívidas em 90 Dias', 'Guia 2026',
+                   'Comece com R$ 50 por mês', 'DOCUMENTOS EM CONFUSÃO', '7 Hábitos Simples', '家計管理アプリ活用'])
+    assert.ok(!PROMESSA_SEM_LASTRO.test(t), 'nao deveria acusar: ' + t);
+});
 
 function arquivosJs(dir) {
   const out = [];

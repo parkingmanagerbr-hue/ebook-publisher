@@ -30,7 +30,12 @@ const STYLE = {
   pets:             { img: 'adorable happy dog and cat together, joyful expression, warm bright natural light, professional pet photography, heartwarming', a1:'#ffb072', accent:'#ffcaa0' },
   default:          { img: 'confident inspiring brazilian person portrait, calm strong expression, dramatic cinematic lighting, deep rich background', a1:'#ffc24b', accent:'#ffd166' },
 };
-const NEG = 'blurry, distorted face, deformed, extra fingers, watermark, text, letters, logo, low quality, cartoon';
+// Os termos de nudez/sensualidade no negativo NAO sao decorativos. Em 14/09/2026
+// uma capa de livro sobre documentos de ADOCAO saiu com uma mulher de ombros nus
+// e ar sensual — o Pollinations tende a sexualizar "retrato de mulher jovem"
+// quando nada diz o contrario. Capa de e-book e vitrine publica de loja.
+const NEG = 'blurry, distorted face, deformed, extra fingers, watermark, text, letters, logo, low quality, cartoon, ' +
+  'nude, naked, topless, bare shoulders, cleavage, lingerie, swimsuit, sensual, sexy, seductive, suggestive, erotic';
 
 /**
  * Cena e luz por categoria, SEM a pessoa.
@@ -84,7 +89,8 @@ function promptDaCapa(category, title, topic) {
   const st = STYLE[category] || STYLE.default;
   const base = SEM_PESSOA.has(category)
     ? st.img
-    : `portrait of a ${pessoaPara(title)}, ${CENA[category] || CENA.default}`;
+    : `professional portrait of a ${pessoaPara(title)}, fully clothed in modest professional attire, ` +
+      `shoulders covered, friendly and trustworthy, family-friendly, ${CENA[category] || CENA.default}`;
   return `${base}, theme: ${String(topic || title).slice(0, 80)}. ` +
     // A composicao que tornava o acervo Flow melhor: pessoa nos dois tercos de
     // cima, terco de baixo escuro e limpo — e onde o titulo e escrito.
@@ -157,8 +163,16 @@ function coverHTML({ title, subtitle, kicker, badge, st, imgB64 }) {
   const kickSize = kickLen > 30 ? 26 : kickLen > 22 ? 31 : 38;
   const kickSpacing = kickLen > 30 ? 4 : kickLen > 22 ? 6 : 10;
 
+  // LARGURA DO CARACTERE: 0.55 em e o Anton em caixa alta. Japones, chines e
+  // coreano ocupam ~1 em e nao tem espaco entre palavras — com 0.55 a fonte saia
+  // grande demais e o navegador quebrava a linha no meio da palavra ("見え / る化
+  // する", visto a olho numa capa em 14/09/2026). Sem espaco, o texto inteiro
+  // conta como uma "palavra" so, entao o limite de largura tambem precisa dela.
+  const cjk = /[぀-ヿ㐀-鿿가-힯]/.test(main + accent);
+  const fatorChar = cjk ? 1.0 : 0.55;
+
   let big = (main + accent).length > 14 ? 200 : 250;
-  big = Math.max(90, Math.min(big, Math.floor(1380 / (0.55 * maxWord))));
+  big = Math.max(90, Math.min(big, Math.floor(1380 / (fatorChar * maxWord))));
 
   // ALTURA DE LINHA: 0.9 sobrepunha as linhas — visto a olho numa capa real
   // ("NA PESQUISA" / "ACADEMICA": o circunflexo do A batia na perna do Q).
@@ -166,9 +180,15 @@ function coverHTML({ title, subtitle, kicker, badge, st, imgB64 }) {
   // (Q, J), entao 0.9 nao cabe. 1.06 e o menor valor que separa os dois casos.
   // Titulo com 3+ linhas fica mais alto, entao a fonte encolhe para o bloco
   // continuar cabendo — senao consertar a sobreposicao criaria transbordo.
-  const charsPorLinha = Math.max(1, Math.floor(1380 / (0.55 * big)));
+  const charsPorLinha = Math.max(1, Math.floor(1380 / (fatorChar * big)));
   const linhas = Math.ceil((main + ' ' + accent).trim().length / charsPorLinha);
   if (linhas >= 3) big = Math.max(90, Math.floor(big * 0.86));
+  // Em CJK, com o bloco sem espacos, a fonte precisa caber na linha INTEIRA de
+  // cada parte (main e destaque), senao o navegador parte o destaque ao meio.
+  if (cjk) {
+    const maiorParte = Math.max(String(main).length, String(accent).length, 1);
+    big = Math.max(80, Math.min(big, Math.floor(1380 / (fatorChar * maiorParte))));
+  }
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@700;800&family=Space+Grotesk:wght@600;700&display=swap');
@@ -185,9 +205,9 @@ function coverHTML({ title, subtitle, kicker, badge, st, imgB64 }) {
 .badge{position:absolute;top:116px;right:105px;z-index:6;background:${st.a1};color:#0a0a0a;font-family:'Space Grotesk';font-weight:700;letter-spacing:3px;font-size:31px;text-transform:uppercase;padding:17px 28px;border-radius:14px;transform:rotate(5deg);box-shadow:0 14px 40px ${st.a1}66}
 .mid{position:absolute;left:100px;right:100px;bottom:360px;text-align:center;z-index:6}
 .bar{width:120px;height:10px;margin:0 auto 40px;border-radius:6px;background:${st.a1};box-shadow:0 0 40px ${st.a1}}
-.title{font-family:'Anton';color:#fff;line-height:1.06;letter-spacing:1px;font-size:${big}px;text-transform:uppercase;text-shadow:0 18px 70px rgba(0,0,0,.85)}
+.title{font-family:'Anton';color:#fff;line-height:${/[çÇ,;]/.test(main + accent) ? 1.22 : 1.06};letter-spacing:1px;font-size:${big}px;text-transform:uppercase;text-shadow:0 18px 70px rgba(0,0,0,.85);word-break:keep-all;overflow-wrap:anywhere}
 .title b{color:${st.accent};text-shadow:0 0 55px ${st.a1}88}
-.sub{margin-top:44px;font-family:'Archivo';font-weight:800;font-size:58px;line-height:1.22;color:#e8eefc;max-width:1320px;margin:44px auto 0;text-shadow:0 4px 24px rgba(0,0,0,.85)}
+.sub{margin-top:44px;font-family:'Archivo';font-weight:800;font-size:58px;line-height:1.22;color:#e8eefc;max-width:1320px;margin:44px auto 0;text-shadow:0 4px 24px rgba(0,0,0,.85);word-break:keep-all;overflow-wrap:anywhere}
 .foot{position:absolute;bottom:110px;left:0;right:0;text-align:center;z-index:6}
 .auth{font-family:'Space Grotesk';font-weight:600;letter-spacing:8px;font-size:36px;color:#aeb9d6;text-transform:uppercase}
 </style></head><body><div class="cv">
@@ -227,6 +247,7 @@ function escolherDoPool(category) {
 async function generateViralCover(title, subtitle, topic, category, coversDir, idioma, opts) {
   const lang = idioma || 'pt-BR';
   const exigirGancho = !!(opts && opts.exigirGancho);
+  _ultimaFalhaFoiImagem = false;
   if (!puppeteer) { log.warn('sem puppeteer'); return null; }
   const st = STYLE[category] || STYLE.default;
   const dir = coversDir || path.join(__dirname, '..', '..', 'data', 'covers');
@@ -270,11 +291,27 @@ async function generateViralCover(title, subtitle, topic, category, coversDir, i
     // exemplo) caia no grupo "geral", mais 4 imagens dividindo o resto do
     // catalogo. Gerando por livro, com pessoa variada e semente aleatoria, cada
     // capa tem rosto proprio; o acervo so entra se a geracao falhar.
+    // Com exigirImagemUnica (passe de troca de capas), o acervo NAO serve de
+    // reserva. Medido em 14/09/2026: 172 de 356 capas do dia cairam no acervo —
+    // quase metade com o mesmo rosto — porque o passe e a geracao de livros novos
+    // batiam no Pollinations ao mesmo tempo e ele recusava a concorrencia. A
+    // recusa passa em segundos: tenta de novo com espera e, se nao vier, desiste
+    // do livro (volta depois) em vez de estampar rosto repetido.
+    const exigirImagemUnica = !!(opts && opts.exigirImagemUnica);
+    const tentativasImagem = exigirImagemUnica ? 3 : 1;
     let gerou = false;
-    try {
-      await generateImage({ prompt: promptDaCapa(category, title, topic), width: 1024, height: 1536, outputPath: tmp });
-      gerou = fs.existsSync(tmp) && fs.statSync(tmp).size >= 6000;
-    } catch (e) { log.warn(`geracao falhou (${e.message.slice(0, 60)}) — tentando o acervo`); }
+    for (let t = 1; t <= tentativasImagem && !gerou; t++) {
+      if (t > 1) await new Promise(r => setTimeout(r, 8000 * t));
+      try {
+        await generateImage({ prompt: promptDaCapa(category, title, topic), width: 1024, height: 1536, outputPath: tmp });
+        gerou = fs.existsSync(tmp) && fs.statSync(tmp).size >= 6000;
+      } catch (e) { log.warn(`geracao falhou (tentativa ${t}/${tentativasImagem}): ${e.message.slice(0, 60)}`); }
+    }
+    if (!gerou && exigirImagemUnica) {
+      log.warn('sem imagem propria — pulando em vez de usar rosto repetido do acervo');
+      _ultimaFalhaFoiImagem = true;
+      return null;
+    }
     if (!gerou) {
       const doPool = escolherDoPool(category);
       if (doPool) {
@@ -298,7 +335,7 @@ async function generateViralCover(title, subtitle, topic, category, coversDir, i
       title:    pk ? pk.titulo    : title,
       subtitle: pk ? pk.subtitulo : subtitle,
       kicker:   pk ? pk.kicker    : badgeKicker(topic, lang),
-      badge:    pk ? pk.badge     : badgeFor(subtitle, topic, lang),
+      badge:    pk && pk.badge ? pk.badge : badgeFor(subtitle, topic, lang),
       st, imgB64,
     });
     const browser = await puppeteer.launch({ headless: 'new', executablePath: CHROME, args: ['--no-sandbox', '--disable-setuid-sandbox', '--force-color-profile=srgb'] });
@@ -323,7 +360,10 @@ function badgeKicker(topic, idioma) {
 }
 
 let _ultimoComGancho = false;
+let _ultimaFalhaFoiImagem = false;
+/** A ultima capa foi pulada por falta de imagem propria (e nao de gancho)? */
+function ultimaFalhaFoiImagem() { return _ultimaFalhaFoiImagem; }
 /** A ULTIMA capa gerada saiu com gancho de IA? (false = titulo comum) */
 function ultimoTeveGancho() { return _ultimoComGancho; }
 
-module.exports = { generateViralCover, STYLE, ultimoTeveGancho };
+module.exports = { generateViralCover, STYLE, ultimoTeveGancho, ultimaFalhaFoiImagem };
