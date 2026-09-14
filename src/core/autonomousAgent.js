@@ -44,6 +44,16 @@ let _running   = false;
 const ALL_LANGUAGES = (process.env.EBOOK_LANGUAGES || 'pt-BR').split(',').map(l => l.trim()).filter(Boolean);
 let _langIndex = 0;
 function getNextLanguage() {
+  // Pelo que vende (Thompson sampling sobre vendas_hotmart). Se o banco falhar,
+  // volta para a rotacao circular — gerar em algum idioma e melhor que parar.
+  try {
+    const { estatisticasPorIdioma, escolherIdioma } = require('../agents/idiomaPorVenda');
+    const { getDb } = require('./database');
+    const lang = escolherIdioma(ALL_LANGUAGES, estatisticasPorIdioma(getDb()));
+    if (lang) return lang;
+  } catch (e) {
+    logger.warn('idioma por venda indisponivel, usando rotacao: ' + e.message);
+  }
   const lang = ALL_LANGUAGES[_langIndex % ALL_LANGUAGES.length];
   _langIndex++;
   return lang;
