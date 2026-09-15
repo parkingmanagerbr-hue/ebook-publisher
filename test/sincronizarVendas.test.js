@@ -42,3 +42,28 @@ test('receita nao acumula erro de ponto flutuante', () => {
   const lista = Array.from({ length: 10 }, (_, i) => extrairVenda(vendaApi('T' + i, 5, 0.1)));
   assert.strictEqual(agregarPorProduto(lista).get('5').receita, 1);
 });
+
+test('rajada de teste de cartao (padrao real de 15/09) sai do aprendizado; venda isolada fica', () => {
+  const { marcarSuspeitas } = require('../src/agents/sincronizarVendas');
+  const t0 = Date.UTC(2026, 8, 15, 5, 48, 37);
+  const v = (id, s) => ({ transacao: 't' + id + s, produtoId: String(id), quando: t0 + s * 1000, comissao: 3 });
+  const r = marcarSuspeitas([
+    v(8451777, 0), v(8451665, 7), v(8451942, 19), v(8444361, 357),   // 4 produtos em 6 min
+    v(9000001, 40000),                                                // 11 h depois, sozinha
+    v(9000002, 90000), v(9000002, 90300),                             // mesmo produto 2x: nao e rajada
+  ]);
+  assert.deepStrictEqual(r.map(x => x.suspeita), [true, true, true, true, false, false, false]);
+});
+
+test('rajada: dois produtos distintos nao bastam e intervalo acima da janela separa os grupos (controle)', () => {
+  const { marcarSuspeitas } = require('../src/agents/sincronizarVendas');
+  const m = 60000;
+  const base = [{ produtoId: 'a', quando: 0 }, { produtoId: 'b', quando: 5 * m }];
+  assert.deepStrictEqual(marcarSuspeitas(base).map(x => x.suspeita), [false, false]);
+  const separados = [{ produtoId: 'a', quando: 0 }, { produtoId: 'b', quando: 16 * m }, { produtoId: 'c', quando: 32 * m }];
+  assert.deepStrictEqual(marcarSuspeitas(separados).map(x => x.suspeita), [false, false, false]);
+  assert.deepStrictEqual(marcarSuspeitas([null, { produtoId: 'z', quando: 1 }]).length, 1);
+  const entrada = [{ produtoId: 'a', quando: 2 }, { produtoId: 'b', quando: 1 }];
+  marcarSuspeitas(entrada);
+  assert.strictEqual(entrada[0].suspeita, undefined, 'nao altera a entrada');
+});

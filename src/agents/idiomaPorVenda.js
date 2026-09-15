@@ -30,10 +30,14 @@ function estatisticasPorIdioma(db) {
     "SELECT language, COUNT(*) AS n FROM ebooks WHERE hotmart_product_id IS NOT NULL AND hotmart_product_id <> '' GROUP BY language"
   ).all();
   let vendas = [];
+  // Sem venda de rajada: o "japones vende" de 14/09 era um robo testando cartao
+  // (ver sincronizarVendas.marcarSuspeitas). Banco antigo sem a coluna usa tudo.
+  let temSuspeita = false;
+  try { temSuspeita = db.prepare('PRAGMA table_info(vendas_hotmart)').all().some(c => c.name === 'suspeita'); } catch { /* sem tabela */ }
   try {
     vendas = db.prepare(
       'SELECT COALESCE(e1.language, e2.language) AS language, COUNT(*) AS v ' +
-      'FROM vendas_hotmart vh ' +
+      'FROM (SELECT * FROM vendas_hotmart' + (temSuspeita ? ' WHERE suspeita = 0' : '') + ') vh ' +
       'LEFT JOIN ebooks e1 ON CAST(e1.hotmart_product_id AS TEXT) = CAST(vh.produto_id AS TEXT) ' +
       'LEFT JOIN ebooks e2 ON e1.id IS NULL AND e2.id = (SELECT id FROM ebooks WHERE title = vh.produto LIMIT 1) ' +
       'GROUP BY 1'

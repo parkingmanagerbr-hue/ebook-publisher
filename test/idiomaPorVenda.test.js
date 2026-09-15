@@ -35,3 +35,16 @@ test('venda de produto duplicado fora do banco e atribuida pelo titulo', () => {
   assert.deepStrictEqual(est.ja, { produtos: 1, vendas: 1 });
   assert.deepStrictEqual(est.pt, { produtos: 1, vendas: 1 });
 });
+
+test('venda marcada como suspeita (rajada) nao conta para o idioma', () => {
+  const Database = require('better-sqlite3');
+  const { estatisticasPorIdioma } = require('../src/agents/idiomaPorVenda');
+  const db = new Database(':memory:');
+  db.exec("CREATE TABLE ebooks (id TEXT, title TEXT, language TEXT, hotmart_product_id TEXT);" +
+          "CREATE TABLE vendas_hotmart (transacao TEXT, produto_id TEXT, produto TEXT, suspeita INTEGER NOT NULL DEFAULT 0);" +
+          "INSERT INTO ebooks VALUES ('a','Livro JA','ja-JP','1'),('b','Livro PT','pt-BR','2');" +
+          "INSERT INTO vendas_hotmart VALUES ('t1','1','Livro JA',1),('t2','1','Livro JA',1),('t3','2','Livro PT',0);");
+  const est = estatisticasPorIdioma(db);
+  assert.strictEqual(est.ja.vendas, 0);
+  assert.strictEqual(est.pt.vendas, 1);
+});
