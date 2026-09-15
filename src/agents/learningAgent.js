@@ -114,8 +114,8 @@ function detectBestCategory(allEbooks) {
   });
 
   const categories = Object.entries(categoryStats)
-    .map(([cat, data]) => ({ category: cat, avgSales: data.count > 0 ? data.sales / data.count : 0, count: data.count }))
-    .filter(c => c.count >= 1)
+    // count >= 1 sempre: a categoria so nasce ao contar o primeiro e-book.
+    .map(([cat, data]) => ({ category: cat, avgSales: data.sales / data.count, count: data.count }))
     .sort((a, b) => b.avgSales - a.avgSales);
 
   return categories[0] || null;
@@ -125,7 +125,8 @@ function detectCategoryFromTopic(topic) {
   if (!topic) return 'geral';
   const lower = topic.toLowerCase();
   if (lower.includes('financ') || lower.includes('invest')) return 'financas';
-  if (lower.includes('ia') || lower.includes('intelig')) return 'tecnologia';
+  // Sigla IA como palavra: includes('ia') casava culinaria, estrategias, criacao.
+  if (/\bia\b/.test(lower) || lower.includes('intelig')) return 'tecnologia';
   if (lower.includes('saúde') || lower.includes('emagrec')) return 'saude';
   if (lower.includes('negóci') || lower.includes('marketing')) return 'negocios';
   return 'geral';
@@ -285,7 +286,9 @@ async function syncSalesFromPlatforms() {
             if (!ebook) continue;
             const current = db.prepare('SELECT sales_count FROM ebooks WHERE id = ?').get(ebook.id);
             if (current && current.sales_count < stats.sales) {
-              db.prepare('UPDATE ebooks SET sales_count = ?, revenue = revenue + ? WHERE id = ?')
+              // A API traz o TOTAL do produto: somar ao que ja estava contava a
+              // receita antiga de novo a cada venda nova.
+              db.prepare('UPDATE ebooks SET sales_count = ?, revenue = ? WHERE id = ?')
                 .run(stats.sales, stats.revenue, ebook.id);
               syncedHotmart++;
             }
@@ -307,4 +310,4 @@ async function syncSalesFromPlatforms() {
   return { syncedCakto, syncedHotmart };
 }
 
-module.exports = { runLearningCycle, syncSalesFromPlatforms };
+module.exports = { runLearningCycle, syncSalesFromPlatforms, fetchCaktoSales, fetchHotmartSales };

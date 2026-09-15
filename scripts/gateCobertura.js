@@ -30,6 +30,7 @@ const MODULOS_NO_GATE = [
   'src/agents/backfillCovers.js',
   'src/agents/coverPackaging.js',
   'src/agents/idiomaPorVenda.js',
+  'src/agents/learningAgent.js',
   'src/agents/publishBacklog.js',
   'src/agents/regenCovers.js',
   'src/agents/scoreCoverHooks.js',
