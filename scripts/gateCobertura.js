@@ -35,6 +35,7 @@ const MODULOS_NO_GATE = [
   'src/agents/regenCovers.js',
   'src/agents/scoreCoverHooks.js',
   'src/agents/sincronizarVendas.js',
+  'src/agents/webEbookAgents/creditTracker.js',
   'src/application/',
   'src/infrastructure/db/',
   'src/infrastructure/queue/',

@@ -47,6 +47,14 @@ function loadState() {
       console.log(`[creditTracker] Novo mês detectado (${raw.month} → ${month}) — resetando créditos`);
       return buildFreshState(month);
     }
+    // Conta acrescentada no GMAIL_ACCOUNTS depois da criacao do estado do mes
+    // nao tinha entrada: getNextSlot a pulava ate o mes virar, enquanto o
+    // getSummary ja contava o limite dela como disponivel. Entra zerada.
+    const fresco = buildFreshState(month);
+    for (const svc of SERVICE_PRIORITY) {
+      raw.services[svc] = raw.services[svc] || { accounts: {} };
+      raw.services[svc].accounts = { ...fresco.services[svc].accounts, ...raw.services[svc].accounts };
+    }
     return raw;
   } catch {
     return buildFreshState(month);
@@ -73,7 +81,11 @@ function buildFreshState(month) {
 
 function saveState(state) {
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  // Temporario + rename: gravar direto truncava o arquivo antes de escrever, e
+  // uma falha no meio zerava o controle de creditos do mes.
+  const tmp = STATE_FILE + '.' + process.pid + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, STATE_FILE);
   // Espelha em /genia para persistência de conhecimento
   try {
     fs.mkdirSync(GENIA_DIR, { recursive: true });
@@ -107,8 +119,8 @@ function getNextSlot() {
 
   for (const svc of SERVICE_PRIORITY) {
     for (const email of GMAIL_ACCOUNTS) {
-      const acc = state.services[svc]?.accounts?.[email];
-      if (!acc) continue;
+      // loadState garante entrada para toda conta configurada em todo servico.
+      const acc = state.services[svc].accounts[email];
       if (acc.used >= acc.limit) continue;
       if (acc.failures >= 5) continue; // Muitas falhas — pular esta conta neste serviço
 
@@ -197,7 +209,7 @@ function getSummary() {
   const state = loadState();
   const summary = { month: state.month, services: {} };
   for (const svc of SERVICE_PRIORITY) {
-    const accounts = state.services[svc]?.accounts || {};
+    const accounts = state.services[svc].accounts;
     const total    = GMAIL_ACCOUNTS.length * LIMITS[svc];
     const used     = Object.values(accounts).reduce((s, a) => s + (a.used || 0), 0);
     summary.services[svc] = {
