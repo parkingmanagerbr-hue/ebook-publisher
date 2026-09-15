@@ -2142,7 +2142,16 @@ async function publishToHotmart(ebook, opts) {
       log.warn('PDF upload exception (non-fatal): '+e.message.slice(0,100));
       return false;
     });
-    if(!uploaded) log.warn('PDF upload failed — continuing to finalize');
+    // Arquivo CONFIRMADO pela API antes de finalizar. Seguir sem ele punha o
+    // produto a venda vazio (3 vendidos sem arquivo em 15/09/2026). Se a API nao
+    // responde (null), segue como antes — nao se trava publicacao por falha de
+    // consulta; o job de auditoria de conteudo pega depois.
+    const { aguardarConteudo } = require('./hotmartConteudo');
+    const confirmado = await aguardarConteudo(numericId);
+    if (confirmado === false) {
+      throw new Error('PDF nao anexado ao produto ' + numericId + ' (uploadPDF=' + uploaded + ') — cadastro NAO finalizado');
+    }
+    if(!uploaded) log.warn('PDF upload reportou falha mas a API confirma o arquivo — seguindo');
     // Step 4: Finalizar cadastro
     const finalized=await finalizarCadastro(page,numericId);
     // Step 4b: Retry cover upload after finalization (product has been live for 60-120s now)
