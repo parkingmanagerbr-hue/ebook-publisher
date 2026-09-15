@@ -59,12 +59,26 @@ async function api(metodo, rota, corpo, H) {
   return j;
 }
 
+// Nome do vendedor no checkout. Vazio, a Cakto mostrava o E-MAIL da conta
+// ("Termos de uso de ...@hotmail.com") — comprador desconfia. E o nome que ja
+// esta impresso nas capas.
+const PRODUTOR = process.env.CAKTO_PRODUCER_NAME || 'Veloxis Editorial';
+
+/** O que o produto deve ter depois da correcao. Pura. */
+function alvo(produto, linkEsperado) {
+  const atual = produto.emailAccessLink || '';
+  const out = {};
+  // Link de terceiro nunca e sobrescrito: alguem configurou a entrega a mao.
+  if (atual !== linkEsperado && (!atual || atual.includes('/entrega/'))) out.emailAccessLink = linkEsperado;
+  if (!produto.producerName) out.producerName = PRODUTOR;
+  return out;
+}
+
 /** Decide o que fazer com um produto. Pura. */
 function planejar(produto, linkEsperado) {
+  if (Object.keys(alvo(produto, linkEsperado)).length) return 'gravar';
   const atual = produto.emailAccessLink || '';
-  if (atual === linkEsperado) return 'ok';
-  if (atual && !atual.includes('/entrega/')) return 'link-alheio'; // alguem pos outro link: nao sobrescrever
-  return 'gravar';
+  return atual && atual !== linkEsperado ? 'link-alheio' : 'ok';
 }
 
 async function main() {
@@ -80,7 +94,7 @@ async function main() {
   }
 
   const limite = parseInt(arg('limite', '1'), 10);
-  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado','ok')").all().map(r => r.ebook_id));
+  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v2','ok-v2')").all().map(r => r.ebook_id));
   const fila = comPdf.filter(e => !feitos.has(e.id)).slice(0, limite);
   const H = await cabecalhos();
   const marca = db.prepare('INSERT OR REPLACE INTO cakto_entrega (ebook_id, produto, resultado, quando) VALUES (?,?,?,?)');
@@ -93,19 +107,21 @@ async function main() {
       const produtoId = oferta.product;
       const produto = await api('GET', 'product/' + produtoId + '/', null, H); await dormir(PAUSA_MS);
       const link = urlEntrega(e.id);
+      const mudar = alvo(produto, link);
       const decisao = planejar(produto, link);
       if (decisao === 'gravar') {
         // A rota nao aceita PATCH (405): PUT com o produto inteiro que acabou de
         // ser lido, trocando so o link. A conferencia abaixo pega o caso de a
         // API ignorar o campo ou mexer em outro.
-        await api('PUT', 'product/' + produtoId + '/', { ...produto, emailAccessLink: link }, H); await dormir(PAUSA_MS);
+        await api('PUT', 'product/' + produtoId + '/', { ...produto, ...mudar }, H); await dormir(PAUSA_MS);
         const conferido = await api('GET', 'product/' + produtoId + '/', null, H); await dormir(PAUSA_MS);
-        const mexeuEmOutro = camposAlterados(produto, conferido).filter(k => !['emailAccessLink', 'updatedAt'].includes(k));
+        const mexeuEmOutro = camposAlterados(produto, conferido).filter(k => !['updatedAt', ...Object.keys(mudar)].includes(k));
         if (mexeuEmOutro.length) console.log('ATENCAO', produtoId, 'campos mudaram alem do link:', mexeuEmOutro.join(','));
-        const res = conferido.emailAccessLink !== link ? 'nao-persistiu' : (mexeuEmOutro.length ? 'gravado-com-efeito' : 'gravado');
+        const persistiu = Object.entries(mudar).every(([k, v]) => conferido[k] === v);
+        const res = !persistiu ? 'nao-persistiu' : (mexeuEmOutro.length ? 'gravado-com-efeito' : 'gravado-v2');
         marca.run(e.id, produtoId, res, Date.now()); cont[res] = (cont[res] || 0) + 1;
       } else {
-        marca.run(e.id, produtoId, decisao, Date.now()); cont[decisao] = (cont[decisao] || 0) + 1;
+        marca.run(e.id, produtoId, decisao === 'ok' ? 'ok-v2' : decisao, Date.now()); cont[decisao] = (cont[decisao] || 0) + 1;
       }
     } catch (err) {
       cont.erro = (cont.erro || 0) + 1;
@@ -124,6 +140,6 @@ function camposAlterados(antes, depois) {
   return [...chaves].filter(k => JSON.stringify((antes || {})[k]) !== JSON.stringify((depois || {})[k]));
 }
 
-module.exports = { planejar, camposAlterados };
+module.exports = { planejar, alvo, camposAlterados, PRODUTOR };
 
 if (require.main === module) main().catch(e => { console.error('ERRO', e.message); process.exit(1); });
