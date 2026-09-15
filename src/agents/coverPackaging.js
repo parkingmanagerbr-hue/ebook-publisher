@@ -240,7 +240,13 @@ async function gerarPackaging(opts) {
 
     // Modelo sem structured output embrulha em markdown — extrair o objeto.
     const m = texto.match(/\{[\s\S]*\}/);
-    if (!m) { log.warn('IA nao devolveu JSON de packaging'); return null; }
+    if (!m) {
+      // Mostra o que voltou: sem isso "nao devolveu JSON" nao separa resposta
+      // vazia (raciocinio comeu o teto) de texto solto ou recusa.
+      const prov = bruto && typeof bruto === 'object' ? bruto.provider : '?';
+      log.warn('IA nao devolveu JSON de packaging [' + prov + ']: ' + JSON.stringify(String(texto).slice(0, 120)));
+      return null;
+    }
 
     let p;
     try { p = JSON.parse(m[0]); } catch (e) { log.warn('JSON de packaging invalido'); return null; }

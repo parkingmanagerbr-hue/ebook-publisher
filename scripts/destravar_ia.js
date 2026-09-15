@@ -40,6 +40,14 @@ const PROVEDORES = {
     modelos: ['Meta-Llama-3.3-70B-Instruct'],
     env: 'SAMBANOVA_API_KEY',
   },
+  // Sem sondagem, as chaves do HF ficavam presas: em 15/09/2026 as 6 estavam
+  // marcadas, 3 sem credito do mes (402) e 3 respondendo 200 — e a cadeia de
+  // capas rodava so com o Groq ate estourar.
+  huggingface: {
+    url: 'https://router.huggingface.co/v1/chat/completions',
+    modelos: ['openai/gpt-oss-120b', 'meta-llama/Llama-3.3-70B-Instruct'],
+    env: 'HUGGINGFACE_API_KEY',
+  },
   gemini: {
     // Formato proprio (nao OpenAI): tratado a parte em respondeDeVerdade.
     gemini: true,

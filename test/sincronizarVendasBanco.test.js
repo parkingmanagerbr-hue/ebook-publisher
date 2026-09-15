@@ -92,7 +92,7 @@ test('HTTP de erro do relatorio aborta sem gravar nada', async t => {
 test('resposta sem data (null) conta como zero vendas', async t => {
   fetchFalso(t, [null]);
   const r = await sv.sincronizar();
-  assert.deepStrictEqual({ ...r, orfaos: r.orfaos.length }, { vendas: 0, produtos: 0, receita: 0, orfaos: 0 });
+  assert.deepStrictEqual({ ...r, orfaos: r.orfaos.length }, { vendas: 0, suspeitas: 0, produtos: 0, receita: 0, orfaos: 0 });
 });
 
 test('para em 50 paginas mesmo que a API nunca devolva lote incompleto', async t => {
@@ -104,6 +104,27 @@ test('para em 50 paginas mesmo que a API nunca devolva lote incompleto', async t
 });
 
 // ── sincronizar: banco ──────────────────────────────────────────────────────
+
+test('rajada de teste de cartao e gravada como suspeita e nao conta venda nem receita', async t => {
+  const db = prepararEbooks();
+  // tres produtos no mesmo segundo (padrao do robo de 15/09) e uma venda isolada 1 dia depois
+  const isolada = venda('Z9', 222, 2, { purchase: { transaction: 'Z9', orderDate: 1789411004000 + 86400000, status: 'APPROVED' } });
+  fetchFalso(t, [{ data: [venda('R1', 111, 3), venda('R2', 222, 3), venda('R3', 333, 3), isolada] }]);
+  const r = await sv.sincronizar();
+  // receita do resumo e o dinheiro que entrou (suspeita inclusa ate um eventual
+  // estorno); o que sai e a contagem por produto, que alimenta o aprendizado
+  assert.deepStrictEqual([r.vendas, r.suspeitas, r.produtos, r.receita], [4, 3, 1, 11]);
+  const marcadas = db.prepare('SELECT transacao, suspeita FROM vendas_hotmart ORDER BY transacao').all();
+  assert.deepStrictEqual(marcadas.map(m => [m.transacao, m.suspeita]), [['R1', 1], ['R2', 1], ['R3', 1], ['Z9', 0]]);
+  const conta = Object.fromEntries(db.prepare('SELECT id, sales_count FROM ebooks').all().map(x => [x.id, x.sales_count]));
+  assert.deepStrictEqual([conta.a, conta.b], [0, 1], 'so a venda isolada conta');
+
+  // segunda sincronizacao: coluna ja existe e a marca e atualizada, sem duplicar
+  fetchFalso(t, [{ data: [isolada] }]);
+  const r2 = await sv.sincronizar();
+  assert.strictEqual(r2.suspeitas, 0);
+  assert.strictEqual(db.prepare('SELECT COUNT(*) n FROM vendas_hotmart').get().n, 4);
+});
 
 function prepararEbooks() {
   const db = getDb();
@@ -182,7 +203,7 @@ test('executavel imprime o resumo em JSON e sai 0', () => {
   const r = rodar({ HOTMART_TOKEN_FILE: TOKEN });
   assert.strictEqual(r.status, 0, r.stderr);
   const ultima = r.stdout.trim().split('\n').pop();
-  assert.deepStrictEqual(JSON.parse(ultima), { vendas: 1, produtos: 1, receita: 2, orfaos: [{ produtoId: '7', produto: 'P', vendas: 1 }] });
+  assert.deepStrictEqual(JSON.parse(ultima), { vendas: 1, suspeitas: 0, produtos: 1, receita: 2, orfaos: [{ produtoId: '7', produto: 'P', vendas: 1 }] });
 });
 
 test('executavel sem token sai 1 com a mensagem de erro', () => {

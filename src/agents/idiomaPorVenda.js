@@ -33,7 +33,8 @@ function estatisticasPorIdioma(db) {
   // Sem venda de rajada: o "japones vende" de 14/09 era um robo testando cartao
   // (ver sincronizarVendas.marcarSuspeitas). Banco antigo sem a coluna usa tudo.
   let temSuspeita = false;
-  try { temSuspeita = db.prepare('PRAGMA table_info(vendas_hotmart)').all().some(c => c.name === 'suspeita'); } catch { /* sem tabela */ }
+  // PRAGMA de tabela inexistente devolve lista vazia, nao lanca.
+  temSuspeita = db.prepare('PRAGMA table_info(vendas_hotmart)').all().some(c => c.name === 'suspeita');
   try {
     vendas = db.prepare(
       'SELECT COALESCE(e1.language, e2.language) AS language, COUNT(*) AS v ' +

@@ -492,6 +492,11 @@ async function callGroqComModelo(prompt, systemPrompt, apiKey, model, maxTokens)
     // reenviava exatamente a mesma requisicao e falhava igual.
     max_tokens: maxTokens,
     temperature: 0.7,
+    // gpt-oss e modelo de raciocinio: o pensamento sai do mesmo max_tokens. Com
+    // o padrao "medium", na re-tentativa com metade do teto sobrava resposta
+    // vazia e as capas caiam em "IA nao devolveu JSON" (15/09/2026). Low basta
+    // para texto curto e gasta menos do limite por minuto (o outro gargalo).
+    ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}),
   }, {
     headers: {
       'Authorization': `Bearer ${apiKey}`,
