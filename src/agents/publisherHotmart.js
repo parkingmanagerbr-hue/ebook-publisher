@@ -30,20 +30,9 @@ try {
   log = { info: (...a) => console.log('[hotmart]', ...a), warn: (...a) => console.warn('[hotmart]', ...a), error: (...a) => console.error('[hotmart]', ...a) };
 }
 
-const TECH_KW = ['web3','blockchain','programar','chatbot','cloud','saas','tecnologia','inteligencia artificial',' ia ','python','javascript','codigo','algoritmo','digital','nft','criptomoeda','linux','docker'];
-const HEALTH_KW = ['saude','sono','depressao','panico','menopausa','hipertrofia','pressao','alcalina','alimentac','dieta','emagrecimento','fitness','exercicio','musculacao','mental','ansiedade','yoga','meditacao','hormonio','diabetes','colesterol'];
-const FINANCE_KW = ['investimento','financ','dinheiro','consorcio','franquia','airbnb','freelancer','renda','patrimonio','aposentadoria','acoes','fundo','bitcoin','trading','bolsa','credito','emprestimo'];
-const BUSINESS_KW = ['nomade','negocio','empreend','carreira','marketing','vendas','produtividade','lideranca','gestao','startup','cliente','lucro','estrategia','branding','copywriting','persona'];
-
-function norm(s) { return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
-function getCategoryPT(title, topic) {
-  const t = norm(title + ' ' + (topic||''));
-  if (TECH_KW.some(k => t.includes(k)))     return 'Tecnologia e Programacao';
-  if (HEALTH_KW.some(k => t.includes(k)))   return 'Saude e Esportes';
-  if (FINANCE_KW.some(k => t.includes(k)))  return 'Negocios e Carreira';
-  if (BUSINESS_KW.some(k => t.includes(k))) return 'Negocios e Carreira';
-  return 'Desenvolvimento Pessoal';
-}
+// Categoria, digitos do preco e id do produto na URL: regras puras, testadas
+// em test/hotmartRegras.test.js.
+const { getCategoryPT, digitosDoPreco, idProdutoDaUrl } = require('./hotmartRegras');
 
 function getCASTicket(tgt, serviceUrl) {
   return new Promise((resolve, reject) => {
@@ -1247,7 +1236,7 @@ async function createProduct(page, session, ebook) {
     await page.keyboard.press('End');
     await sleep(100);
     // Type only digits — currency mask handles formatting
-    const priceDigits = DEFAULT_PRICE.replace(/[^0-9]/g, ''); // "4,99" → "499"
+    const priceDigits = digitosDoPreco(DEFAULT_PRICE); // "4,99" → "499"; "5" → "500"
     await page.keyboard.type(priceDigits, {delay:150});
     await sleep(600);
     // Read back what was entered
@@ -1302,8 +1291,8 @@ async function createProduct(page, session, ebook) {
   for (let i = 0; i < 15; i++) {
     await sleep(1000);
     const u = page.url();
-    const m = u.match(/\/products\/manage\/(\d+)/) || u.match(/\/products\/add\/4\/[^\/]+\/(\d+)/) || u.match(/[?&]productId=(\d+)/) || u.match(/\/(\d{7,})(?:\/|$|\?)/);
-    if (m) { capturedNumericId = capturedNumericId || m[1]; log.info('URL id='+m[1]+' at t='+(i+1)+'s: '+u.slice(0,80)); break; }
+    const idUrl = idProdutoDaUrl(u);
+    if (idUrl) { capturedNumericId = capturedNumericId || idUrl; log.info('URL id='+idUrl+' at t='+(i+1)+'s: '+u.slice(0,80)); break; }
     if (i % 3 === 2) log.info('Pricing save wait t='+(i+1)+'s url='+u.slice(0,60));
   }
 
