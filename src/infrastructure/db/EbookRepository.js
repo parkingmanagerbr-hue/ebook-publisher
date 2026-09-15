@@ -33,11 +33,17 @@ class EbookRepository extends IEbookRepository {
     // Only platforms we know about
     if (!['hotmart', 'cakto', 'amazon'].includes(platform)) return [];
 
+    // Amazon: markPublished grava o ASIN em amazon_asin; amazon_product_id e so
+    // o legado do script de KDP. Olhar apenas um dos dois devolvia como pendente
+    // o que ja esta a venda.
+    const aindaFalta = platform === 'amazon'
+      ? "(amazon_asin IS NULL OR amazon_asin = '') AND (amazon_product_id IS NULL OR amazon_product_id = '')"
+      : `(${col} IS NULL OR ${col} = '')`;
     const rows = this.db.prepare(`
       SELECT * FROM ebooks
       WHERE pdf_path IS NOT NULL
         AND pdf_path != ''
-        AND (${col} IS NULL OR ${col} = '')
+        AND ${aindaFalta}
         AND status NOT IN ('error', 'publishing')
       ORDER BY created_at DESC
       LIMIT ?
@@ -46,8 +52,11 @@ class EbookRepository extends IEbookRepository {
   }
 
   async save(ebook) {
+    // Upsert em vez de INSERT OR REPLACE: o REPLACE apaga a linha inteira e as
+    // colunas fora desta lista (amazon_asin, amazon_url, language, word_count,
+    // ml_score) voltavam ao default.
     this.db.prepare(`
-      INSERT OR REPLACE INTO ebooks
+      INSERT INTO ebooks
         (id, topic, title, subtitle, description, cover_path, pdf_path,
          status, price, ai_provider, created_at, published_at,
          hotmart_product_id, hotmart_url, cakto_product_id, cakto_url,
@@ -57,6 +66,14 @@ class EbookRepository extends IEbookRepository {
          @status, @price, @aiProvider, @createdAt, @publishedAt,
          @hotmartProductId, @hotmartUrl, @caktoProductId, @caktoUrl,
          @salesCount, @revenue)
+      ON CONFLICT(id) DO UPDATE SET
+        topic = excluded.topic, title = excluded.title, subtitle = excluded.subtitle,
+        description = excluded.description, cover_path = excluded.cover_path,
+        pdf_path = excluded.pdf_path, status = excluded.status, price = excluded.price,
+        ai_provider = excluded.ai_provider, created_at = excluded.created_at,
+        published_at = excluded.published_at, hotmart_product_id = excluded.hotmart_product_id,
+        hotmart_url = excluded.hotmart_url, cakto_product_id = excluded.cakto_product_id,
+        cakto_url = excluded.cakto_url, sales_count = excluded.sales_count, revenue = excluded.revenue
     `).run({
       id:              ebook.id,
       topic:           ebook.topic,
