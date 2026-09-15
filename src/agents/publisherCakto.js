@@ -51,12 +51,17 @@ async function getCaktoPayUrlFromApi(page, titleSnippet) {
           // Só palavras significativas (≥4 chars) e TODAS precisam bater — o match antigo
           // (3 primeiras palavras) casava "Ganhe Dinheiro com IA" com "Ganhe Dinheiro como Afiliado"
           // ("com" ⊂ "como") e pulava a criação de produtos novos.
-          const match = items.find(o => {
-            const n = (o.name || '').toLowerCase();
-            if (n.includes(sTitle)) return true;
-            const words = sTitle.split(' ').map(w => w.toLowerCase()).filter(w => w.length >= 4);
-            return words.length >= 3 && words.every(w => n.includes(w));
-          });
+          // So TITULO IGUAL (normalizado). Casar por palavras contidas ligou 2353
+          // livros a 597 checkouts de outros livros — um checkout com 114 livros
+          // (medido em 15/09/2026). Sem oferta de nome igual, devolver nada faz o
+          // fluxo seguir e criar o produto certo. Mesma regra de
+          // scripts/reconciliarCakto.js#normalizarTitulo (aqui roda no navegador,
+          // sem require).
+          const norm = t => String(t || '').normalize('NFKC').toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '').normalize('NFC')
+            .replace(/[^\p{L}\p{N}\p{M}]+/gu, ' ').trim();
+          const alvo = norm(sTitle);
+          const match = alvo ? items.find(o => norm(o.name) === alvo) : null;
           if (match) {
             return { offerId: match.id, offerName: match.name, status: match.status, productId: match.product };
           }
@@ -687,7 +692,7 @@ async function publishToCakto(ebook) {
       // The offers endpoint returns { id: "shortcode", name: "...", status: "active"|"draft" }
       // where `id` is the shortcode for pay.cakto.com.br/<id>
       if (!existingPayUrl) {
-        const apiMatch = await getCaktoPayUrlFromApi(page, shortTitle).catch(() => null);
+        const apiMatch = await getCaktoPayUrlFromApi(page, ebook.title).catch(() => null);
         if (apiMatch && apiMatch.payUrl) {
           existingPayUrl = apiMatch.payUrl;
         }
@@ -1219,7 +1224,7 @@ async function publishToCakto(ebook) {
       // Try /api/offers/ — most reliable way to get the new offer's pay URL
       if (!interceptedPayUrl) {
         await sleep(2000); // give backend a moment to persist
-        const apiMatch = await getCaktoPayUrlFromApi(page, shortTitle).catch(() => null);
+        const apiMatch = await getCaktoPayUrlFromApi(page, ebook.title).catch(() => null);
         if (apiMatch && apiMatch.payUrl) {
           interceptedPayUrl = apiMatch.payUrl;
           interceptedProductId = apiMatch.offerId;
@@ -1547,7 +1552,7 @@ async function publishToCakto(ebook) {
 
         // 4. Fallback: query api.cakto.com.br/api/offers/ — offer.id IS the pay shortcode
         if (!productUrl) {
-          const apiMatch = await getCaktoPayUrlFromApi(page, shortTitle).catch(() => null);
+          const apiMatch = await getCaktoPayUrlFromApi(page, ebook.title).catch(() => null);
           if (apiMatch && apiMatch.payUrl) {
             productUrl = apiMatch.payUrl;
             caktoProductId = apiMatch.offerId;
