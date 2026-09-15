@@ -27,6 +27,10 @@ const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR   || '/app/data/landing_scre
 const LOGS_DIR        = '/app/data/logs';
 const DEFAULT_PRICE   = parseFloat(process.env.EBOOK_PRICE || '4.99');
 
+// Preco, descricao e leitura das respostas da API: regras puras, testadas em
+// test/caktoRegras.test.js.
+const { precoCakto, descricaoCakto, codigoDoPayUrl, lerRespostaCakto } = require('./caktoRegras');
+
 // ── Cakto Offers API helper — returns pay URL for a product by title ──────────
 // The /api/offers/ endpoint returns offers with `id` = the pay shortcode.
 // e.g., offer { id: "35vb4nn", name: "Emagreça...", status: "active" }
@@ -701,8 +705,7 @@ async function publishToCakto(ebook) {
 
     // If we found the product already exists with a pay URL, return early
     if (existingPayUrl) {
-      const m = existingPayUrl.match(/\/([A-Za-z0-9]{5,})$/);
-      const existingId = m ? m[1] : 'found';
+      const existingId = codigoDoPayUrl(existingPayUrl) || 'found';
       log.info('Produto já existia — usando URL: ' + existingPayUrl);
       await browser.close();
       return {
@@ -931,19 +934,7 @@ async function publishToCakto(ebook) {
 
     // ── Description (Cakto requires MINIMUM 100 chars) ───────────────────────
     // Use 110 as threshold to give buffer for Unicode/encoding discrepancies
-    let desc = ebook.description || ebook.subtitle || '';
-    if (!desc || desc.length < 110) {
-      // Build a longer default description
-      const base = 'Guia completo e prático sobre ' + (ebook.topic || ebook.title);
-      const suffix = '. Aprenda as melhores estratégias e técnicas com conteúdo direto ao ponto, desenvolvido para quem quer resultados reais e duradouros.';
-      desc = (desc ? desc + ' ' + suffix : base + suffix);
-    }
-    // Ensure >= 110 chars (safety check after any concatenation)
-    if (desc.length < 110) {
-      desc = desc + ' Conteúdo exclusivo, prático e transformador para sua vida.';
-    }
-    // Cap at 500 chars to avoid potential upper limits
-    desc = desc.slice(0, 500);
+    const desc = descricaoCakto(ebook);
     log.info('Desc len=' + desc.length + ' (min100, padded to 110+)');
     await fillInput(page, [
       'textarea[name="description"]',
@@ -964,8 +955,7 @@ async function publishToCakto(ebook) {
     await sleep(200);
 
     // ── Price (Cakto minimum is R$ 5,00 — use special fillPrice for currency inputs) ─
-    const rawPrice = Math.max(5.00, ebook.price || DEFAULT_PRICE);
-    const price = String(rawPrice.toFixed(2)).replace('.', ',');
+    const price = precoCakto(ebook.price, DEFAULT_PRICE);
     await fillPrice(page, price);
     await sleep(500);
 
@@ -995,20 +985,17 @@ async function publishToCakto(ebook) {
         // Log ALL write requests for debugging
         capturedApiCalls.push(method + ' ' + status + ' ' + rUrl.slice(-80) + ' → ' + text.slice(0, 150));
         if (status < 200 || status >= 300 || !text) return;
-        // Look for pay URL pattern
-        const payMatch = text.match(/pay\.cakto\.com\.br\/([A-Za-z0-9]{4,})/);
-        if (payMatch) {
-          interceptedPayUrl = 'https://pay.cakto.com.br/' + payMatch[1];
-          interceptedProductId = payMatch[1];
+        // Link de pagamento ou identificador do produto na resposta
+        const lido = lerRespostaCakto(text);
+        if (lido && lido.payUrl) {
+          interceptedPayUrl = lido.payUrl;
+          interceptedProductId = lido.id;
           log.info('Intercepted pay URL: ' + interceptedPayUrl);
           return;
         }
-        // Look for shortcode/slug/id fields
-        const shortMatch = text.match(/"(?:shortlink|shortcode|slug|checkout_url|checkoutUrl|pay_url|payUrl|payment_link|short_link)":\s*"([A-Za-z0-9_\-]{4,})"/) ||
-                           text.match(/"(?:id|productId|product_id|uuid)":\s*"([A-Za-z0-9\-]{8,})"/) ;
-        if (shortMatch && !shortMatch[1].match(/^\d{4}-\d{2}-\d{2}/) && !interceptedProductId) {
-          interceptedProductId = shortMatch[1];
-          log.info('Intercepted product field: ' + shortMatch[0].slice(0, 80) + ' from ' + rUrl.slice(-60));
+        if (lido && !interceptedProductId) {
+          interceptedProductId = lido.id;
+          log.info('Intercepted product field: ' + lido.campo.slice(0, 80) + ' from ' + rUrl.slice(-60));
         }
       } catch {}
     };
