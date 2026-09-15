@@ -24,14 +24,27 @@ const PAUSA_MS = parseInt(process.env.CAKTO_PAUSA_MS || '3000', 10);
 const dormir = ms => new Promise(r => setTimeout(r, ms));
 const arg = (n, p) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.split('=')[1] : p; };
 
-function cabecalhos() {
+/**
+ * Cabecalhos de escrita. A sessao salva nao tem cookie de CSRF e a escrita dava
+ * 403 "CSRF cookie not set". O painel pede o token em /get-csrf-token/ (visto no
+ * bundle) — que devolve o valor e grava o cookie; aqui se faz o mesmo.
+ */
+async function cabecalhos() {
   const s = JSON.parse(fs.readFileSync(process.env.CAKTO_SESSION_FILE || '/app/data/sessions/cakto.json', 'utf8'));
-  return {
-    cookie: s.cookies.map(c => c.name + '=' + c.value).join('; '),
+  const base = {
     accept: 'application/json', 'content-type': 'application/json', referer: 'https://app.cakto.com.br/',
     origin: 'https://app.cakto.com.br',
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0 Safari/537.36',
   };
+  let cookies = s.cookies.map(c => c.name + '=' + c.value);
+  const r = await fetch('https://api.cakto.com.br/api/get-csrf-token/', { headers: { ...base, cookie: cookies.join('; ') } });
+  const novos = (r.headers.getSetCookie ? r.headers.getSetCookie() : []).map(c => c.split(';')[0]);
+  const nomesNovos = new Set(novos.map(c => c.split('=')[0]));
+  cookies = cookies.filter(c => !nomesNovos.has(c.split('=')[0])).concat(novos);
+  let token = null;
+  try { token = (await r.json()).csrfToken; } catch { /* sem corpo */ }
+  if (!token) throw new Error('get-csrf-token nao devolveu token (HTTP ' + r.status + ')');
+  return { ...base, cookie: cookies.join('; '), 'x-csrftoken': token };
 }
 
 async function api(metodo, rota, corpo, H) {
@@ -69,7 +82,7 @@ async function main() {
   const limite = parseInt(arg('limite', '1'), 10);
   const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado','ok')").all().map(r => r.ebook_id));
   const fila = comPdf.filter(e => !feitos.has(e.id)).slice(0, limite);
-  const H = cabecalhos();
+  const H = await cabecalhos();
   const marca = db.prepare('INSERT OR REPLACE INTO cakto_entrega (ebook_id, produto, resultado, quando) VALUES (?,?,?,?)');
   const cont = {};
 
@@ -82,9 +95,14 @@ async function main() {
       const link = urlEntrega(e.id);
       const decisao = planejar(produto, link);
       if (decisao === 'gravar') {
-        await api('PATCH', 'product/' + produtoId + '/', { emailAccessLink: link }, H); await dormir(PAUSA_MS);
+        // A rota nao aceita PATCH (405): PUT com o produto inteiro que acabou de
+        // ser lido, trocando so o link. A conferencia abaixo pega o caso de a
+        // API ignorar o campo ou mexer em outro.
+        await api('PUT', 'product/' + produtoId + '/', { ...produto, emailAccessLink: link }, H); await dormir(PAUSA_MS);
         const conferido = await api('GET', 'product/' + produtoId + '/', null, H); await dormir(PAUSA_MS);
-        const res = conferido.emailAccessLink === link ? 'gravado' : 'nao-persistiu';
+        const mexeuEmOutro = camposAlterados(produto, conferido).filter(k => !['emailAccessLink', 'updatedAt'].includes(k));
+        if (mexeuEmOutro.length) console.log('ATENCAO', produtoId, 'campos mudaram alem do link:', mexeuEmOutro.join(','));
+        const res = conferido.emailAccessLink !== link ? 'nao-persistiu' : (mexeuEmOutro.length ? 'gravado-com-efeito' : 'gravado');
         marca.run(e.id, produtoId, res, Date.now()); cont[res] = (cont[res] || 0) + 1;
       } else {
         marca.run(e.id, produtoId, decisao, Date.now()); cont[decisao] = (cont[decisao] || 0) + 1;
@@ -100,6 +118,12 @@ async function main() {
   console.log(JSON.stringify({ fila: fila.length, ...cont }));
 }
 
-module.exports = { planejar };
+/** Campos de primeiro nivel cujo valor mudou entre duas leituras. Pura. */
+function camposAlterados(antes, depois) {
+  const chaves = new Set([...Object.keys(antes || {}), ...Object.keys(depois || {})]);
+  return [...chaves].filter(k => JSON.stringify((antes || {})[k]) !== JSON.stringify((depois || {})[k]));
+}
+
+module.exports = { planejar, camposAlterados };
 
 if (require.main === module) main().catch(e => { console.error('ERRO', e.message); process.exit(1); });
