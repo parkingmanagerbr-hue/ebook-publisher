@@ -1,5 +1,16 @@
 name: Build & Deploy EbookPublisher
 
+# Um unico fluxo constroi E implanta. Havia dois (build-and-push.yml e este)
+# construindo a MESMA imagem em paralelo no mesmo push: os dois disputavam a tag
+# latest e um deles falhava por corrida.
+#
+# O passo de implantacao rodava em /home/deploy/ebook-publisher-work, mas o
+# container pertence ao projeto compose `platform` (/opt/platform): o `up -d`
+# colidia com o nome do container, nao trocava nada e, como o script terminava
+# com um `echo`, o job ficava VERDE. Em 15/09/2026 a producao passou horas
+# servindo imagem antiga com o CI verde. Agora implanta no projeto certo e
+# CONFERE o digest da imagem em execucao — se nao trocou, o job falha.
+
 on:
   push:
     branches: [main]
@@ -11,10 +22,18 @@ on:
       - 'start.sh'
       - 'package*.json'
       - 'Dockerfile'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/ebook-publisher
+
+# Um deploy por vez: dois pushes seguidos empurravam imagens diferentes para a
+# mesma tag e o segundo container podia subir com a imagem do primeiro.
+concurrency:
+  group: deploy-ebook-publisher
+  cancel-in-progress: false
 
 jobs:
   build-and-push:
@@ -60,8 +79,23 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /home/deploy/ebook-publisher-work
-            docker compose -f docker-compose.production.yml pull
-            docker compose -f docker-compose.production.yml up -d ebook-publisher ebook-mega-agent
+            set -euo pipefail
+            cd /opt/platform
+            IMAGEM="ghcr.io/parkingmanagerbr-hue/ebook-publisher:latest"
+            COMPOSE="docker compose -f docker-compose.production.yml -f docker-compose.override.yml"
+            $COMPOSE pull ebook-publisher
+            $COMPOSE up -d --no-deps ebook-publisher
+            sleep 10
+            ESPERADO=$(docker image inspect "$IMAGEM" -f '{{.Id}}')
+            RODANDO=$(docker inspect -f '{{.Image}}' platform-ebook-publisher-1)
+            if [ "$ESPERADO" != "$RODANDO" ]; then
+              echo "::error::container nao subiu com a imagem nova (esperado $ESPERADO, rodando $RODANDO)"
+              exit 1
+            fi
+            if [ "$(docker inspect -f '{{.State.Status}}' platform-ebook-publisher-1)" != "running" ]; then
+              echo "::error::container fora do ar depois do deploy"
+              docker logs --tail 40 platform-ebook-publisher-1 || true
+              exit 1
+            fi
             docker image prune -f
-            echo "✅ EbookPublisher + MegaAgent deployed"
+            echo "deploy aplicado: $(docker inspect -f '{{.State.StartedAt}}' platform-ebook-publisher-1)"
