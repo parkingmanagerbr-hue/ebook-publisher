@@ -27,6 +27,7 @@ const RAIZ = path.join(__dirname, '..');
 // dentro dele entra no gate automaticamente — de proposito.
 const MODULOS_NO_GATE = [
   'src/domain/',
+  'src/agents/idiomaPorVenda.js',
   'src/application/',
   'src/infrastructure/db/',
   'src/infrastructure/queue/',

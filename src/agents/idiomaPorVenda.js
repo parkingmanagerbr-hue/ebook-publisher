@@ -67,7 +67,10 @@ function gamma(shape, rnd) {
     } while (v <= 0);
     const y = shape * v * v * v;
     const u = rnd();
-    if (Math.log(u || 1e-12) < 0.5 * x * x + shape - y + (shape - 1) * Math.log(y / shape)) return y;
+    // Com y = shape*v^3 a razao alvo/proposta leva v^(3*shape-1) (o jacobiano da
+    // troca soma v^2). O expoente era 3*shape-3 e o amostrador saia enviesado:
+    // Gamma(1) com media 0,84 e variancia 0,64, Beta(1,150) 16% abaixo do real.
+    if (Math.log(u || 1e-12) < 0.5 * x * x + shape - y + (3 * shape - 1) * Math.log(v)) return y;
   }
 }
 function beta(a, b, rnd) {
@@ -99,4 +102,4 @@ function escolherIdioma(idiomas, est, rnd = Math.random) {
   return melhor;
 }
 
-module.exports = { estatisticasPorIdioma, escolherIdioma, base, PRIOR_A, PRIOR_B };
+module.exports = { estatisticasPorIdioma, escolherIdioma, base, PRIOR_A, PRIOR_B, gamma, beta };
