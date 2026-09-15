@@ -38,6 +38,7 @@ const MODULOS_NO_GATE = [
   'src/application/',
   'src/infrastructure/db/',
   'src/infrastructure/queue/',
+  'src/core/aiClient.js',
   'src/core/database.js',
   'src/core/entrega.js',
   'src/core/logger.js',

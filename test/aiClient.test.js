@@ -7,6 +7,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
+// A sondagem grava o estado: sem isto o teste escrevia no data/ai_state.json real.
+process.env.AI_STATE_FILE = require('path').join(require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'aiclient-')), 'ai_state.json');
 const { acaoParaErroGroq, isDegraded, getNextKey } = require('../src/core/aiClient');
 
 // ── acaoParaErroGroq ────────────────────────────────────────────────────────

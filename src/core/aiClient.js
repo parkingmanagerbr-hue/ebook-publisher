@@ -20,13 +20,14 @@ const logger = createLogger('aiClient');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { spawn } = require('child_process');
 
 // ═══════════════════════════════════════════════════
 // CONFIGURAÇÃO DE CHAVES E PROVIDERS
 // ═══════════════════════════════════════════════════
 
-const STATE_FILE = path.join(__dirname, '../../data/ai_state.json');
+// AI_STATE_FILE existe para os testes gravarem em diretorio temporario — sem ele
+// um teste sobrescreveria o estado real das chaves.
+const STATE_FILE = process.env.AI_STATE_FILE || path.join(__dirname, '../../data/ai_state.json');
 
 // Suporte a múltiplas chaves por provider (rotação automática)
 const PROVIDER_KEYS = {
@@ -101,8 +102,12 @@ const PROVIDERS = PAID_PROVIDERS;
 
 // ── Cross-system Gemini quota coordinator (Redis DB 0) ────────────────────────
 const _qnet = require('net');
-const _qRH  = (process.env.REDIS_URL || 'redis://redis:6379').replace(/^redis:\/\//, '').split(':')[0] || 'redis';
-const _qRP  = parseInt(((process.env.REDIS_URL || 'redis://redis:6379').replace(/^redis:\/\//, '').split(':')[1] || '6379'));
+/** "redis://host:porta" -> { host, porta }; parte ausente cai no padrao do compose. */
+function hostPortaRedis(url) {
+  const partes = (url || 'redis://redis:6379').replace(/^redis:\/\//, '').split(':');
+  return { host: partes[0] || 'redis', porta: parseInt(partes[1] || '6379') };
+}
+const { host: _qRH, porta: _qRP } = hostPortaRedis(process.env.REDIS_URL);
 
 function _rCmd(...args) {
   return new Promise(resolve => {
@@ -114,14 +119,13 @@ function _rCmd(...args) {
       s.on('error', () => resolve(null));
       s.on('data', d => { buf += d; });
       s.on('end', () => {
-        try {
-          const ln = buf.split('\r\n'); const h = ln[0];
-          if (h[0] === '+') return resolve(h.slice(1));
-          if (h[0] === ':') return resolve(parseInt(h.slice(1)));
-          if (h.startsWith('$-1')) return resolve(null);
-          if (h[0] === '$') return resolve(ln[1] ?? null);
-          resolve(null);
-        } catch { resolve(null); }
+        // buf e sempre string (mesmo vazia): nada aqui lanca, por isso sem try.
+        const ln = buf.split('\r\n'); const h = ln[0];
+        if (h[0] === '+') return resolve(h.slice(1));
+        if (h[0] === ':') return resolve(parseInt(h.slice(1)));
+        if (h.startsWith('$-1')) return resolve(null);
+        if (h[0] === '$') return resolve(ln[1] ?? null);
+        resolve(null);
       });
       const cmd = `*${args.length}\r\n` + args.map(a => `$${String(a).length}\r\n${a}\r\n`).join('');
       s.write(cmd); s.end();
@@ -135,13 +139,9 @@ const _QUOTA_SYS = 'ebook';
 // levaria cinco dias so para o catalogo atual. Medido em 11/09/2026: systemcaster
 // 266, music 1 — sobra folga. Configuravel para reduzir sem novo deploy.
 const _QUOTA_MAX = parseInt(process.env.EBOOK_GEMINI_DAILY_MAX || '1500', 10);
-async function _isGeminiGloballyExhausted() { return !!(await _rCmd('GET', 'gemini:daily_exhausted')); }
-async function _markGeminiGloballyExhausted() {
-  const now = Date.now(), r = new Date();
-  r.setUTCHours(8, 0, 0, 0);
-  if (r.getTime() <= now) r.setUTCDate(r.getUTCDate() + 1);
-  await _rCmd('SET', 'gemini:daily_exhausted', '1', 'EX', String(Math.min(1800, Math.ceil((r.getTime() - now) / 1000)))); // cap 30min
-}
+// A bandeira global gemini:daily_exhausted nao e mais lida nem acesa por este
+// cliente (ver generate). As duas funcoes que a tocavam ficaram sem chamador e
+// sairam; outros sistemas do ecossistema ainda podem usa-la no Redis.
 async function _withinDailyBudget() {
   const key = `ai:gemini:sys:${_QUOTA_SYS}:daily:${new Date().toISOString().slice(0, 10)}`;
   const n = await _rCmd('INCR', key);
@@ -226,7 +226,9 @@ function saveState(state) {
     fs.writeFileSync(tmp, JSON.stringify(saida, null, 2));
     fs.renameSync(tmp, STATE_FILE);
     state.degraded = saida.degraded;
-    Object.defineProperty(state, '_lidoEm', { value: Date.now(), enumerable: false, configurable: true });
+    // Nunca antes da marca mais nova gravada: ver markDegraded.
+    const maisNova = Math.max(0, ...Object.values(saida.degraded || {}).map(v => (v && v.since_ms) || 0));
+    Object.defineProperty(state, '_lidoEm', { value: Math.max(Date.now(), maisNova), enumerable: false, configurable: true });
   } catch (e) { logger.warn('Falha ao salvar estado: ' + e.message); }
 }
 
@@ -237,7 +239,13 @@ function markDegraded(state, key, hours = 1) {
     since: new Date().toISOString(),
     // Instante numerico: o isDegraded usa isto para so sondar depois de
     // PROBE_MS. Sem ele, uma degradacao recem-criada seria sondada na hora.
-    since_ms: Date.now(),
+    //
+    // ESTRITAMENTE depois da ultima leitura/gravacao deste estado. A mescla do
+    // saveState descarta marca "criada antes da leitura" (outro processo a
+    // liberou). Com o mesmo milissegundo — falha sincrona logo depois do
+    // getNextKey gravar — a marca nova era jogada fora, a chave voltava na
+    // rotacao e o laco de chaves alternativas nao terminava.
+    since_ms: Math.max(Date.now(), (state._lidoEm || 0) + 1),
     hours,
   };
   logger.warn(`⛔ Degradado: ${key} por ${hours}h`);
@@ -302,80 +310,16 @@ function getNextKey(state, provider) {
 }
 
 // ═══════════════════════════════════════════════════
-// SSH TUNNEL PARA OLLAMA VPS
+// OLLAMA VPS (rede Docker interna)
 // ═══════════════════════════════════════════════════
 
-const VPS_TUNNEL_LOCAL_PORT = parseInt(process.env.OLLAMA_VPS_TUNNEL_PORT || '11435');
-const VPS_SSH_ALIAS         = process.env.OLLAMA_VPS_SSH_ALIAS || 'vps';
 const VPS_OLLAMA_CONTAINER  = process.env.OLLAMA_VPS_CONTAINER_IP || '172.18.0.11';
 const VPS_OLLAMA_MODEL      = process.env.OLLAMA_VPS_MODEL || 'llama3.2:3b';
 
-let _tunnelProc = null;
-let _tunnelReady = false;
-let _tunnelStarting = false;
-
-async function ensureVpsTunnel() {
-  if (_tunnelReady) return true;
-  if (_tunnelStarting) {
-    // Aguardar até 10s se já está iniciando
-    for (let i = 0; i < 20; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      if (_tunnelReady) return true;
-    }
-    return false;
-  }
-
-  _tunnelStarting = true;
-  logger.info(`🔗 Abrindo SSH tunnel: localhost:${VPS_TUNNEL_LOCAL_PORT} → ${VPS_SSH_ALIAS}:${VPS_OLLAMA_CONTAINER}:11434`);
-
-  return new Promise((resolve) => {
-    const sshArgs = [
-      '-N',                                   // não executar shell remoto
-      '-o', 'StrictHostKeyChecking=no',
-      '-o', 'ServerAliveInterval=30',
-      '-o', 'ServerAliveCountMax=3',
-      '-o', 'ExitOnForwardFailure=yes',
-      '-L', `${VPS_TUNNEL_LOCAL_PORT}:${VPS_OLLAMA_CONTAINER}:11434`,
-      VPS_SSH_ALIAS,
-    ];
-
-    _tunnelProc = spawn('ssh', sshArgs, { stdio: 'ignore', detached: false });
-
-    _tunnelProc.on('error', (err) => {
-      logger.warn(`⚠️ SSH tunnel erro: ${err.message}`);
-      _tunnelReady = false;
-      _tunnelStarting = false;
-      resolve(false);
-    });
-
-    _tunnelProc.on('exit', (code) => {
-      logger.warn(`⚠️ SSH tunnel encerrou (code ${code})`);
-      _tunnelReady = false;
-      _tunnelStarting = false;
-      _tunnelProc = null;
-    });
-
-    // Aguardar 2s para tunnel estabilizar, depois testar conectividade
-    setTimeout(async () => {
-      try {
-        await axios.get(`http://localhost:${VPS_TUNNEL_LOCAL_PORT}/api/tags`, { timeout: 5000 });
-        _tunnelReady = true;
-        _tunnelStarting = false;
-        logger.info(`✅ SSH tunnel ativo na porta ${VPS_TUNNEL_LOCAL_PORT} (modelo: ${VPS_OLLAMA_MODEL})`);
-        resolve(true);
-      } catch (e) {
-        logger.warn(`⚠️ SSH tunnel aberto mas Ollama VPS não respondeu: ${e.message}`);
-        _tunnelReady = false;
-        _tunnelStarting = false;
-        resolve(false);
-      }
-    }, 2000);
-  });
-}
-
-// Fechar tunnel ao encerrar processo
-process.on('exit', () => { if (_tunnelProc) _tunnelProc.kill(); });
-process.on('SIGINT', () => { if (_tunnelProc) _tunnelProc.kill(); process.exit(); });
+// O tunel SSH para o Ollama (ensureVpsTunnel) saiu: nada o chamava desde que o
+// acesso passou a ser direto pela rede Docker (callOllamaVps). Fica o SIGINT,
+// que encerra o processo como antes.
+process.on('SIGINT', () => { process.exit(); });
 
 // ═══════════════════════════════════════════════════
 // CHAMADAS POR PROVIDER
@@ -431,9 +375,12 @@ async function callGemini(prompt, systemPrompt, apiKey) {
   throw ultimo;
 }
 
-async function callCerebras(prompt, systemPrompt, apiKey) {
+async function callCerebras(prompt, systemPrompt, apiKey, opts) {
   // Modelos disponíveis (maio 2026): gpt-oss-120b, zai-glm-4.7 (qwen-3-235b removido)
   const model = process.env.CEREBRAS_MODEL || 'gpt-oss-120b';
+  // `maxTokens` era usado sem existir: TODA chamada lancava ReferenceError antes
+  // de sair a requisicao, e o generate degradava a chave como erro "unknown".
+  const maxTokens = (opts && opts.maxTokens) || 8000;
   const response = await axios.post('https://api.cerebras.ai/v1/chat/completions', {
     model,
     messages: [
@@ -513,7 +460,9 @@ async function callGroq(prompt, systemPrompt, apiKey, opts) {
   let ultimoErro = null;
   const pedido = opts && Number(opts.maxTokens) > 0 ? Math.min(Number(opts.maxTokens), GROQ_MAX_TOKENS) : GROQ_MAX_TOKENS;
   for (const model of GROQ_MODELS) {
-    for (const teto of [pedido, Math.floor(pedido / 2)]) {
+    // Minimo 1: com teto pedido 1 a metade era 0, e o `|| 8000` do envio
+    // transformava a "reducao" num pedido de 8000 tokens.
+    for (const teto of [pedido, Math.max(1, Math.floor(pedido / 2))]) {
       try {
         return await callGroqComModelo(prompt, systemPrompt, apiKey, model, teto);
       } catch (e) {
@@ -527,7 +476,8 @@ async function callGroq(prompt, systemPrompt, apiKey, opts) {
       }
     }
   }
-  throw ultimoErro || new Error('groq: nenhum modelo disponivel');
+  // GROQ_MODELS nunca e vazia (tres fixos), entao ao chegar aqui houve erro.
+  throw ultimoErro;
 }
 
 async function callGroqComModelo(prompt, systemPrompt, apiKey, model, maxTokens) {
@@ -540,7 +490,7 @@ async function callGroqComModelo(prompt, systemPrompt, apiKey, model, maxTokens)
     // Usar o teto recebido, nao um 8000 fixo: o 8000 ignorava o parametro e
     // deixava INERTE a re-tentativa com metade do teto no 413 — o retry
     // reenviava exatamente a mesma requisicao e falhava igual.
-    max_tokens: maxTokens || 8000,
+    max_tokens: maxTokens,
     temperature: 0.7,
   }, {
     headers: {
@@ -638,7 +588,8 @@ async function callHuggingFace(prompt, systemPrompt, apiKey, opts) {
       ultimoErro = e;
     }
   }
-  throw ultimoErro || new Error('HuggingFace: nenhum modelo respondeu');
+  // MODELOS_HF nunca e vazia, entao ao chegar aqui algum modelo falhou.
+  throw ultimoErro;
 }
 
 async function callPollinations(prompt, systemPrompt) {
@@ -686,6 +637,21 @@ async function callOllama(prompt, systemPrompt) {
 // DETECÇÃO DE TIPO DE ERRO → TTL de degradação
 // ═══════════════════════════════════════════════════
 
+/**
+ * Segundos da dica "try again in ..." do provedor, ou null sem dica numerica.
+ *
+ * Eram duas regex, cada uma com um furo: a da cota diaria lia "864ms" como 864
+ * MINUTOS (o "m" casava sozinho) e travava a chave pelo teto de 6 h quando o
+ * provedor pedia menos de um segundo; a do limite por minuto nao entendia
+ * "3m20s" e caia no padrao de 2 min. Aceita h, m, s e ms combinados.
+ */
+function segundosDaDica(texto) {
+  const m = String(texto || '').toLowerCase().match(/try again in\s*(?:(\d+(?:\.\d+)?)\s*h(?![a-z]))?\s*(?:(\d+(?:\.\d+)?)\s*m(?![a-z]))?\s*(?:(\d+(?:\.\d+)?)\s*(ms|s)(?![a-z]))?/);
+  if (!m || !(m[1] || m[2] || m[3])) return null;
+  const n = v => parseFloat(v || 0);
+  return n(m[1]) * 3600 + n(m[2]) * 60 + (m[4] === 'ms' ? n(m[3]) / 1000 : n(m[3]));
+}
+
 function getErrorTTL(err) {
   const msg = (err.message || '').toLowerCase();
   const status = err.response?.status || err.status;
@@ -706,11 +672,8 @@ function getErrorTTL(err) {
     // os tokens liberam ("try again in 7m35s"). Travar ate a meia-noite ignorava
     // isso — medido em 11/09/2026: das 8 chaves presas por 10,5 h, 4 respondiam
     // 200 pedindo 5 mil tokens. So cai na meia-noite quando nao ha dica.
-    const dicaDia = body.match(/try again in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)?s?\b/);
-    if (isHardQuota && dicaDia && (dicaDia[1] || dicaDia[2] || dicaDia[3])) {
-      const seg = (parseFloat(dicaDia[1] || 0) * 3600) + (parseFloat(dicaDia[2] || 0) * 60) + parseFloat(dicaDia[3] || 0);
-      if (seg > 0) return { hours: Math.min(6, (seg + 30) / 3600), reason: 'quota/rate-limit' };
-    }
+    const segDica = segundosDaDica(body);
+    if (isHardQuota && segDica > 0) return { hours: Math.min(6, (segDica + 30) / 3600), reason: 'quota/rate-limit' };
     if (isHardQuota) {
       // Quota diária sem dica → degradar até próxima meia-noite UTC
       const now = new Date();
@@ -723,12 +686,7 @@ function getErrorTTL(err) {
     // limite do minuto uma vez e ficava presa uma hora; as 5 do Groq caiam em
     // menos de um minuto e as capas saiam sem gancho. Usa a dica do provedor
     // ("try again in 7.5s", retry-after) quando vier; senao 2 min.
-    const dica = body.match(/try again in ([\d.]+)\s*(ms|s|m)\b/);
-    let seg = 120;
-    if (dica) {
-      const v = parseFloat(dica[1]);
-      seg = dica[2] === 'ms' ? v / 1000 : dica[2] === 'm' ? v * 60 : v;
-    }
+    let seg = segDica === null ? 120 : segDica;
     const ra = err.response?.headers?.['retry-after'];
     if (ra && !isNaN(parseFloat(ra))) seg = parseFloat(ra);
     seg = Math.min(600, Math.max(15, seg + 5));   // folga de 5 s, entre 15 s e 10 min
@@ -833,9 +791,10 @@ async function generate(prompt, systemPrompt = '', options = {}) {
       // Sem isto o circuito meio-aberto so rende uma requisicao a cada 20min:
       // o provider responde 200 e mesmo assim continua marcado como degradado
       // ate o prazo original — que e justamente o chute que se quer corrigir.
-      const chaveId = apiKey ? `${provider}:${apiKey.slice(-8)}` : null;
+      // apiKey nunca e vazia aqui: provedor local usa o marcador ('free', 'vps').
+      const chaveId = `${provider}:${apiKey.slice(-8)}`;
       let limpou = false;
-      for (const k of [provider, chaveId].filter(Boolean)) {
+      for (const k of [provider, chaveId]) {
         if (state.degraded[k]) { delete state.degraded[k]; limpou = true; }
       }
       if (limpou) {
@@ -868,7 +827,7 @@ async function generate(prompt, systemPrompt = '', options = {}) {
       logger.warn(`❌ ${provider} falhou em ${elapsed}ms [${reason}]: ${err.message?.slice(0, 80)}`);
 
       // Degradar chave específica (ou provider inteiro se só tem uma chave)
-      const keys = PROVIDER_KEYS[provider] || [];
+      const keys = PROVIDER_KEYS[provider];   // todo provedor de PROVIDERS tem entrada
       if (keys.length <= 1 || LOCAL_PROVIDERS.has(provider)) {
         markDegraded(state, provider, hours);
       } else {
@@ -888,7 +847,8 @@ async function generate(prompt, systemPrompt = '', options = {}) {
             const { hours: hAlt, reason: rAlt } = getErrorTTL(errAlt);
             markDegraded(state, altKeyId, hAlt);
             logger.warn(`❌ ${provider} chave ...${altKey.slice(-8)} falhou [${rAlt}]`);
-            errors.push({ provider, error: errAlt.message?.slice(0, 80), key: altKeyId });
+            // reason faltava: o resumo final mostrava "groq(undefined)" por chave.
+            errors.push({ provider, error: errAlt.message?.slice(0, 80), key: altKeyId, reason: rAlt });
           }
         }
         // Nao acende mais a bandeira global: o esgotamento destas chaves ja fica
@@ -934,7 +894,8 @@ async function generate(prompt, systemPrompt = '', options = {}) {
         const _isTout = _ollamaErr.code === 'ECONNABORTED' || (_ollamaErr.message||'').includes('timeout');
         logger.warn('Ollama VPS tentativa ' + _att + ': ' + (_ollamaErr.message||'').slice(0, 80));
         if (_isConn) break; // Ollama offline
-        if (_ollamaErr.message && _ollamaErr.message.startsWith('PAID_PROVIDER_RECOVERED:')) throw _ollamaErr;
+        // (O PAID_PROVIDER_RECOVERED e lancado FORA deste try, antes da
+        // tentativa; a verificacao dele aqui nunca casava e saiu.)
         const _delay = _isTout ? 60000 : 30000;
         logger.info('Aguardando ' + (_delay/1000) + 's antes do proximo Ollama...');
         await new Promise(r => setTimeout(r, _delay));
@@ -970,17 +931,21 @@ async function generate(prompt, systemPrompt = '', options = {}) {
 // ═══════════════════════════════════════════════════
 
 function getStatus() {
+  // So LEITURA. Usava isDegraded, que libera e CARIMBA a sondagem meio-aberta:
+  // o painel e o /api/status (publico, a cada 12-20 s) consumiam a sondagem e o
+  // generate nunca a recebia — o provedor ficava fora ate o prazo cheio.
+  // loadState ja descarta marca vencida, entao presente = degradado.
   const state = loadState();
-  const now = Date.now();
+  const degradado = k => Boolean(state.degraded[k]);
   const result = {};
 
   for (const provider of PROVIDERS) {
-    const keys = PROVIDER_KEYS[provider] || [];
-    const providerDegraded = isDegraded(state, provider);
+    const keys = PROVIDER_KEYS[provider];
+    const providerDegraded = degradado(provider);
     const isLocal = LOCAL_PROVIDERS.has(provider);
     const availableKeys = isLocal ? 1 : keys.filter(k => {
       const keyId = `${provider}:${k.slice(-8)}`;
-      return !isDegraded(state, keyId);
+      return !degradado(keyId);
     }).length;
 
     result[provider] = {
@@ -997,7 +962,7 @@ function getStatus() {
 
   result._summary = {
     anyAvailable: Object.values(result).some(p => !p.degraded && p.configured && p.availableKeys > 0),
-    availableProviders: PROVIDERS.filter(p => !isDegraded(state, p) && (PROVIDER_KEYS[p]?.length > 0 || LOCAL_PROVIDERS.has(p))),
+    availableProviders: PROVIDERS.filter(p => !degradado(p) && (PROVIDER_KEYS[p]?.length > 0 || LOCAL_PROVIDERS.has(p))),
   };
 
   return result;
@@ -1020,4 +985,6 @@ function resetDegraded(provider = null) {
 
 module.exports = { getErrorTTL, callHuggingFace, MODELOS_HF, mesclarDegradados, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
   // exportados para teste: e onde moraram os defeitos que pararam a geracao
-  acaoParaErroGroq, isDegraded, getNextKey };
+  acaoParaErroGroq, isDegraded, getNextKey, loadState, saveState, markDegraded,
+  callGemini, callCerebras, callGroq, callSambaNova, callDeepSeek, callPollinations, callOllamaVps, callOllama,
+  ehCotaOuModeloIndisponivel, segundosDaDica, hostPortaRedis };
