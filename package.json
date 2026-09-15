@@ -19,8 +19,9 @@
     "setup:sessions": "node scripts/autoRenewSessions.js",
     "trending": "node scripts/trendingInjector.js",
     "renew": "node scripts/autoRenewSessions.js",
-    "test": "node --test test/*.test.js",
-    "test:cobertura": "node --test --experimental-test-coverage test/*.test.js"
+    "test": "node scripts/gateCobertura.js",
+    "test:cobertura": "node scripts/gateCobertura.js --relatorio",
+    "test:rapido": "node --test test/*.test.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",

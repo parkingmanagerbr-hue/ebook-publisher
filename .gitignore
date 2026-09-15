@@ -45,3 +45,6 @@ extract_google_log*.txt
 __pycache__/
 *.pyc
 *.pyo
+
+# ── Cobertura (gerada pelo npm test) ─────────────────────
+coverage/
