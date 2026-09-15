@@ -30,7 +30,11 @@ const MODULOS_NO_GATE = [
   'src/application/',
   'src/infrastructure/db/',
   'src/infrastructure/queue/',
+  'src/core/database.js',
+  'src/core/entrega.js',
+  'src/core/logger.js',
   'src/core/retencao.js',
+  'src/core/sessionPath.js',
 ];
 
 function listarJs(dirAbs) {

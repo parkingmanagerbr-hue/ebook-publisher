@@ -6,7 +6,8 @@ const path = require('path');
 const { createLogger } = require('./logger');
 const logger = createLogger('database');
 
-const DB_PATH = path.join(__dirname, '../../data/metrics.db');
+// METRICS_DB: mesmo nome que o scoreCoverHooks ja usa. Sem ela, o arquivo de sempre.
+const DB_PATH = process.env.METRICS_DB || path.join(__dirname, '../../data/metrics.db');
 
 let db;
 
