@@ -26,6 +26,7 @@ const RAIZ = path.join(__dirname, '..');
 // Diretorio (termina em "/") entra inteiro, recursivo. Arquivo novo que cair
 // dentro dele entra no gate automaticamente — de proposito.
 const MODULOS_NO_GATE = [
+  'src/domain/',
   'src/core/retencao.js',
 ];
 
