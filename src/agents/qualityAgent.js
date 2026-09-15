@@ -24,12 +24,15 @@ const MIN_STD_DEV  = 15;    // desvio padrão de pixels — abaixo = imagem quas
 function isValidImageFile(filePath) {
   try {
     const fd  = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(8);
-    fs.readSync(fd, buf, 0, 8, 0);
+    // 12 bytes: o WebP so se identifica no byte 8 ("RIFF" ....  "WEBP"). Com o
+    // buffer de 8 bytes buf[8] era sempre undefined e toda capa WebP era
+    // reprovada como "nao e imagem" e regerada ate esgotar as tentativas.
+    const buf = Buffer.alloc(12);
+    fs.readSync(fd, buf, 0, 12, 0);
     fs.closeSync(fd);
     const isPng  = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
     const isJpeg = buf[0] === 0xFF && buf[1] === 0xD8;
-    const isWebp = buf[8] === 0x57 && buf[9] === 0x45; // RIFF...WEBP
+    const isWebp = buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
     return isPng || isJpeg || isWebp;
   } catch { return false; }
 }
@@ -238,6 +241,23 @@ async function validateEbook(ebook) {
 }
 
 // ─── Verificar PDF gerado ─────────────────────────────────────────────────────
+/**
+ * pdf-parse carrega um pdf.js antigo que guarda estado entre chamadas: depois de
+ * ler um PDF maior, o seguinte pode falhar com "bad XRef entry" (reproduzido em
+ * 15/09/2026 — 1a leitura ok, 3a falha no mesmo processo). No servidor, que fica
+ * de pe, isso fazia a checagem de paginas e texto cair calada no modo basico.
+ * Na falha, descarta o modulo do cache e tenta uma vez com instancia nova.
+ */
+async function lerPdf(buffer) {
+  const carregar = () => { const m = require('pdf-parse'); return m && m.default ? m.default : m; };
+  try {
+    return await carregar()(buffer);
+  } catch (primeiro) {
+    for (const k of Object.keys(require.cache)) if (/[\\/]pdf-parse[\\/]/.test(k)) delete require.cache[k];
+    try { return await carregar()(buffer); } catch { throw primeiro; }
+  }
+}
+
 async function validatePDF(pdfPath, { expectedChapters = 0 } = {}) {
   const issues = [];
 
@@ -267,9 +287,7 @@ async function validatePDF(pdfPath, { expectedChapters = 0 } = {}) {
 
   // Análise de conteúdo via pdf-parse
   try {
-    let pdfParse = require('pdf-parse');
-    if (pdfParse && pdfParse.default) pdfParse = pdfParse.default; // ESM compat
-    const data = await pdfParse(fs.readFileSync(pdfPath)); // sem opções extras
+    const data = await lerPdf(fs.readFileSync(pdfPath));
 
     const expectedMinPages = expectedChapters + 4; // capa + rosto + sumário + intro + conclusão
     if (data.numpages < expectedMinPages) {
