@@ -32,6 +32,7 @@ const MODULOS_NO_GATE = [
   'src/agents/idiomaPorVenda.js',
   'src/agents/publishBacklog.js',
   'src/agents/regenCovers.js',
+  'src/agents/scoreCoverHooks.js',
   'src/agents/sincronizarVendas.js',
   'src/application/',
   'src/infrastructure/db/',

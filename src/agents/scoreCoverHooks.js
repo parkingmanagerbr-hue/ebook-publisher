@@ -77,8 +77,10 @@ function pontuarCapas(opts) {
 
     if (!eb) {
       // Casamento tolerante: o registro guarda o topico truncado em 80 chars.
-      try {
-        const alvo = normalizar(r.topico);
+      // Sem topico nao ha o que casar: ''.startsWith('') e verdadeiro e a capa
+      // levava as vendas do primeiro e-book do banco.
+      const alvo = normalizar(r.topico);
+      if (alvo) try {
         const cand = db.prepare(
           'SELECT id, topic, sales_count, revenue FROM ebooks ORDER BY id DESC LIMIT 800'
         ).all();
@@ -102,9 +104,17 @@ function pontuarCapas(opts) {
     if (vendas === 0) semVenda++;
     pontuados++;
   }
+  db.close();
 
   if (!dryRun) {
-    try { fs.writeFileSync(MEMORIA, JSON.stringify(memoria, null, 2)); }
+    try {
+      // pontuarHook ja gravou o placar neste MESMO arquivo. Regravar a copia
+      // lida no inicio apagava esses pontos (hooks antigos) e o registro saia
+      // marcado como pontuado: a venda nunca chegava ao bandit. Os hooks vem
+      // do disco; o log marcado vem daqui.
+      const atual = JSON.parse(fs.readFileSync(MEMORIA, 'utf8'));
+      fs.writeFileSync(MEMORIA, JSON.stringify({ ...memoria, hooks: atual.hooks }, null, 2));
+    }
     catch (e) { log.warn('nao consegui salvar memoria: ' + e.message.slice(0, 60)); }
   }
 
