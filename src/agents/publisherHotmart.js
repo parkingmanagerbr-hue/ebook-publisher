@@ -1763,7 +1763,25 @@ async function uploadCoverImage(page, numericId, coverPath) {
 }
 
 async function uploadPDF(page, numericId, pdfPath) {
-  log.info('Uploading PDF to '+numericId);
+  // Caminho atual (verificado em 15/09/2026): aba "Conteudo do Produto" em
+  // /products/manage/{id}/content tem o input de arquivo direto; o envio faz
+  // content/new -> multipart S3 -> content/finish. O fluxo antigo (Painel >
+  // Configurar) nao existe mais: "No Configurar button found" e o produto ia a
+  // venda vazio. Reanexados assim os 3 vendidos sem arquivo.
+  try {
+    log.info('Uploading PDF to '+numericId+' via /content');
+    await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/content',{waitUntil:'networkidle2',timeout:60000}).catch(()=>{});
+    let inp=null;
+    for(let i=0;i<20&&!inp;i++){ await sleep(1000); inp=await page.$('input[type="file"]').catch(()=>null); }
+    if(inp){
+      const terminou=page.waitForResponse(r=>/\/content\/finish/.test(r.url()),{timeout:180000}).catch(()=>null);
+      await inp.uploadFile(pdfPath);
+      const fim=await terminou;
+      if(fim&&fim.ok()){ log.info('PDF enviado (content/finish '+fim.status()+')'); return true; }
+      log.warn('content/finish nao confirmado — tentando fluxo antigo');
+    } else log.warn('input de arquivo nao apareceu em /content — tentando fluxo antigo');
+  } catch(e){ log.warn('upload via /content falhou: '+String(e.message).slice(0,100)); }
+  log.info('Uploading PDF to '+numericId+' (fluxo antigo)');
   // Navigate to info page; Hotmart SPA may redirect via OAM — catch context destruction
   await page.goto('https://app.hotmart.com/products/manage/'+numericId+'/info',{waitUntil:'domcontentloaded',timeout:30000}).catch(()=>{});
   // Wait for SPA to mount — allow OAM redirects to complete; body len often stays 0 due to SPA redirects
@@ -2279,4 +2297,7 @@ module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook
   // exportado para o executor LOCAL: a Hotmart amarra a sessao a origem, entao
   // o reenvio de capa roda na maquina que fez o login, conectando ao Chrome ja
   // aberto em vez de subir um navegador com cookies transplantados.
-  uploadCoverImage };
+  uploadCoverImage,
+  // Mesmo motivo: reanexar o PDF de produto que foi a venda sem arquivo
+  // (scripts/reanexarPdfHotmart.js).
+  uploadPDF };
