@@ -29,6 +29,13 @@ test('link nosso antigo e atualizado; link de terceiro nunca e sobrescrito (cont
   assert.deepStrictEqual(alvo({ emailAccessLink: 'https://drive.google.com/arquivo' }, LINK), { producerName: PRODUTOR });
 });
 
+test('imagem so e enviada para produto sem imagem e com capa em disco', () => {
+  const { precisaImagem } = require('../scripts/entregaCakto');
+  assert.strictEqual(precisaImagem({ image: null }, true), true);
+  assert.strictEqual(precisaImagem({ image: null }, false), false);
+  assert.strictEqual(precisaImagem({ image: 'https://cdn/x.jpg' }, true), false);
+});
+
 test('camposAlterados aponta so o que mudou', () => {
   assert.deepStrictEqual(camposAlterados({ a: 1, b: [1], c: 'x' }, { a: 1, b: [2], d: true }), ['b', 'c', 'd']);
   assert.deepStrictEqual(camposAlterados(null, {}), []);

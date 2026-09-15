@@ -86,7 +86,7 @@ async function main() {
   const db = getDb();
   db.prepare('CREATE TABLE IF NOT EXISTS cakto_entrega (ebook_id TEXT PRIMARY KEY, produto TEXT, resultado TEXT, quando INTEGER)').run();
 
-  const livros = db.prepare("SELECT id, title, pdf_path, cakto_product_id FROM ebooks WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' ORDER BY rowid DESC").all();
+  const livros = db.prepare("SELECT id, title, pdf_path, cover_path, cakto_product_id FROM ebooks WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' ORDER BY rowid DESC").all();
   const comPdf = livros.filter(e => e.pdf_path && fs.existsSync(e.pdf_path));
   if (process.argv.includes('--sem-pdf')) {
     console.log(JSON.stringify({ comCheckout: livros.length, comPdf: comPdf.length, semPdf: livros.length - comPdf.length }));
@@ -94,7 +94,7 @@ async function main() {
   }
 
   const limite = parseInt(arg('limite', '1'), 10);
-  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v2','ok-v2')").all().map(r => r.ebook_id));
+  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v3','ok-v3')").all().map(r => r.ebook_id));
   const fila = comPdf.filter(e => !feitos.has(e.id)).slice(0, limite);
   const H = await cabecalhos();
   const marca = db.prepare('INSERT OR REPLACE INTO cakto_entrega (ebook_id, produto, resultado, quando) VALUES (?,?,?,?)');
@@ -113,15 +113,30 @@ async function main() {
         // A rota nao aceita PATCH (405): PUT com o produto inteiro que acabou de
         // ser lido, trocando so o link. A conferencia abaixo pega o caso de a
         // API ignorar o campo ou mexer em outro.
-        await api('PUT', 'product/' + produtoId + '/', { ...produto, ...mudar }, H); await dormir(PAUSA_MS);
+        // Sem `image`: a imagem tem rota propria (multipart), e reenviar a URL ou o
+        // null lido poderia apagar a capa ja enviada.
+        const { image: _imagem, ...corpo } = produto;
+        await api('PUT', 'product/' + produtoId + '/', { ...corpo, ...mudar }, H); await dormir(PAUSA_MS);
         const conferido = await api('GET', 'product/' + produtoId + '/', null, H); await dormir(PAUSA_MS);
         const mexeuEmOutro = camposAlterados(produto, conferido).filter(k => !['updatedAt', ...Object.keys(mudar)].includes(k));
         if (mexeuEmOutro.length) console.log('ATENCAO', produtoId, 'campos mudaram alem do link:', mexeuEmOutro.join(','));
         const persistiu = Object.entries(mudar).every(([k, v]) => conferido[k] === v);
-        const res = !persistiu ? 'nao-persistiu' : (mexeuEmOutro.length ? 'gravado-com-efeito' : 'gravado-v2');
+        const res = !persistiu ? 'nao-persistiu' : (mexeuEmOutro.length ? 'gravado-com-efeito' : 'gravado-v3');
         marca.run(e.id, produtoId, res, Date.now()); cont[res] = (cont[res] || 0) + 1;
       } else {
-        marca.run(e.id, produtoId, decisao === 'ok' ? 'ok-v2' : decisao, Date.now()); cont[decisao] = (cont[decisao] || 0) + 1;
+        marca.run(e.id, produtoId, decisao === 'ok' ? 'ok-v3' : decisao, Date.now()); cont[decisao] = (cont[decisao] || 0) + 1;
+      }
+      // Capa DEPOIS do PUT de dados: o PUT reenvia o produto lido, com image null,
+      // e apagaria uma imagem enviada antes dele.
+      if (precisaImagem(produto, !!(e.cover_path && fs.existsSync(e.cover_path)))) {
+        const jpg = await capaParaCheckout(e.cover_path);
+        try {
+          await enviarImagem(produtoId, jpg, H); await dormir(PAUSA_MS);
+          const comImagem = await api('GET', 'product/' + produtoId + '/', null, H); await dormir(PAUSA_MS);
+          const r = comImagem.image ? 'imagem' : 'imagem-nao-persistiu';
+          cont[r] = (cont[r] || 0) + 1;
+          if (!comImagem.image) marca.run(e.id, produtoId, r, Date.now());
+        } finally { try { fs.unlinkSync(jpg); } catch {} }
       }
     } catch (err) {
       cont.erro = (cont.erro || 0) + 1;
@@ -134,12 +149,37 @@ async function main() {
   console.log(JSON.stringify({ fila: fila.length, ...cont }));
 }
 
+/** Produto sem imagem e com capa em disco. Pura. */
+function precisaImagem(produto, capaExiste) {
+  return !produto.image && capaExiste;
+}
+
+/**
+ * Capa de 1600x2560 em PNG (~3,4 MB) e pesada para o checkout, que a mostra
+ * pequena. 600 px de largura em JPEG fica perto de 60 KB.
+ */
+function capaParaCheckout(caminho) {
+  const saida = '/tmp/capa_cakto_' + process.pid + '_' + Date.now() + '.jpg';
+  require('child_process').execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', caminho, '-vf', 'scale=600:-2', '-q:v', '3', saida]);
+  return saida;
+}
+
+/** Rota achada no bundle do painel: PUT /product/{id}/image/ multipart, campo image. */
+async function enviarImagem(produtoId, arquivo, H) {
+  const fd = new FormData();
+  fd.append('image', new Blob([fs.readFileSync(arquivo)], { type: 'image/jpeg' }), 'capa.jpg');
+  const { 'content-type': _ignorado, ...semTipo } = H; // o fetch poe o boundary
+  const r = await fetch('https://api.cakto.com.br/api/product/' + produtoId + '/image/', { method: 'PUT', headers: semTipo, body: fd });
+  const t = await r.text();
+  if (!r.ok) throw new Error('imagem: HTTP ' + r.status + ' ' + t.slice(0, 160));
+}
+
 /** Campos de primeiro nivel cujo valor mudou entre duas leituras. Pura. */
 function camposAlterados(antes, depois) {
   const chaves = new Set([...Object.keys(antes || {}), ...Object.keys(depois || {})]);
   return [...chaves].filter(k => JSON.stringify((antes || {})[k]) !== JSON.stringify((depois || {})[k]));
 }
 
-module.exports = { planejar, alvo, camposAlterados, PRODUTOR };
+module.exports = { planejar, alvo, camposAlterados, precisaImagem, PRODUTOR };
 
 if (require.main === module) main().catch(e => { console.error('ERRO', e.message); process.exit(1); });
