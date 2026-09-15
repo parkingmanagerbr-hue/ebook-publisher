@@ -102,6 +102,14 @@ app.use('/pdfs', (req, res, next) => {
   catch { res.status(401).json({ error: 'Invalid token' }); }
 }, express.static(path.join(__dirname, '../data/pdfs')));
 
+// Download do comprador (Cakto entrega por link externo). Ver src/core/entrega.js.
+app.get('/entrega/:token', require('./core/entrega').criarRota(id => {
+  try {
+    return require('./core/database').getDb()
+      .prepare('SELECT title, pdf_path FROM ebooks WHERE id = ?').get(id) || null;
+  } catch { return null; }
+}));
+
 app.use(express.static(path.join(__dirname, '../public')));
 
 // ── Auth middleware for new routes ─────────────────────────────────────────────

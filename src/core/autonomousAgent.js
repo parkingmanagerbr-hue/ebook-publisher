@@ -84,7 +84,16 @@ function limparArtefatos() {
   const base = path.join(__dirname, '../../data');
   let totalRemovido = 0;
 
+  // Arquivo de livro publicado nunca sai (a entrega da Cakto depende dele).
+  // Sem conseguir consultar o banco, NAO limpar pdfs/capas: apagar sem saber o
+  // que esta a venda foi exatamente o erro.
+  const { arquivosProtegidos, escolherExcedente } = require('./retencao');
+  let protegidos = null;
+  try { protegidos = arquivosProtegidos(require('./database').getDb()); }
+  catch (e) { logger.warn('[retencao] sem banco, pdfs e capas preservados: ' + e.message.slice(0, 80)); }
+
   for (const [pasta, manter] of Object.entries(RETENCAO)) {
+    if ((pasta === 'pdfs' || pasta === 'covers') && !protegidos) continue;
     if (!manter || manter < 1) continue;            // 0 = desliga a limpeza
     const dir = path.join(base, pasta);
     try {
@@ -95,10 +104,9 @@ function limparArtefatos() {
           try { const st = fs.statSync(full); return st.isFile() ? { full, mtime: st.mtimeMs } : null; }
           catch { return null; }
         })
-        .filter(Boolean)
-        .sort((a, b) => b.mtime - a.mtime);          // mais novos primeiro
+        .filter(Boolean);
 
-      const excedente = arquivos.slice(manter);
+      const excedente = escolherExcedente(arquivos, manter, pasta === 'audiobooks' ? new Set() : protegidos);
       for (const a of excedente) {
         try { fs.unlinkSync(a.full); totalRemovido++; } catch (_) {}
       }
