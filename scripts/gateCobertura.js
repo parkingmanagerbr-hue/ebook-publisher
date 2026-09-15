@@ -31,6 +31,8 @@ const MODULOS_NO_GATE = [
   'src/agents/coverPackaging.js',
   'src/agents/idiomaPorVenda.js',
   'src/agents/learningAgent.js',
+  'src/agents/hotmartConteudo.js',
+  'src/agents/pdfIdioma.js',
   'src/agents/publishBacklog.js',
   'src/agents/regenCovers.js',
   'src/agents/scoreCoverHooks.js',

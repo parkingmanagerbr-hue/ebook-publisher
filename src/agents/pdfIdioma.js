@@ -37,7 +37,8 @@ const TEXTOS = {
 /** Textos fixos no idioma; idioma desconhecido cai em ingles (nao em portugues). */
 function textos(idioma) {
   const b = base(idioma);
-  return TEXTOS[b] || (b === 'pt' ? TEXTOS.pt : TEXTOS.en);
+  // hasOwnProperty: TEXTOS[b] lia o prototipo ("constructor" devolvia Object).
+  return Object.prototype.hasOwnProperty.call(TEXTOS, b) ? TEXTOS[b] : TEXTOS.en;
 }
 
 /** "setembro de 2026" / "September 2026" / "2026年9月" no idioma do livro. */

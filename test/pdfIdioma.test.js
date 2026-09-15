@@ -12,6 +12,14 @@ test('livro estrangeiro nao recebe texto fixo em portugues (o defeito real)', ()
   assert.strictEqual(textos(undefined).sumario, 'Sumário');
 });
 
+test('codigo de idioma que coincide com propriedade de objeto cai em ingles, nao em undefined', () => {
+  // TEXTOS[b] lia o prototipo: "constructor" devolvia a funcao Object e o PDF
+  // imprimiria "undefined" no sumario.
+  for (const l of ['constructor', '__proto__', 'toString', 'hasOwnProperty-XX']) {
+    assert.strictEqual(textos(l).sumario, 'Contents', l);
+  }
+});
+
 test('todos os idiomas tem todas as chaves (controle contra traducao pela metade)', () => {
   const chaves = Object.keys(TEXTOS.pt).sort();
   for (const [l, t] of Object.entries(TEXTOS)) assert.deepStrictEqual(Object.keys(t).sort(), chaves, l);

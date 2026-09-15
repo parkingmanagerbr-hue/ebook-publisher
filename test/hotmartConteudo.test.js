@@ -34,6 +34,38 @@ test('consulta sem token (arquivo ausente) devolve null em vez de acusar falta d
   delete require.cache[require.resolve('../src/agents/hotmartConteudo')];
 });
 
+test('arquivo de token vazio nao vira "Bearer " na requisicao: devolve null', async t => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hmtoken-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const arq = path.join(dir, 'token.txt');
+  fs.writeFileSync(arq, '  \n');
+  const { comAmbiente, recarregar } = require('./apoio');
+  comAmbiente(t, { HOTMART_TOKEN_FILE: arq });
+  const mod = recarregar('src/agents/hotmartConteudo.js');
+  let chamou = false;
+  assert.strictEqual(await mod.consultarConteudo(1, { fetchImpl: async () => { chamou = true; return { ok: true, json: async () => ({}) }; } }), null);
+  assert.strictEqual(chamou, false);
+  fs.writeFileSync(arq, 'tok-do-arquivo\n');
+  let auth;
+  await mod.consultarConteudo(1, { fetchImpl: async (u, o) => { auth = o.headers.authorization; return { ok: true, json: async () => ({ totalSize: 1 }) }; } });
+  assert.strictEqual(auth, 'Bearer tok-do-arquivo');
+});
+
+test('aguardar sem dormir injetado espera o intervalo padrao de 10 s entre consultas', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let n = 0;
+  const p = aguardarConteudo(1, { token: 't', tentativas: 2, fetchImpl: async () => { n++; return { ok: true, json: async () => ({ contents: null }) }; } });
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.strictEqual(n, 1);
+  t.mock.timers.tick(9999);
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.strictEqual(n, 1, 'ainda dentro dos 10 s');
+  t.mock.timers.tick(1);
+  assert.strictEqual(await p, false);
+  assert.strictEqual(n, 2);
+});
+
 test('aguardar: para assim que o arquivo aparece; esgota e devolve o ultimo estado', async () => {
   const seq = [{ contents: null }, { contents: null }, { contents: [{ size: 1 }] }];
   let n = 0, esperas = 0;
