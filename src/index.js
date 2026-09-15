@@ -50,7 +50,20 @@ async function runPipeline(topicOverride = null, language = null) {
   logger.info('='.repeat(60));
 
   const ebookId = uuidv4();
-  const lang = language || process.env.EBOOK_LANGUAGE || 'pt-BR';
+  // Sem idioma explicito (cron interno, POST da API), escolher pelo que vende.
+  // Antes caia sempre em pt-BR: de 61 livros gerados em 14/09 a noite, 47 sairam
+  // em portugues por este caminho, ignorando o aprendizado do autonomousAgent.
+  let lang = language || process.env.EBOOK_LANGUAGE;
+  if (!lang) {
+    try {
+      const { estatisticasPorIdioma, escolherIdioma } = require('./agents/idiomaPorVenda');
+      const idiomas = (process.env.EBOOK_LANGUAGES || 'pt-BR').split(',').map(l => l.trim()).filter(Boolean);
+      lang = escolherIdioma(idiomas, estatisticasPorIdioma(require('./core/database').getDb()));
+    } catch (e) {
+      logger.warn('idioma por venda indisponivel: ' + e.message);
+    }
+  }
+  lang = lang || 'pt-BR';
 
   try {
     // ===== 1. SELECIONAR TÓPICO =====
