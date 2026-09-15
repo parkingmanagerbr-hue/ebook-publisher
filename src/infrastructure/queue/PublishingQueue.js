@@ -16,8 +16,11 @@ class InMemoryQueue extends EventEmitter {
   }
 
   async add(jobId, data) {
-    // Deduplicate by ebookId
-    if (this.items.find(i => i.data.ebookId === data.ebookId)) return null;
+    // Deduplica so contra job em andamento (esperando/ativo). Falha esgotada ou
+    // concluido antigo nao pode barrar o e-book para sempre; e o registro antigo
+    // sai, porque o id (loja-ebook) se repete e markActive acharia o velho.
+    if (this.items.find(i => i.data.ebookId === data.ebookId && ['waiting', 'active'].includes(i.status))) return null;
+    this.items = this.items.filter(i => i.data.ebookId !== data.ebookId);
     const job = { id: jobId, data, status: 'waiting', progress: 0, addedAt: Date.now() };
     this.items.push(job);
     this.emit('added', job);

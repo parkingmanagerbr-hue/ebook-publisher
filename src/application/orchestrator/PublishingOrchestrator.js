@@ -42,6 +42,9 @@ class PublishingOrchestrator extends EventEmitter {
     };
     this._processing   = { hotmart: false, cakto: false, amazon: false };
     this._lastPublished = { hotmart: null, cakto: null, amazon: null };
+    // Pausa entre e-books da mesma loja. Propriedade (e nao constante) para o
+    // teste nao dormir 2 s por item; em producao nada a altera.
+    this.pausaEntreEbooksMs = 2000;
   }
 
   async publishBatch(stores, limit = 50) {
@@ -89,7 +92,9 @@ class PublishingOrchestrator extends EventEmitter {
 
   cancelQueue(store) {
     this.queue.clearQueue(store);
-    this._processing[store] = false;
+    // NAO zera _processing aqui: se uma publicacao ainda esta em curso, o laco
+    // termina o item atual, acha a fila vazia e se desliga sozinho. Zerar antes
+    // deixava o proximo lote abrir um segundo laco (dois navegadores na loja).
     this._emit("log", { level: "warn", store, message: `Queue cancelled for ${store}` });
   }
 
@@ -128,7 +133,7 @@ class PublishingOrchestrator extends EventEmitter {
           this._emit("log", { level: "error", store, message: `Error: ${err.message}` });
         }
         this._emitQueueUpdate();
-        await sleep(2000);
+        await sleep(this.pausaEntreEbooksMs);
       }
       this._processing[store] = false;
       log.info(`[${store}] Processing complete`);
