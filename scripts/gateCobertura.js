@@ -28,6 +28,7 @@ const RAIZ = path.join(__dirname, '..');
 const MODULOS_NO_GATE = [
   'src/domain/',
   'src/agents/idiomaPorVenda.js',
+  'src/agents/sincronizarVendas.js',
   'src/application/',
   'src/infrastructure/db/',
   'src/infrastructure/queue/',
