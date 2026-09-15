@@ -53,3 +53,15 @@ test('camposAlterados aponta so o que mudou', () => {
   assert.deepStrictEqual(camposAlterados({ a: 1, b: [1], c: 'x' }, { a: 1, b: [2], d: true }), ['b', 'c', 'd']);
   assert.deepStrictEqual(camposAlterados(null, {}), []);
 });
+
+test('camposAlterados com uma das leituras ausente: tudo que existe do outro lado mudou', () => {
+  // A releitura da Cakto pode falhar e voltar nula; o diff nao pode lancar.
+  assert.deepStrictEqual(camposAlterados({ status: 'active', image: null }, null), ['status', 'image']);
+  assert.deepStrictEqual(camposAlterados(undefined, { status: 'active' }), ['status']);
+  assert.deepStrictEqual(camposAlterados(null, undefined), []);
+});
+
+test('sem link esperado e sem link no produto: nada a gravar nem a denunciar', () => {
+  assert.strictEqual(planejar({ ...COM_NOME }, ''), 'ok');
+  assert.strictEqual(planejar({ ...COM_NOME, emailAccessLink: 'https://drive.google.com/x' }, ''), 'link-alheio');
+});
