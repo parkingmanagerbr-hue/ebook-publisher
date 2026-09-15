@@ -230,7 +230,9 @@ async function comLimite(itens, n, fn) {
     while (i < itens.length) {
       const idx = i++;
       try { resultados[idx] = await fn(itens[idx], idx); }
-      catch (e) { resultados[idx] = { ok: false, motivo: e.message.slice(0, 100) }; }
+      // `throw 'texto'` ou `throw null` nao tem .message; ler e.message.slice
+      // aqui lancava de novo e o Promise.all derrubava o lote inteiro.
+      catch (e) { resultados[idx] = { ok: false, motivo: String((e && e.message) || e).slice(0, 100) }; }
     }
   });
   await Promise.all(trabalhadores);
@@ -256,7 +258,9 @@ async function publicarBacklog(opts) {
   const res = await comLimite(pendentes, paralelo, async (eb) => {
     // Sessao ja provada morta por um item anterior: os proximos so gastariam
     // 90s cada para falhar igual.
-    if (abortado) return { ok: false, motivo: 'abortado: ' + abortado };
+    // Devolve a reserva: sem isso o item ficava 30 min invisivel e o lote
+    // rodado logo apos o novo login dizia "nada pendente".
+    if (abortado) { liberar(getDb(), eb.id, plataforma); return { ok: false, motivo: 'abortado: ' + abortado }; }
 
     let r;
     try {
@@ -270,7 +274,7 @@ async function publicarBacklog(opts) {
     }
 
     if (!r.ok) {
-      try { liberar(getDb(), eb.id, plataforma); } catch {}
+      liberar(getDb(), eb.id, plataforma);   // liberar ja engole o proprio erro
       registrarFalha(getDb(), eb.id, plataforma, r.motivo);
     }
     if (!r.ok && sessaoMorta(r.motivo)) abortado = r.motivo.slice(0, 60);
