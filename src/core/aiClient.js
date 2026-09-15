@@ -170,16 +170,63 @@ function loadState() {
       for (const [key, val] of Object.entries(state.degraded)) {
         if (now > val.until) delete state.degraded[key];
       }
+      // Instante da leitura: o saveState usa para saber quem mexeu no que.
+      Object.defineProperty(state, '_lidoEm', { value: now, enumerable: false, configurable: true });
       return state;
     }
   } catch (e) { logger.warn('Estado corrompido, reiniciando: ' + e.message); }
   return defaults;
 }
 
+/**
+ * Mescla as marcas de degradacao da memoria com as do disco.
+ *
+ * Varios processos usam o mesmo arquivo (o servidor, o passe de capas, as
+ * sondas). Cada um lia o estado, esperava a chamada de IA (ate 2 min) e gravava
+ * o objeto INTEIRO de volta — o ultimo a gravar ressuscitava marcas que outro
+ * ja tinha liberado. Em 14/09/2026 as 6 chaves do HuggingFace, liberadas duas
+ * vezes, voltaram as duas com a marca original, e o pipeline de livros ficou
+ * sem provedor com as chaves respondendo 200.
+ *
+ * Regra, usando o instante em que ESTE processo leu (lidoEm):
+ * - marca so na memoria, criada antes da leitura: alguem liberou -> some;
+ * - marca so no disco, criada antes da leitura: este processo liberou -> some;
+ * - marca so no disco, criada depois: e de outro processo -> fica;
+ * - nos dois: vale a mais recente.
+ */
+function mesclarDegradados(memoria, disco, lidoEm) {
+  const t = lidoEm || 0;
+  const out = {};
+  const desde = v => (v && (v.since_ms || Date.parse(v.since) || 0)) || 0;
+  for (const [k, v] of Object.entries(memoria || {})) {
+    const d = disco && disco[k];
+    if (!d) { if (desde(v) > t) out[k] = v; continue; }
+    out[k] = desde(v) >= desde(d) ? v : d;
+  }
+  for (const [k, d] of Object.entries(disco || {})) {
+    if (k in (memoria || {})) continue;
+    if (desde(d) > t) out[k] = d;
+  }
+  return out;
+}
+
 function saveState(state) {
   try {
     fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    let disco = {};
+    try { disco = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { /* primeiro save */ }
+    const saida = {
+      ...disco,
+      ...state,
+      degraded: state._lidoEm ? mesclarDegradados(state.degraded, disco.degraded, state._lidoEm) : state.degraded,
+      keyIndex: { ...(disco.keyIndex || {}), ...(state.keyIndex || {}) },
+    };
+    // Temporario + rename: gravar direto truncava o arquivo antes de escrever.
+    const tmp = STATE_FILE + '.' + process.pid + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(saida, null, 2));
+    fs.renameSync(tmp, STATE_FILE);
+    state.degraded = saida.degraded;
+    Object.defineProperty(state, '_lidoEm', { value: Date.now(), enumerable: false, configurable: true });
   } catch (e) { logger.warn('Falha ao salvar estado: ' + e.message); }
 }
 
@@ -971,6 +1018,6 @@ function resetDegraded(provider = null) {
   saveState(state);
 }
 
-module.exports = { getErrorTTL, callHuggingFace, MODELOS_HF, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
+module.exports = { getErrorTTL, callHuggingFace, MODELOS_HF, mesclarDegradados, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
   // exportados para teste: e onde moraram os defeitos que pararam a geracao
   acaoParaErroGroq, isDegraded, getNextKey };
