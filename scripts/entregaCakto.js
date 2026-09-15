@@ -65,18 +65,21 @@ async function api(metodo, rota, corpo, H) {
 const PRODUTOR = process.env.CAKTO_PRODUCER_NAME || 'Veloxis Editorial';
 
 /** O que o produto deve ter depois da correcao. Pura. */
-function alvo(produto, linkEsperado) {
+function alvo(produto, linkEsperado, pausadoPorNos = false) {
   const atual = produto.emailAccessLink || '';
   const out = {};
   // Link de terceiro nunca e sobrescrito: alguem configurou a entrega a mao.
   if (atual !== linkEsperado && (!atual || atual.includes('/entrega/'))) out.emailAccessLink = linkEsperado;
   if (!produto.producerName) out.producerName = PRODUTOR;
+  // Pausado por este job por falta de PDF e o PDF voltou: volta a vender.
+  // Pausado por outra pessoa (sem registro nosso) continua como esta.
+  if (pausadoPorNos && produto.status === 'waiting_config') out.status = 'active';
   return out;
 }
 
 /** Decide o que fazer com um produto. Pura. */
-function planejar(produto, linkEsperado) {
-  if (Object.keys(alvo(produto, linkEsperado)).length) return 'gravar';
+function planejar(produto, linkEsperado, pausadoPorNos = false) {
+  if (Object.keys(alvo(produto, linkEsperado, pausadoPorNos)).length) return 'gravar';
   const atual = produto.emailAccessLink || '';
   return atual && atual !== linkEsperado ? 'link-alheio' : 'ok';
 }
@@ -96,6 +99,10 @@ async function main() {
   const limite = parseInt(arg('limite', '1'), 10);
   const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v3','ok-v3')").all().map(r => r.ebook_id));
   const fila = comPdf.filter(e => !feitos.has(e.id)).slice(0, limite);
+  const pausados = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado = 'pausado-sem-pdf'").all().map(r => r.ebook_id));
+  const vistosSemPdf = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('pausado-sem-pdf','sem-pdf-nao-ativo')").all().map(r => r.ebook_id));
+  const semPdf = livros.filter(e => !(e.pdf_path && fs.existsSync(e.pdf_path)) && !vistosSemPdf.has(e.id));
+  const filaPausa = semPdf.slice(0, Math.max(0, limite - fila.length));
   const H = await cabecalhos();
   const marca = db.prepare('INSERT OR REPLACE INTO cakto_entrega (ebook_id, produto, resultado, quando) VALUES (?,?,?,?)');
   const cont = {};
@@ -107,8 +114,8 @@ async function main() {
       const produtoId = oferta.product;
       const produto = await api('GET', 'product/' + produtoId + '/', null, H); await dormir(PAUSA_MS);
       const link = urlEntrega(e.id);
-      const mudar = alvo(produto, link);
-      const decisao = planejar(produto, link);
+      const mudar = alvo(produto, link, pausados.has(e.id));
+      const decisao = planejar(produto, link, pausados.has(e.id));
       if (decisao === 'gravar') {
         // A rota nao aceita PATCH (405): PUT com o produto inteiro que acabou de
         // ser lido, trocando so o link. A conferencia abaixo pega o caso de a
@@ -146,7 +153,34 @@ async function main() {
       await dormir(PAUSA_MS * 3);
     }
   }
-  console.log(JSON.stringify({ fila: fila.length, ...cont }));
+  // Livro sem PDF: tirar de venda. Checkout ativo sem arquivo cobra e nao entrega.
+  for (const e of filaPausa) {
+    try {
+      const oferta = await api('GET', 'offers/' + e.cakto_product_id + '/', null, H); await dormir(PAUSA_MS);
+      const produto = await api('GET', 'product/' + oferta.product + '/', null, H); await dormir(PAUSA_MS);
+      const acao = acaoSemPdf(produto);
+      if (acao === 'pausar') {
+        const { image: _i, ...corpo } = produto;
+        await api('PUT', 'product/' + oferta.product + '/', { ...corpo, status: 'waiting_config' }, H); await dormir(PAUSA_MS);
+        const conferido = await api('GET', 'product/' + oferta.product + '/', null, H); await dormir(PAUSA_MS);
+        const res = conferido.status === 'waiting_config' ? 'pausado-sem-pdf' : 'pausa-nao-persistiu';
+        marca.run(e.id, oferta.product, res, Date.now()); cont[res] = (cont[res] || 0) + 1;
+      } else {
+        marca.run(e.id, oferta.product, 'sem-pdf-nao-ativo', Date.now()); cont['sem-pdf-nao-ativo'] = (cont['sem-pdf-nao-ativo'] || 0) + 1;
+      }
+    } catch (err) {
+      cont.erro = (cont.erro || 0) + 1;
+      console.log('ERRO pausa', e.cakto_product_id, err.message.slice(0, 160));
+      if (err.cloudflare) break;
+      await dormir(PAUSA_MS * 3);
+    }
+  }
+  console.log(JSON.stringify({ fila: fila.length, filaPausa: filaPausa.length, ...cont }));
+}
+
+/** Livro sem PDF: so pausa o que esta ATIVO (vendendo). Pura. */
+function acaoSemPdf(produto) {
+  return produto.status === 'active' ? 'pausar' : 'nada';
 }
 
 /** Produto sem imagem e com capa em disco. Pura. */
@@ -180,6 +214,6 @@ function camposAlterados(antes, depois) {
   return [...chaves].filter(k => JSON.stringify((antes || {})[k]) !== JSON.stringify((depois || {})[k]));
 }
 
-module.exports = { planejar, alvo, camposAlterados, precisaImagem, PRODUTOR };
+module.exports = { planejar, alvo, acaoSemPdf, camposAlterados, precisaImagem, PRODUTOR };
 
 if (require.main === module) main().catch(e => { console.error('ERRO', e.message); process.exit(1); });

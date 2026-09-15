@@ -36,6 +36,19 @@ test('imagem so e enviada para produto sem imagem e com capa em disco', () => {
   assert.strictEqual(precisaImagem({ image: 'https://cdn/x.jpg' }, true), false);
 });
 
+test('sem PDF: pausa so produto ativo; nao mexe no que ja esta parado (controle)', () => {
+  const { acaoSemPdf } = require('../scripts/entregaCakto');
+  assert.strictEqual(acaoSemPdf({ status: 'active' }), 'pausar');
+  for (const st of ['waiting_config', 'blocked', 'deleted']) assert.strictEqual(acaoSemPdf({ status: st }), 'nada');
+});
+
+test('PDF voltou: reativa so o que ESTE job pausou', () => {
+  const pausado = { ...COM_NOME, emailAccessLink: LINK, status: 'waiting_config' };
+  assert.deepStrictEqual(alvo(pausado, LINK, true), { status: 'active' });
+  assert.deepStrictEqual(alvo(pausado, LINK, false), {}, 'pausado por outra pessoa fica parado');
+  assert.deepStrictEqual(alvo({ ...pausado, status: 'blocked' }, LINK, true), {}, 'bloqueio da Cakto nao e desfeito');
+});
+
 test('camposAlterados aponta so o que mudou', () => {
   assert.deepStrictEqual(camposAlterados({ a: 1, b: [1], c: 'x' }, { a: 1, b: [2], d: true }), ['b', 'c', 'd']);
   assert.deepStrictEqual(camposAlterados(null, {}), []);
