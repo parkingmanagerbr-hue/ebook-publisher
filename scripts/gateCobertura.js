@@ -28,6 +28,7 @@ const RAIZ = path.join(__dirname, '..');
 const MODULOS_NO_GATE = [
   'src/domain/',
   'src/agents/backfillCovers.js',
+  'src/agents/coverPackaging.js',
   'src/agents/idiomaPorVenda.js',
   'src/agents/publishBacklog.js',
   'src/agents/regenCovers.js',
