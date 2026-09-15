@@ -37,8 +37,9 @@ const CATEGORY_WEIGHTS = {
   _default: 60,
 };
 
+// Os dois chamadores passam template string, nunca nulo.
 function norm(s) {
-  return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
 class PriorityScorer {
@@ -75,7 +76,9 @@ class PriorityScorer {
     // ── 4. Recency (up to 10 pts) ─────────────────────────────────────────────
     const createdAt = new Date(ebook.createdAt || Date.now());
     const ageDays   = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
-    const recency   = Math.max(0, 10 - ageDays);
+    // Data invalida dava NaN e contaminava o score (sort indefinido no lote);
+    // data no futuro passava de 10 pontos. Formula documentada: max 10.
+    const recency   = Number.isFinite(ageDays) ? Math.min(10, Math.max(0, 10 - ageDays)) : 0;
     total += recency;
 
     // ── 5. Platform bonus (up to 5 pts) ───────────────────────────────────────
