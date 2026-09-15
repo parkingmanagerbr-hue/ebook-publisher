@@ -11,6 +11,7 @@ const { generateImage } = require('./imageGenAgent');
 const { detectCategory, buildIllustrationPrompt, generateChapterIllustration: coverAgentIllustration } = require('./coverAgent');
 const { ensureQualityIllustration, validateEbook, validatePDF } = require('./qualityAgent');
 const logger = createLogger('pdfAgent');
+const { textos, mesAno, fontes } = require('./pdfIdioma');
 
 // Gerar ilustração para um capítulo — usa coverAgent (Gemini Image primeiro, depois imageGenAgent)
 async function generateChapterIllustration(chapterTitle, topic, category) {
@@ -48,7 +49,7 @@ function addHeader(doc, title, pageNum) {
   const contentW = W - 120;
   doc.fontSize(9)
      .fillColor(COLORS.muted)
-     .font('Helvetica')
+     .font(doc._genia.F.regular)
      .text(title, 60, 30, { align: 'left', width: contentW - 40 })
      .text(`${pageNum}`, 60, 30, { align: 'right', width: contentW });
 
@@ -64,8 +65,8 @@ function addFooter(doc) {
   const y = afterContent < pageBottom - 40 ? afterContent : pageBottom;
 
   doc.moveTo(60, y).lineTo(W - 60, y).strokeColor('#DDDDDD').lineWidth(0.5).stroke();
-  doc.fontSize(8).fillColor(COLORS.muted).font('Helvetica')
-     .text('© Veloxis Editorial — Todos os direitos reservados', 60, y + 8, { align: 'center', width: contentW });
+  doc.fontSize(8).fillColor(COLORS.muted).font(doc._genia.F.regular)
+     .text(doc._genia.T.rodape, 60, y + 8, { align: 'center', width: contentW });
 }
 
 function formatChapterContent(doc, content, title) {
@@ -85,7 +86,7 @@ function formatChapterContent(doc, content, title) {
       const subtitle = trimmed.replace(/^#+\s*/, '').replace(/\*\*/g, '');
       doc.moveDown(0.8)
          .fontSize(14)
-         .font('Helvetica-Bold')
+         .font(doc._genia.F.bold)
          .fillColor(COLORS.primary)
          .text(subtitle, { continued: false });
       doc.moveDown(0.3);
@@ -93,19 +94,19 @@ function formatChapterContent(doc, content, title) {
     }
 
     // Detectar callouts (Dica Prática, Atenção, Nota)
-    if (trimmed.match(/^(Dica Prática|Atenção|💡|🔑|⚠️|Nota:|Importante:)/i)) {
+    if (trimmed.match(/^(Dica Prática|Atenção|💡|🔑|⚠️|Nota:|Importante:)/i) || doc._genia.ehDica(trimmed)) {
       inCallout = true;
       doc.moveDown(0.5);
       const cW = doc.page.width - 120;
       doc.rect(doc.x - 5, doc.y, cW, 18).fill('#FFF8E7');
-      doc.fillColor('#B8860B').fontSize(11).font('Helvetica-Bold')
+      doc.fillColor('#B8860B').fontSize(11).font(doc._genia.F.bold)
          .text(trimmed.replace(/[💡🔑⚠️]/g, '').trim());
       doc.moveDown(0.2);
       continue;
     }
 
     if (inCallout) {
-      doc.fillColor('#5C4A00').fontSize(10.5).font('Helvetica-Oblique').text(trimmed);
+      doc.fillColor('#5C4A00').fontSize(10.5).font(doc._genia.F.italic).text(trimmed);
       doc.moveDown(0.2);
       continue;
     }
@@ -113,14 +114,14 @@ function formatChapterContent(doc, content, title) {
     // Detectar listas com bullet
     if (trimmed.match(/^[-•*]\s/) || trimmed.match(/^\d+\.\s/)) {
       const bulletText = trimmed.replace(/^[-•*]\s/, '• ').replace(/\*\*/g, '');
-      doc.fontSize(11).font('Helvetica').fillColor(COLORS.text)
+      doc.fontSize(11).font(doc._genia.F.regular).fillColor(COLORS.text)
          .text(bulletText, { indent: 20, continued: false });
       continue;
     }
 
     // Texto normal
     const cleanText = trimmed.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
-    doc.fontSize(11).font('Helvetica').fillColor(COLORS.text)
+    doc.fontSize(11).font(doc._genia.F.regular).fillColor(COLORS.text)
        .text(cleanText, { align: 'justify', lineGap: 3 });
   }
 }
@@ -169,6 +170,17 @@ async function generatePDF(ebook, coverPath) {
     }
   });
 
+  // Fonte e textos fixos no idioma do livro (pdfIdioma.js): com Helvetica o
+  // japones saia ilegivel, e livro alemao trazia "Sumario" em portugues.
+  // Ficam no proprio doc porque dois pipelines podem gerar PDF ao mesmo tempo.
+  const idioma = ebook.language || 'pt-BR';
+  const F = fontes(idioma);
+  for (const [nome, arquivo, familia] of F.registrar) doc.registerFont(nome, arquivo, familia);
+  const T = textos(idioma);
+  const marcadores = T.dica.split('|').map(m => m.toLowerCase());
+  doc._genia = { F, T, ehDica: linha => marcadores.some(m => m && linha.toLowerCase().startsWith(m)) };
+  doc.font(F.regular);
+
   const stream = fs.createWriteStream(outputPath);
   doc.pipe(stream);
 
@@ -193,7 +205,7 @@ async function generatePDF(ebook, coverPath) {
   } else {
     // Capa simples sem imagem
     doc.rect(0, 0, doc.page.width, doc.page.height).fill(COLORS.primary);
-    doc.fontSize(28).font('Helvetica-Bold').fillColor(COLORS.white)
+    doc.fontSize(28).font(doc._genia.F.bold).fillColor(COLORS.white)
        .text(ebook.title, 60, 150, { width: 355, align: 'center' });
     doc.fontSize(14).fillColor('#AAAAAA')
        .text(ebook.subtitle || '', 60, 250, { width: 355, align: 'center' });
@@ -205,11 +217,11 @@ async function generatePDF(ebook, coverPath) {
   _manualPage = true; doc.addPage(); _manualPage = false;
   pageNum++;
   doc.moveDown(8)
-     .fontSize(22).font('Helvetica-Bold').fillColor(COLORS.primary)
+     .fontSize(22).font(doc._genia.F.bold).fillColor(COLORS.primary)
      .text(ebook.title, { align: 'center' });
 
   if (ebook.subtitle) {
-    doc.moveDown(0.5).fontSize(13).font('Helvetica').fillColor(COLORS.muted)
+    doc.moveDown(0.5).fontSize(13).font(doc._genia.F.regular).fillColor(COLORS.muted)
        .text(ebook.subtitle, { align: 'center' });
   }
 
@@ -217,13 +229,13 @@ async function generatePDF(ebook, coverPath) {
      .text(process.env.AUTHOR_NAME || 'GENIA Editorial', { align: 'center' });
 
   doc.moveDown(1).fontSize(10).fillColor(COLORS.muted)
-     .text(`Publicado em ${new Date().toLocaleDateString('pt-BR', {month: 'long', year: 'numeric'})}`, { align: 'center' });
+     .text(T.publicado + ' ' + mesAno(idioma), { align: 'center' });
 
   // Linha decorativa
   doc.moveTo(100, doc.y + 30).lineTo(355, doc.y + 30).strokeColor(COLORS.accent).lineWidth(2).stroke();
 
   doc.moveDown(5).fontSize(10).fillColor(COLORS.muted)
-     .text('© Todos os direitos reservados. Proibida a reprodução parcial ou total sem autorização.', { align: 'center' });
+     .text(T.direitos, { align: 'center' });
 
   // ===========================
   // PÁGINA 3: SUMÁRIO
@@ -233,24 +245,24 @@ async function generatePDF(ebook, coverPath) {
   addHeader(doc, ebook.title, pageNum);
 
   doc.y = 70;
-  doc.fontSize(20).font('Helvetica-Bold').fillColor(COLORS.primary).text('Sumário');
+  doc.fontSize(20).font(doc._genia.F.bold).fillColor(COLORS.primary).text(T.sumario);
   doc.moveDown(1);
 
-  doc.fontSize(11).fillColor(COLORS.muted).text('Introdução', { continued: true });
+  doc.fontSize(11).fillColor(COLORS.muted).text(T.introducao, { continued: true });
   doc.fillColor(COLORS.accent).text(' .................................................. 4', { align: 'right' });
 
   let tocPage = 5;
   ebook.chapters.forEach((ch, i) => {
     doc.moveDown(0.4);
-    doc.fillColor(COLORS.text).font('Helvetica-Bold').fontSize(11)
+    doc.fillColor(COLORS.text).font(doc._genia.F.bold).fontSize(11)
        .text(`${i+1}. ${ch.title}`, { continued: true });
-    doc.fillColor(COLORS.muted).font('Helvetica')
+    doc.fillColor(COLORS.muted).font(doc._genia.F.regular)
        .text(` ${'.' .repeat(40)} ${tocPage}`, { align: 'right' });
     tocPage += 3;
   });
 
   doc.moveDown(0.4);
-  doc.fillColor(COLORS.muted).text('Conclusão', { continued: true });
+  doc.fillColor(COLORS.muted).text(T.conclusao, { continued: true });
   doc.text(` ${'.' .repeat(44)} ${tocPage}`, { align: 'right' });
 
   addFooter(doc);
@@ -263,7 +275,7 @@ async function generatePDF(ebook, coverPath) {
   addHeader(doc, ebook.title, pageNum);
 
   doc.y = 70;
-  doc.fontSize(20).font('Helvetica-Bold').fillColor(COLORS.primary).text('Introdução');
+  doc.fontSize(20).font(doc._genia.F.bold).fillColor(COLORS.primary).text(T.introducao);
   doc.moveDown(0.5);
   doc.moveTo(60, doc.y).lineTo(180, doc.y).strokeColor(COLORS.accent).lineWidth(3).stroke();
   doc.moveDown(0.8);
@@ -298,12 +310,12 @@ async function generatePDF(ebook, coverPath) {
     const chapterBoxY = doc.y;
     doc.rect(60, chapterBoxY, 50, 50).fill(COLORS.accent);
     // Número centralizado verticalmente na caixa
-    doc.fillColor(COLORS.white).fontSize(22).font('Helvetica-Bold')
+    doc.fillColor(COLORS.white).fontSize(22).font(doc._genia.F.bold)
        .text(`${i+1}`, 60, chapterBoxY + 14, { width: 50, align: 'center' });
 
     // Título ao lado da caixa
     const contentWidth = doc.page.width - 180; // 120 margem + 60 caixa
-    doc.fillColor(COLORS.primary).fontSize(16).font('Helvetica-Bold')
+    doc.fillColor(COLORS.primary).fontSize(16).font(doc._genia.F.bold)
        .text(chapter.title, 120, chapterBoxY + 12, { width: contentWidth });
 
     doc.y = chapterBoxY + 60;
@@ -322,7 +334,7 @@ async function generatePDF(ebook, coverPath) {
   addHeader(doc, ebook.title, pageNum);
 
   doc.y = 70;
-  doc.fontSize(20).font('Helvetica-Bold').fillColor(COLORS.primary).text('Conclusão');
+  doc.fontSize(20).font(doc._genia.F.bold).fillColor(COLORS.primary).text(T.conclusao);
   doc.moveDown(0.5);
   doc.moveTo(60, doc.y).lineTo(180, doc.y).strokeColor(COLORS.accent).lineWidth(3).stroke();
   doc.moveDown(0.8);
@@ -334,12 +346,12 @@ async function generatePDF(ebook, coverPath) {
   const ctaX = 60, ctaW = doc.page.width - 120, ctaInner = ctaW - 40;
   const ctaY = doc.y;
   doc.rect(ctaX, ctaY, ctaW, 130).fill('#FFF0F3');
-  doc.fillColor(COLORS.accent).fontSize(14).font('Helvetica-Bold')
-     .text('Gostou deste e-book?', ctaX + 20, ctaY + 18, { width: ctaInner });
-  doc.fillColor(COLORS.text).fontSize(11).font('Helvetica')
-     .text('Compartilhe com amigos que precisam desta informação. Sua indicação faz diferença!', ctaX + 20, ctaY + 48, { width: ctaInner });
+  doc.fillColor(COLORS.accent).fontSize(14).font(doc._genia.F.bold)
+     .text(T.ctaTitulo, ctaX + 20, ctaY + 18, { width: ctaInner });
+  doc.fillColor(COLORS.text).fontSize(11).font(doc._genia.F.regular)
+     .text(T.ctaTexto, ctaX + 20, ctaY + 48, { width: ctaInner });
   doc.fillColor(COLORS.muted).fontSize(10)
-     .text('Encontre mais e-books em: veloxisit.com.br', ctaX + 20, ctaY + 92, { width: ctaInner });
+     .text(T.ctaSite, ctaX + 20, ctaY + 92, { width: ctaInner });
   doc.y = ctaY + 140;
 
   addFooter(doc);

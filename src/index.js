@@ -129,7 +129,8 @@ async function runPipeline(topicOverride = null, language = null) {
 
       // ===== 4. GERAR PDF =====
       logger.info('\n📄 ETAPA 3: Gerando PDF...');
-      const ebookDataForPdf = { ...ebook, id: ebookId, coverPath, price: parseFloat(process.env.EBOOK_PRICE || '4.99') };
+      // language explicito: o PDF escolhe fonte e textos fixos por ele.
+      const ebookDataForPdf = { ...ebook, language: ebook.language || lang, id: ebookId, coverPath, price: parseFloat(process.env.EBOOK_PRICE || '4.99') };
       pdfPath = await generatePDF(ebookDataForPdf, coverPath);
       logger.info(`✅ PDF gerado: ${pdfPath}`);
     } else {
