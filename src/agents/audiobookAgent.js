@@ -326,6 +326,10 @@ async function generateAudiobook(ebook, ebookId) {
 
 // ─── Verificar disponibilidade ────────────────────────────────────────────────
 function isAvailable() {
+  // AUDIOBOOK_ATIVO=false desliga (16/09/2026): o e-book da Hotmart so aceita
+  // PDF/ePub/planilha, o anexo na Cakto nunca pegou e o mp3 era apagado em ~3
+  // dias. Cada livro esperava 4-8 min por um audio que ninguem recebia.
+  if (String(process.env.AUDIOBOOK_ATIVO || '').toLowerCase() === 'false') return false;
   // Disponível se tem ElevenLabs OU Edge TTS
   return ELEVENLABS_KEYS.length > 0 || edgeTts != null;
 }
