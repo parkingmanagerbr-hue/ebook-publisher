@@ -33,6 +33,7 @@ try {
 // Categoria, digitos do preco e id do produto na URL: regras puras, testadas
 // em test/hotmartRegras.test.js.
 const { getCategoryPT, digitosDoPreco, idProdutoDaUrl } = require('./hotmartRegras');
+const { descricaoHotmart } = require('./hotmartDescricao');
 
 function getCASTicket(tgt, serviceUrl) {
   return new Promise((resolve, reject) => {
@@ -360,7 +361,7 @@ async function createProduct(page, session, ebook) {
   // Fill description
   const descFilled = await fillReactTextarea(page,
     'textarea#description, textarea[name="description"], textarea[placeholder*="descri"], textarea',
-    (description || title).slice(0, 500)
+    descricaoHotmart(description, title, topic, language)
   );
   log.info('Desc filled: ' + descFilled);
   await sleep(400);

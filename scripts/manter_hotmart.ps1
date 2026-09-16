@@ -33,7 +33,7 @@ try {
 
   # 4) livros novos: o servidor nao publica na Hotmart (sessao presa a esta
   #    maquina), entao os livros gerados la ficavam so na Cakto.
-  $saida = & node scripts\publicar_local.js --limite=2 2>&1 | Out-String
+  $saida = & node scripts\publicar_local.js --limite=6 2>&1 | Out-String
   $ultima = ($saida.Trim() -split "`n")[-1]
   Registrar ('publicar: ' + $ultima)
 

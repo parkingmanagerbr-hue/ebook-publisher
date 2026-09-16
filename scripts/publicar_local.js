@@ -23,6 +23,7 @@ const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
 const CDP = process.env.HOTMART_CDP || 'http://127.0.0.1:9223';
 const TMP = path.join(os.tmpdir(), 'publicar-hotmart');
+const MAX_TENTATIVAS = 3;
 
 function arg(nome, padrao) {
   const p = process.argv.find(a => a.startsWith('--' + nome + '='));
@@ -47,8 +48,9 @@ function buscarPendentes(limite) {
   const saida = rodarNoContainer(`
     const D = require('better-sqlite3');
     const fs = require('fs');
-    const db = new D('/app/data/metrics.db', { readonly: true });
+    const db = new D('/app/data/metrics.db');
     db.pragma('busy_timeout = 5000');
+    db.prepare('CREATE TABLE IF NOT EXISTS hotmart_publicar_falha (ebook_id TEXT PRIMARY KEY, tentativas INTEGER, erro TEXT, quando INTEGER)').run();
     const rows = db.prepare(
       "SELECT e.id, e.title, e.subtitle, e.topic, e.description, e.pdf_path, e.cover_path, e.price, e.language " +
       "FROM ebooks e WHERE (e.hotmart_url IS NULL OR e.hotmart_url = '') " +
@@ -59,6 +61,9 @@ function buscarPendentes(limite) {
       "AND NOT EXISTS (SELECT 1 FROM ebooks d WHERE d.title = e.title " +
       "  AND d.hotmart_product_id IS NOT NULL AND d.hotmart_product_id <> '') " +
       "AND e.pdf_path IS NOT NULL AND e.cover_path IS NOT NULL AND e.cover_path <> '' " +
+      // Livro que falha sempre (ex.: japones com descricao curta em 16/09/2026)
+      // ocupava metade de cada lote. Depois de ${MAX_TENTATIVAS} falhas sai da fila.
+      "AND e.id NOT IN (SELECT ebook_id FROM hotmart_publicar_falha WHERE tentativas >= ${MAX_TENTATIVAS}) " +
       "ORDER BY e.rowid DESC LIMIT ?"
     ).all(${limite} * 10);
     // PORTAO: so publica com CAPA VIRAL em disco. Produto entra no marketplace
@@ -78,6 +83,19 @@ function baixar(remoto, destino) {
   ssh(`docker cp ${CONTAINER}:${remoto} /tmp/arquivo_atual`);
   execFileSync('scp', [`${VPS}:/tmp/arquivo_atual`, destino], { timeout: 180000 });
   return fs.existsSync(destino) && fs.statSync(destino).size > 1000;
+}
+
+function gravarFalha(ebookId, erro) {
+  const js = `
+    const D = require('better-sqlite3');
+    const db = new D('/app/data/metrics.db');
+    db.pragma('busy_timeout = 8000');
+    db.prepare('CREATE TABLE IF NOT EXISTS hotmart_publicar_falha (ebook_id TEXT PRIMARY KEY, tentativas INTEGER, erro TEXT, quando INTEGER)').run();
+    db.prepare("INSERT INTO hotmart_publicar_falha VALUES (?, 1, ?, ?) ON CONFLICT(ebook_id) DO UPDATE SET tentativas = tentativas + 1, erro = excluded.erro, quando = excluded.quando")
+      .run(${JSON.stringify(ebookId)}, ${JSON.stringify(String(erro || '').slice(0, 200))}, Date.now());
+    console.log('falha registrada');
+  `;
+  rodarNoContainer(js);
 }
 
 function gravarResultado(ebookId, url, produtoId) {
@@ -142,6 +160,9 @@ async function main() {
 
       const sucesso = !!(r && r.url);
       if (sucesso) ok++;
+      else if (!(r && r.hotmartProductId)) {
+        try { gravarFalha(e.id, (r && r.error) || 'sem url'); } catch (err) { console.log('  falha nao registrada: ' + String(err.message).slice(0, 80)); }
+      }
       const min = ((Date.now() - t0) / 60000).toFixed(1);
       console.log(`  [${i + 1}/${itens.length}] ${sucesso ? 'OK  ' : 'FALHA'} ${String(e.title).slice(0, 40)}` +
         (sucesso ? ' -> ' + r.url : ' :: ' + ((r && r.error) || 'sem url')) + `  (${min} min)`);
