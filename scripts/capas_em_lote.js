@@ -51,8 +51,16 @@ const LOCALE_HOTMART = {
   'it-IT': 'IT', 'nl-NL': 'NL', 'pl-PL': 'PL', 'ja-JP': 'JA', 'zh-CN': 'ZH',
   'ko-KR': 'KO', 'ru-RU': 'RU',
 };
+// Os livros novos gravam o idioma curto ("fr", "ja"); so o codigo completo
+// estava na lista, e o curto devolvia null — o produto ficava com o PT_BR do
+// cadastro. Caso real em 16/09/2026: livro frances subiu como PT_BR.
+const LOCALE_POR_BASE = { pt: 'PT_BR', en: 'EN', es: 'ES', de: 'DE', fr: 'FR', it: 'IT', nl: 'NL', pl: 'PL', ja: 'JA', zh: 'ZH', ko: 'KO', ru: 'RU' };
 function paraLocaleHotmart(lang) {
-  return LOCALE_HOTMART[lang] || null;   // desconhecido: nao arrisca, mantem o atual
+  if (!lang) return null;
+  if (Object.prototype.hasOwnProperty.call(LOCALE_HOTMART, lang)) return LOCALE_HOTMART[lang];
+  const base = String(lang).toLowerCase().split(/[-_]/)[0];
+  // desconhecido: nao arrisca, mantem o atual
+  return Object.prototype.hasOwnProperty.call(LOCALE_POR_BASE, base) ? LOCALE_POR_BASE[base] : null;
 }
 
 function arg(nome, padrao) {
@@ -316,6 +324,8 @@ async function main() {
   console.log(`\nTOTAL: ${ok}/${itens.length} capas em ${((Date.now() - t0) / 60000).toFixed(1)} min` +
     (idiomasCorrigidos ? ` | ${idiomasCorrigidos} com idioma nao-portugues gravado` : ''));
 }
+
+module.exports = { paraLocaleHotmart };
 
 if (require.main === module) {
   main().then(() => process.exit(0)).catch(e => { console.error('ERRO:', e.message); process.exit(1); });

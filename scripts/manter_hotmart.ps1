@@ -30,5 +30,16 @@ try {
   $saida = & node scripts\enviarPdfsRegerados.js --limite=3 2>&1 | Out-String
   $ultima = ($saida.Trim() -split "`n")[-1]
   Registrar ('pdfs: ' + $ultima)
+
+  # 4) livros novos: o servidor nao publica na Hotmart (sessao presa a esta
+  #    maquina), entao os livros gerados la ficavam so na Cakto.
+  $saida = & node scripts\publicar_local.js --limite=2 2>&1 | Out-String
+  $ultima = ($saida.Trim() -split "`n")[-1]
+  Registrar ('publicar: ' + $ultima)
+
+  # 5) capa e idioma dos recem-publicados (o assistente de cadastro nem sempre sobe a capa)
+  $saida = & node scripts\capas_em_lote.js --lote=10 2>&1 | Out-String
+  $ultima = ($saida.Trim() -split "`n")[-1]
+  Registrar ('capas: ' + $ultima)
 }
 finally { $mutex.ReleaseMutex() }
