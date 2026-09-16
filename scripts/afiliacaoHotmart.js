@@ -125,7 +125,13 @@ async function main() {
   for (const e of fila) {
     const destaque = destaques.has(e.produto);
     try {
-      const g = await (await fetch('https://api-affiliation.hotmart.com/v1/easy-setup/settings/' + e.produto, { headers: H })).json();
+      // Leitura com status conferido: com o token vencendo (16/09/2026, 14:05)
+      // a API devolveu erro sem affiliationProgram e 53 produtos viraram
+      // "Cannot read properties of undefined" em vez de parar o lote.
+      const rg = await fetch('https://api-affiliation.hotmart.com/v1/easy-setup/settings/' + e.produto, { headers: H });
+      if (!rg.ok) throw new Error('HTTP ' + rg.status + ' na leitura');
+      const g = await rg.json();
+      if (!g || !g.affiliationProgram) throw new Error('leitura sem affiliationProgram');
       const mudar = planejar(g.affiliationProgram, destaque);
       if (mudar) {
         const corpo = { program: { productId: Number(e.produto), affiliationType: mudar.affiliationType, affiliateSupportEmail: g.affiliationProgram.supportAffiliateEmail || 'mrovariz@gmail.com', information: texto(mudar.commission), commission: mudar.commission } };
