@@ -144,6 +144,10 @@ function gravarResultado(ebookId, url, produtoId) {
 
 async function main() {
   const limite = parseInt(arg('limite', '5'), 10);
+  // A tarefa agendada e encerrada em 25 min (18:00 de 16/09/2026: 6 livros nao
+  // couberam e a rodada morreu no meio de um cadastro). Nao comeca livro novo
+  // depois do orcamento.
+  const orcamentoMs = parseFloat(arg('minutos', '0')) * 60000;
   const dryRun = process.argv.includes('--dry-run');
 
   console.log('consultando a fila no VPS...');
@@ -166,6 +170,7 @@ async function main() {
 
   try {
     for (const [i, e] of itens.entries()) {
+      if (orcamentoMs && Date.now() - t0 > orcamentoMs) { console.log(`  tempo esgotado — ${itens.length - i} ficam para a proxima rodada`); break; }
       const pdfLocal = path.join(TMP, 'ebook_' + i + '.pdf');
       const capaLocal = path.join(TMP, 'capa_' + i + '.png');
       let r = null;
