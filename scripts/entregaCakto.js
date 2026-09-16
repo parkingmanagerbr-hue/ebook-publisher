@@ -64,8 +64,15 @@ async function api(metodo, rota, corpo, H) {
 // esta impresso nas capas.
 const PRODUTOR = process.env.CAKTO_PRODUCER_NAME || 'Veloxis Editorial';
 
+// Afiliacao (decisao do dono em 16/09/2026): sem trafego proprio, o catalogo
+// Cakto nunca teve um pedido. Afiliado so encontra o produto se ele estiver na
+// vitrine com comissao. Comissao ja definida por alguem nao e trocada.
+const COMISSAO_AFILIADO = 50;
+const DESCRICAO_AFILIADO = 'E-book digital com entrega imediata por link. Comissão de ' + COMISSAO_AFILIADO +
+  '% em cada venda aprovada, afiliação automática. Divulgue de forma honesta, sem prometer resultado.';
+
 /** O que o produto deve ter depois da correcao. Pura. */
-function alvo(produto, linkEsperado, pausadoPorNos = false) {
+function alvo(produto, linkEsperado, pausadoPorNos = false, opcoes = {}) {
   const atual = produto.emailAccessLink || '';
   const out = {};
   // Link de terceiro nunca e sobrescrito: alguem configurou a entrega a mao.
@@ -74,12 +81,21 @@ function alvo(produto, linkEsperado, pausadoPorNos = false) {
   // Pausado por este job por falta de PDF e o PDF voltou: volta a vender.
   // Pausado por outra pessoa (sem registro nosso) continua como esta.
   if (pausadoPorNos && produto.status === 'waiting_config') out.status = 'active';
+  if (opcoes.afiliacao && !produto.affiliate) {
+    Object.assign(out, { affiliate: true, affiliateRequest: false, affiliateMarketplace: true });
+    if (produto.affiliateCommission == null) out.affiliateCommission = COMISSAO_AFILIADO;
+    if (!produto.affiliateDescription) out.affiliateDescription = DESCRICAO_AFILIADO;
+  }
+  // "Pagina de vendas" apontava para https://hotmart.com em todos os produtos:
+  // o afiliado mandaria o comprador para outra plataforma. Sem pagina propria,
+  // o proprio checkout e o destino certo.
+  if (opcoes.checkout && (!produto.salesPage || /^https?:\/\/(www\.)?hotmart\.com\/?$/i.test(produto.salesPage))) out.salesPage = opcoes.checkout;
   return out;
 }
 
 /** Decide o que fazer com um produto. Pura. */
-function planejar(produto, linkEsperado, pausadoPorNos = false) {
-  if (Object.keys(alvo(produto, linkEsperado, pausadoPorNos)).length) return 'gravar';
+function planejar(produto, linkEsperado, pausadoPorNos = false, opcoes = {}) {
+  if (Object.keys(alvo(produto, linkEsperado, pausadoPorNos, opcoes)).length) return 'gravar';
   const atual = produto.emailAccessLink || '';
   return atual && atual !== linkEsperado ? 'link-alheio' : 'ok';
 }
@@ -97,7 +113,7 @@ async function main() {
   }
 
   const limite = parseInt(arg('limite', '1'), 10);
-  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v3','ok-v3')").all().map(r => r.ebook_id));
+  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v4','ok-v4')").all().map(r => r.ebook_id));
   const fila = comPdf.filter(e => !feitos.has(e.id)).slice(0, limite);
   const pausados = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado = 'pausado-sem-pdf'").all().map(r => r.ebook_id));
   const vistosSemPdf = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('pausado-sem-pdf','sem-pdf-nao-ativo')").all().map(r => r.ebook_id));
@@ -114,8 +130,9 @@ async function main() {
       const produtoId = oferta.product;
       const produto = await api('GET', 'product/' + produtoId + '/', null, H); await dormir(PAUSA_MS);
       const link = urlEntrega(e.id);
-      const mudar = alvo(produto, link, pausados.has(e.id));
-      const decisao = planejar(produto, link, pausados.has(e.id));
+      const opcoes = { afiliacao: true, checkout: 'https://pay.cakto.com.br/' + e.cakto_product_id };
+      const mudar = alvo(produto, link, pausados.has(e.id), opcoes);
+      const decisao = planejar(produto, link, pausados.has(e.id), opcoes);
       if (decisao === 'gravar') {
         // A rota nao aceita PATCH (405): PUT com o produto inteiro que acabou de
         // ser lido, trocando so o link. A conferencia abaixo pega o caso de a
@@ -127,11 +144,11 @@ async function main() {
         const conferido = await api('GET', 'product/' + produtoId + '/', null, H); await dormir(PAUSA_MS);
         const mexeuEmOutro = camposAlterados(produto, conferido).filter(k => !['updatedAt', ...Object.keys(mudar)].includes(k));
         if (mexeuEmOutro.length) console.log('ATENCAO', produtoId, 'campos mudaram alem do link:', mexeuEmOutro.join(','));
-        const persistiu = Object.entries(mudar).every(([k, v]) => conferido[k] === v);
-        const res = !persistiu ? 'nao-persistiu' : (mexeuEmOutro.length ? 'gravado-com-efeito' : 'gravado-v3');
+        const persistiu = Object.entries(mudar).every(([k, v]) => mesmoValor(conferido[k], v));
+        const res = !persistiu ? 'nao-persistiu' : (mexeuEmOutro.length ? 'gravado-com-efeito' : 'gravado-v4');
         marca.run(e.id, produtoId, res, Date.now()); cont[res] = (cont[res] || 0) + 1;
       } else {
-        marca.run(e.id, produtoId, decisao === 'ok' ? 'ok-v3' : decisao, Date.now()); cont[decisao] = (cont[decisao] || 0) + 1;
+        marca.run(e.id, produtoId, decisao === 'ok' ? 'ok-v4' : decisao, Date.now()); cont[decisao] = (cont[decisao] || 0) + 1;
       }
       // Capa DEPOIS do PUT de dados: o PUT reenvia o produto lido, com image null,
       // e apagaria uma imagem enviada antes dele.
@@ -208,12 +225,19 @@ async function enviarImagem(produtoId, arquivo, H) {
   if (!r.ok) throw new Error('imagem: HTTP ' + r.status + ' ' + t.slice(0, 160));
 }
 
+/** A API devolve numero como texto ("50.00"): compara pelo valor. Pura. */
+function mesmoValor(lido, gravado) {
+  if (lido === gravado) return true;
+  if (typeof gravado === 'number') return Number(lido) === gravado;
+  return false;
+}
+
 /** Campos de primeiro nivel cujo valor mudou entre duas leituras. Pura. */
 function camposAlterados(antes, depois) {
   const chaves = new Set([...Object.keys(antes || {}), ...Object.keys(depois || {})]);
   return [...chaves].filter(k => JSON.stringify((antes || {})[k]) !== JSON.stringify((depois || {})[k]));
 }
 
-module.exports = { planejar, alvo, acaoSemPdf, camposAlterados, precisaImagem, PRODUTOR };
+module.exports = { planejar, alvo, acaoSemPdf, mesmoValor, COMISSAO_AFILIADO, camposAlterados, precisaImagem, PRODUTOR };
 
 if (require.main === module) main().catch(e => { console.error('ERRO', e.message); process.exit(1); });

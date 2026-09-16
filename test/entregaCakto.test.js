@@ -65,3 +65,32 @@ test('sem link esperado e sem link no produto: nada a gravar nem a denunciar', (
   assert.strictEqual(planejar({ ...COM_NOME }, ''), 'ok');
   assert.strictEqual(planejar({ ...COM_NOME, emailAccessLink: 'https://drive.google.com/x' }, ''), 'link-alheio');
 });
+
+test('afiliacao: liga vitrine e comissao so onde esta desligada; comissao do dono fica', () => {
+  const { COMISSAO_AFILIADO } = require('../scripts/entregaCakto');
+  const base = { ...COM_NOME, emailAccessLink: LINK, affiliate: false, affiliateCommission: null, affiliateDescription: null };
+  const r = alvo(base, LINK, false, { afiliacao: true });
+  assert.deepStrictEqual([r.affiliate, r.affiliateRequest, r.affiliateMarketplace, r.affiliateCommission], [true, false, true, COMISSAO_AFILIADO]);
+  assert.match(r.affiliateDescription, /50%/);
+  assert.deepStrictEqual(alvo({ ...base, affiliateCommission: '30.00' }, LINK, false, { afiliacao: true }).affiliateCommission, undefined, 'comissao definida nao e trocada');
+  assert.deepStrictEqual(alvo({ ...base, affiliate: true }, LINK, false, { afiliacao: true }), {}, 'ja afiliado: nada');
+  assert.deepStrictEqual(alvo(base, LINK), {}, 'sem a opcao, comportamento antigo (controle)');
+});
+
+test('pagina de vendas apontando para hotmart.com vira o proprio checkout; pagina propria fica', () => {
+  const ck = 'https://pay.cakto.com.br/abc';
+  const base = { ...COM_NOME, emailAccessLink: LINK };
+  assert.strictEqual(alvo({ ...base, salesPage: 'https://hotmart.com' }, LINK, false, { checkout: ck }).salesPage, ck);
+  assert.strictEqual(alvo({ ...base, salesPage: 'https://www.hotmart.com/' }, LINK, false, { checkout: ck }).salesPage, ck);
+  assert.strictEqual(alvo({ ...base, salesPage: null }, LINK, false, { checkout: ck }).salesPage, ck);
+  assert.strictEqual(alvo({ ...base, salesPage: 'https://meusite.com/livro' }, LINK, false, { checkout: ck }).salesPage, undefined);
+  assert.strictEqual(alvo({ ...base, salesPage: 'https://hotmart.com/pt-br/marketplace/produtos/x' }, LINK, false, { checkout: ck }).salesPage, undefined);
+});
+
+test('mesmoValor aceita numero devolvido como texto', () => {
+  const { mesmoValor } = require('../scripts/entregaCakto');
+  assert.ok(mesmoValor('50.00', 50));
+  assert.ok(mesmoValor(true, true));
+  assert.ok(!mesmoValor('40.00', 50));
+  assert.ok(!mesmoValor('true', true));
+});
