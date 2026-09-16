@@ -70,10 +70,40 @@ function buscarPendentes(limite) {
     // uma vez so — se subir com o placeholder cinza, fica competindo com um
     // icone generico e nao ha segunda impressao. Melhor nao publicar hoje do
     // que publicar sem capa.
-    const ok = rows
-      .filter(r => fs.existsSync(r.pdf_path) && fs.existsSync(r.cover_path))
-      .slice(0, ${limite});
-    console.log(JSON.stringify(ok));
+    const candidatos = rows.filter(r => fs.existsSync(r.pdf_path) && fs.existsSync(r.cover_path));
+    // TITULO JA NA HOTMART: cadastro que falhou depois de criar o produto deixava
+    // o id fora do banco e a rodada seguinte criava outra copia (214 copias em
+    // 16/09/2026). Antes de criar, liga o e-book ao produto que ja existe.
+    (async () => {
+      const ok = [];
+      let catalogo = null;
+      try {
+        const tok = fs.readFileSync('/app/data/hotmart_access_token.txt', 'utf8').trim();
+        catalogo = await require('/app/src/agents/hotmartCatalogo').baixarCatalogo(tok);
+      } catch (e) { console.error('catalogo indisponivel: ' + e.message); }
+      if (!catalogo) { console.log('[]'); return; }  // sem conferir, nao publica
+      const { idsPorTitulo } = require('/app/src/agents/hotmartCatalogo');
+      const liga = db.prepare("UPDATE ebooks SET hotmart_product_id = ?, hotmart_url = ?, status = 'published' WHERE id = ?");
+      for (const r of candidatos) {
+        const existentes = idsPorTitulo(catalogo, r.title);
+        if (existentes.length) {
+          liga.run(existentes[0], 'https://hotmart.com/product/' + existentes[0], r.id);
+          console.error('ja existe na Hotmart: ' + existentes[0] + ' ' + r.title);
+          // Produto de cadastro interrompido pode estar sem arquivo: o PDF ja esta
+          // em disco, entao entra na fila do enviarPdfsRegerados.
+          const tem = await require('/app/src/agents/hotmartConteudo').consultarConteudo(existentes[0]);
+          if (tem === false) {
+            db.prepare('CREATE TABLE IF NOT EXISTS hotmart_sem_arquivo (produto TEXT PRIMARY KEY, ebook_id TEXT, quando INTEGER)').run();
+            db.prepare('INSERT OR REPLACE INTO hotmart_sem_arquivo VALUES (?,?,?)').run(existentes[0], r.id, Date.now());
+            console.error('  sem arquivo — na fila de envio do PDF');
+          }
+          continue;
+        }
+        ok.push(r);
+        if (ok.length >= ${limite}) break;
+      }
+      console.log(JSON.stringify(ok));
+    })();
   `);
   const m = saida.match(/\[.*\]/s);
   return m ? JSON.parse(m[0]) : [];

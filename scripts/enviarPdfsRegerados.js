@@ -65,9 +65,16 @@ async function main() {
   // Sai da fila so quem a API confirmou.
   const confirmados = [...saida.matchAll(/^(\d+) uploadPDF=\w+ API confirma arquivo=true$/gm)].map(m => m[1]);
   if (confirmados.length) {
-    const limpa = 'const d=require("/app/src/core/database").getDb();' +
-      'const n=d.prepare("DELETE FROM hotmart_sem_arquivo WHERE produto IN (' + confirmados.map(c => "'" + c + "'").join(',') + ')").run().changes;' +
-      'console.log(JSON.stringify({removidos:n}));';
+    // Produto pausado so por esperar o PDF (16/09/2026) volta a vender aqui.
+    const lista = confirmados.map(c => "'" + c + "'").join(',');
+    const limpa = 'const d=require("/app/src/core/database").getDb();const fs=require("fs");' +
+      'const n=d.prepare("DELETE FROM hotmart_sem_arquivo WHERE produto IN (' + lista + ')").run().changes;' +
+      'let p=[];try{p=d.prepare("SELECT produto FROM hotmart_pausados WHERE motivo LIKE \'aguardando pdf%\' AND produto IN (' + lista + ')").all().map(r=>r.produto)}catch(e){}' +
+      'const tok=fs.readFileSync("/app/data/hotmart_access_token.txt","utf8").trim();' +
+      '(async()=>{let reativados=0;for(const id of p){const r=await fetch("https://api-product.vulcano.hotmart.com/product/v1/product/"+id+"/sales?salesEnable=true&notifyAffiliateSalesStatus=false",' +
+      '{method:"PUT",headers:{authorization:"Bearer "+tok,"x-app-name":"app-product"}});' +
+      'if(r.ok){d.prepare("DELETE FROM hotmart_pausados WHERE produto=?").run(id);reativados++}}' +
+      'console.log(JSON.stringify({removidos:n,reativados}))})();';
     fs.writeFileSync(path.join(os.tmpdir(), 'limpa_fila.js'), limpa);
     execFileSync('scp', ['-q', path.join(os.tmpdir(), 'limpa_fila.js'), 'vps:/tmp/limpa_fila.js']);
     ssh('docker cp /tmp/limpa_fila.js ' + CONTAINER + ':/tmp/limpa_fila.js');

@@ -152,6 +152,23 @@ test('grava vendas, recontando do zero: quem nao vendeu na lista atual volta a z
   assert.ok(!JSON.stringify(gravadas).includes('Fulana'), 'dado do comprador nao vai para o banco');
 });
 
+test('COPIA DUPLICADA: venda da copia conta no produto que ficou e guarda o id original', async t => {
+  const db = prepararEbooks();
+  db.prepare('CREATE TABLE IF NOT EXISTS hotmart_copias (copia TEXT PRIMARY KEY, canonico TEXT)').run();
+  db.prepare("INSERT OR REPLACE INTO hotmart_copias VALUES ('999', '111')").run();
+  try {
+    fetchFalso(t, [{ data: [venda('C1', 999, 4), venda('C2', 111, 4)] }]);
+    const r = await sv.sincronizar();
+    assert.deepStrictEqual(r.orfaos, []);
+    assert.strictEqual(db.prepare("SELECT sales_count FROM ebooks WHERE id='a'").get().sales_count, 2);
+    const c1 = db.prepare("SELECT produto_id, produto_original FROM vendas_hotmart WHERE transacao='C1'").get();
+    assert.deepStrictEqual({ ...c1 }, { produto_id: '111', produto_original: '999' });
+    assert.strictEqual(db.prepare("SELECT produto_original FROM vendas_hotmart WHERE transacao='C2'").get().produto_original, null);
+  } finally {
+    db.prepare('DROP TABLE hotmart_copias').run();
+  }
+});
+
 test('REEMBOLSO: venda que sai da lista deixa de contar; transacao repetida atualiza status', async t => {
   const db = prepararEbooks();
   fetchFalso(t, [{ data: [venda('R1', 222, 4), venda('R2', 222, 4)] }, { data: [venda('R1', 222, 4, { purchase: { transaction: 'R1', status: 'COMPLETE' } })] }]);

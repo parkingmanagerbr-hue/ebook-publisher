@@ -24,6 +24,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { aplicarCanonico } = require('./hotmartCatalogo');
 
 let log;
 try { log = require('../core/logger').createLogger('sincronizarVendas'); }
@@ -118,21 +119,27 @@ async function buscarVendas(token, agora = Date.now()) {
 
 async function sincronizar() {
   const token = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
-  const vendas = marcarSuspeitas(await buscarVendas(token));
+  const brutas = marcarSuspeitas(await buscarVendas(token));
 
   const { getDb } = require('../core/database');
   const db = getDb();
+  // Venda de copia duplicada conta no produto que ficou (ver hotmartCatalogo).
+  let copias = new Map();
+  try { copias = new Map(db.prepare('SELECT copia, canonico FROM hotmart_copias').all().map(r => [String(r.copia), String(r.canonico)])); } catch { /* tabela ainda nao existe */ }
+  const vendas = aplicarCanonico(brutas, copias);
   db.prepare(
     'CREATE TABLE IF NOT EXISTS vendas_hotmart (' +
     'transacao TEXT PRIMARY KEY, produto_id TEXT NOT NULL, produto TEXT, quando INTEGER, ' +
     'preco REAL, comissao REAL, status TEXT, visto_em INTEGER NOT NULL)'
   ).run();
   try { db.prepare('ALTER TABLE vendas_hotmart ADD COLUMN suspeita INTEGER NOT NULL DEFAULT 0').run(); } catch { /* ja existe */ }
+  try { db.prepare('ALTER TABLE vendas_hotmart ADD COLUMN produto_original TEXT').run(); } catch { /* ja existe */ }
 
   const ins = db.prepare(
-    'INSERT INTO vendas_hotmart (transacao, produto_id, produto, quando, preco, comissao, status, visto_em, suspeita) ' +
-    'VALUES (@transacao, @produtoId, @produto, @quando, @preco, @comissao, @status, @vistoEm, @suspeitaNum) ' +
-    'ON CONFLICT(transacao) DO UPDATE SET status = excluded.status, visto_em = excluded.visto_em, suspeita = excluded.suspeita'
+    'INSERT INTO vendas_hotmart (transacao, produto_id, produto, quando, preco, comissao, status, visto_em, suspeita, produto_original) ' +
+    'VALUES (@transacao, @produtoId, @produto, @quando, @preco, @comissao, @status, @vistoEm, @suspeitaNum, @produtoOriginal) ' +
+    'ON CONFLICT(transacao) DO UPDATE SET produto_id = excluded.produto_id, status = excluded.status, visto_em = excluded.visto_em, ' +
+    'suspeita = excluded.suspeita, produto_original = excluded.produto_original'
   );
   const agora = Date.now();
   db.transaction(lista => { for (const v of lista) ins.run({ ...v, vistoEm: agora, suspeitaNum: v.suspeita ? 1 : 0 }); })(vendas);

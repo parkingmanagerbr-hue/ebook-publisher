@@ -32,6 +32,7 @@ const MODULOS_NO_GATE = [
   'src/agents/coverPackaging.js',
   'src/agents/idiomaPorVenda.js',
   'src/agents/learningAgent.js',
+  'src/agents/hotmartCatalogo.js',
   'src/agents/hotmartConteudo.js',
   'src/agents/hotmartDescricao.js',
   'src/agents/hotmartRegras.js',
