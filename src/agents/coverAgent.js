@@ -300,7 +300,7 @@ function breakText(ctx, text, maxWidth, ...fonts) {
 }
 
 // ─── Geração interna de uma tentativa de capa ────────────────────────────────
-async function _generateCoverOnce(title, subtitle, topic) {
+async function _generateCoverOnce(title, subtitle, topic, idioma = 'pt-BR') {
   fs.mkdirSync(COVERS_DIR, { recursive: true });
   const cat = detectCategory(topic);
 
@@ -309,7 +309,9 @@ async function _generateCoverOnce(title, subtitle, topic) {
   if (process.env.COVER_VIRAL !== 'false') {
     try {
       const { generateViralCover } = require('./coverViralAgent');
-      const viralPath = await generateViralCover(title, subtitle, topic, cat, COVERS_DIR);
+      // Idioma do livro: sem ele o selo e o kicker saiam em portugues em livro
+      // japones ou ingles (o mesmo defeito ja corrigido no passe de capas).
+      const viralPath = await generateViralCover(title, subtitle, topic, cat, COVERS_DIR, idioma);
       if (viralPath && fs.existsSync(viralPath)) {
         logger.info(`✅ Capa VIRAL (rosto/cena ${cat}) gerada: ${path.basename(viralPath)}`);
         return viralPath;
@@ -398,9 +400,9 @@ async function _generateCoverOnce(title, subtitle, topic) {
 }
 
 // ─── FUNÇÃO PRINCIPAL com QA automático ──────────────────────────────────────
-async function generateCover(title, subtitle, topic, category = null) {
-  logger.info(`🎨 Gerando capa com QA: "${title}"`);
-  return ensureQualityCover(_generateCoverOnce, title, subtitle, topic);
+async function generateCover(title, subtitle, topic, category = null, idioma = 'pt-BR') {
+  logger.info(`🎨 Gerando capa com QA: "${title}" [${idioma}]`);
+  return ensureQualityCover((t, s, tp) => _generateCoverOnce(t, s, tp, idioma), title, subtitle, topic);
 }
 
 // ─── ILUSTRAÇÃO DE CAPÍTULO via Gemini Image ─────────────────────────────────

@@ -109,7 +109,7 @@ async function runPipeline(topicOverride = null, language = null) {
           pdfPath = webResult.pdfPath;
           // Gerar capa normal para ter uma imagem de capa pro Hotmart/KDP
           logger.info('\n🎨 Gerando capa para o ebook web...');
-          coverPath = await generateCover(ebook.title, ebook.subtitle, topic.topic).catch(() => null);
+          coverPath = await generateCover(ebook.title, ebook.subtitle, topic.topic, null, lang).catch(() => null);
         }
       } catch (webErr) {
         logger.warn(`⚠️  Serviços web falharam: ${webErr.message.slice(0, 100)} — usando pipeline normal`);
@@ -124,7 +124,7 @@ async function runPipeline(topicOverride = null, language = null) {
 
       // ===== 3. GERAR CAPA =====
       logger.info('\n🎨 ETAPA 2: Gerando capa...');
-      coverPath = await generateCover(ebook.title, ebook.subtitle, topic.topic);
+      coverPath = await generateCover(ebook.title, ebook.subtitle, topic.topic, null, lang);
       logger.info(`✅ Capa gerada: ${coverPath}`);
 
       // ===== 4. GERAR PDF =====
@@ -138,7 +138,7 @@ async function runPipeline(topicOverride = null, language = null) {
     }
 
     // ── Objeto unificado para o resto do pipeline ──────────────────────────────
-    const ebookData = { ...ebook, id: ebookId, coverPath, price: parseFloat(process.env.EBOOK_PRICE || '4.99') };
+    const ebookData = { ...ebook, language: ebook.language || lang, id: ebookId, coverPath, price: parseFloat(process.env.EBOOK_PRICE || '4.99') };
 
     // Salvar no banco
     db.saveEbook({
