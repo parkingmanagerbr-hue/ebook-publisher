@@ -94,3 +94,12 @@ test('mesmoValor aceita numero devolvido como texto', () => {
   assert.ok(!mesmoValor('40.00', 50));
   assert.ok(!mesmoValor('true', true));
 });
+
+test('comissao fora da faixa da Cakto (1% a 95%) e trocada; valida fica (caso real: 0.00 dava HTTP 400)', () => {
+  const base = { ...COM_NOME, emailAccessLink: LINK, affiliate: false, affiliateDescription: 'x' };
+  assert.strictEqual(alvo({ ...base, affiliateCommission: '0.00' }, LINK, false, { afiliacao: true }).affiliateCommission, 50);
+  assert.strictEqual(alvo({ ...base, affiliateCommission: '99.00' }, LINK, false, { afiliacao: true }).affiliateCommission, 50);
+  assert.strictEqual(alvo({ ...base, affiliateCommission: 'abc' }, LINK, false, { afiliacao: true }).affiliateCommission, 50);
+  assert.strictEqual(alvo({ ...base, affiliateCommission: '1.00' }, LINK, false, { afiliacao: true }).affiliateCommission, undefined);
+  assert.strictEqual(alvo({ ...base, affiliateCommission: '95.00' }, LINK, false, { afiliacao: true }).affiliateCommission, undefined);
+});

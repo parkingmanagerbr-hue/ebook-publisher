@@ -83,7 +83,10 @@ function alvo(produto, linkEsperado, pausadoPorNos = false, opcoes = {}) {
   if (pausadoPorNos && produto.status === 'waiting_config') out.status = 'active';
   if (opcoes.afiliacao && !produto.affiliate) {
     Object.assign(out, { affiliate: true, affiliateRequest: false, affiliateMarketplace: true });
-    if (produto.affiliateCommission == null) out.affiliateCommission = COMISSAO_AFILIADO;
+    // A Cakto so aceita 1% a 95%; produto com "0.00" gravado derrubava o PUT
+    // inteiro (HTTP 400). Fora da faixa conta como nao definida.
+    const atualComissao = Number(produto.affiliateCommission);
+    if (produto.affiliateCommission == null || !(atualComissao >= 1 && atualComissao <= 95)) out.affiliateCommission = COMISSAO_AFILIADO;
     if (!produto.affiliateDescription) out.affiliateDescription = DESCRICAO_AFILIADO;
   }
   // "Pagina de vendas" apontava para https://hotmart.com em todos os produtos:
