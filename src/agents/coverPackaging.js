@@ -135,12 +135,35 @@ function placar() {
  * saiu com "30 DIAS GARANT", verificado a olho. Agora corta no espaco sempre
  * que sobrar pelo menos 40% do limite, e so entao aceita corte seco.
  */
+// Conectivos que, no fim de um texto cortado, deixam a frase pela metade. Cortar
+// ANTES do ultimo conectivo fecha a oracao: "...como ganhar confianca e evitar
+// mal-entendidos" vira "...como ganhar confianca" em vez de "...e evitar". Caso
+// real (16/09/2026, capa holandesa): "hoe je vertrouwen wint en misverstanden".
+const CONECTIVOS = new Set(['e', 'ou', 'mas', 'com', 'and', 'or', 'but', 'with', 'y', 'o', 'pero', 'con',
+  'et', 'ou', 'mais', 'avec', 'und', 'oder', 'aber', 'mit', 'en', 'of', 'maar', 'met', 'i', 'lub', 'oraz', 'ed', 'ma',
+  // preposicoes que tambem deixam a frase aberta
+  'sem', 'para', 'por', 'em', 'de', 'without', 'for', 'to', 'sin', 'sans', 'pour', 'ohne', 'für', 'zu', 'voor', 'zonder', 'bez', 'dla', 'senza', 'per']);
+
 function limitar(txt, max) {
   const t = String(txt || '').trim().replace(/^["'`]+|["'`]+$/g, '');
   if (t.length <= max) return t;
   const corte = t.slice(0, max);
+  const minimo = max * 0.4;
+  // 1) antes do ultimo conectivo
+  const palavras = corte.split(' ');
+  for (let i = palavras.length - 1; i > 0; i--) {
+    if (CONECTIVOS.has(palavras[i].toLowerCase())) {
+      const antes = palavras.slice(0, i).join(' ').replace(/[,;:\-–—]+$/, '').trim();
+      if (antes.length >= minimo) return antes;
+      break;
+    }
+  }
+  // 2) na ultima pontuacao de pausa
+  const pont = Math.max(corte.lastIndexOf(','), corte.lastIndexOf(';'), corte.lastIndexOf(':'), corte.lastIndexOf(' —'), corte.lastIndexOf(' -'));
+  if (pont >= minimo) return corte.slice(0, pont).trim();
+  // 3) no ultimo espaco
   const esp = corte.lastIndexOf(' ');
-  if (esp >= max * 0.4) return corte.slice(0, esp).trim();
+  if (esp >= minimo) return corte.slice(0, esp).trim();
   return corte.trim();
 }
 

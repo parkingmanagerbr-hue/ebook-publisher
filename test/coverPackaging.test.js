@@ -149,3 +149,29 @@ test('o log da memoria nao cresce sem limite', () => {
   assert.ok(m.log.length <= 2000, 'log passou do teto: ' + m.log.length);
   limparMemoria();
 });
+
+test('limitar corta antes do conectivo e nao deixa a frase pela metade (caso real holandes)', () => {
+  const { limitar } = require('../src/agents/coverPackaging');
+  assert.strictEqual(limitar('Leer stap-voor-stap hoe je vertrouwen wint en misverstanden voorkomt', 60), 'Leer stap-voor-stap hoe je vertrouwen wint');
+  assert.strictEqual(limitar('Passo a passo para adaptar currículo e entrevistas ao mercado externo', 55), 'Passo a passo para adaptar currículo');
+  assert.strictEqual(limitar('Organize finanças, reduza dívidas sem sofrimento e planeje o futuro', 45), 'Organize finanças, reduza dívidas');
+});
+
+test('limitar: pontuacao quando nao ha conectivo; texto curto intacto (controle)', () => {
+  const { limitar } = require('../src/agents/coverPackaging');
+  assert.strictEqual(limitar('Guia completo: tudo sobre investimentos para iniciantes brasileiros', 40), 'Guia completo: tudo sobre investimentos');
+  assert.strictEqual(limitar('Curto e direto', 60), 'Curto e direto');
+  assert.strictEqual(limitar('"Com aspas"', 60), 'Com aspas');
+  assert.strictEqual(limitar('Supercalifragilisticexpialidocious', 10), 'Supercalif');
+});
+
+test('limitar: conectivo muito no comeco nao encurta demais; cai no ultimo espaco', () => {
+  const { limitar } = require('../src/agents/coverPackaging');
+  // o conectivo "e" esta antes de 40% do limite: ignora e corta no espaco
+  assert.strictEqual(limitar('Paz e tranquilidade financeira permanente', 30), 'Paz e tranquilidade');
+});
+
+test('limitar: sem conectivo, corta na pontuacao de pausa', () => {
+  const { limitar } = require('../src/agents/coverPackaging');
+  assert.strictEqual(limitar('Invista melhor: guia prático completo hoje', 25), 'Invista melhor');
+});

@@ -149,7 +149,9 @@ test('texto longo e cortado no limite do layout sem cortar palavra', async t => 
   ia(t, [json(longo), json(longo)]);
   const r = await cp.gerarPackaging({ titulo: 'Financas' });
   assert.ok(r.kicker.length <= 40 && r.titulo.length <= 28 && r.subtitulo.length <= 60);
-  assert.strictEqual(r.titulo, 'Sobra Dinheiro Todo Mes Sem');
+  // Antes terminava em "...Mes Sem" (frase aberta); agora corta antes da preposicao.
+  assert.strictEqual(r.titulo, 'Sobra Dinheiro Todo Mes');
+  assert.strictEqual(r.subtitulo, 'Um plano simples para organizar as contas da casa');
 });
 
 // ── bandit: fronteiras ──────────────────────────────────────────────────────
