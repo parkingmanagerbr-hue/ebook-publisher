@@ -2,7 +2,7 @@
 /**
  * enviarPdfsRegerados.js — segunda metade do conserto dos produtos sem arquivo.
  *
- * O container reergue o PDF (scripts/regerarPdfFaltante.js, cron de 2 em 2 h),
+ * O container reergue o PDF (scripts/regerarPdfFaltante.js, cron de hora em hora),
  * mas o envio para a Hotmart so funciona na maquina que fez o login: a sessao
  * esta presa a origem. Este script roda LOCAL, pergunta ao VPS quem ja tem PDF,
  * baixa os arquivos e reenvia pelo Chrome de automacao (porta 9223), conferindo
@@ -36,6 +36,19 @@ function extrairJson(saida) {
   throw new Error('VPS nao devolveu JSON: ' + texto.slice(-200));
 }
 
+/**
+ * Produtos que a API confirmou com arquivo. "ja tem arquivo" tambem conta:
+ * sem isso o 8534887 ficou na fila repetindo a cada rodada (16-17/09/2026).
+ * Pura.
+ */
+function produtosConfirmados(saida) {
+  const s = String(saida || '');
+  return [
+    ...[...s.matchAll(/^(\d+) uploadPDF=\w+ API confirma arquivo=true$/gm)].map(m => m[1]),
+    ...[...s.matchAll(/^(\d+) ja tem arquivo\b/gm)].map(m => m[1]),
+  ];
+}
+
 function prontos(limite) {
   const consulta = 'const fs=require("fs");const d=require("/app/src/core/database").getDb();' +
     'const r=d.prepare("SELECT s.produto, e.pdf_path FROM hotmart_sem_arquivo s JOIN ebooks e ON e.id=s.ebook_id").all()' +
@@ -63,7 +76,7 @@ async function main() {
   const saida = execFileSync(process.execPath, [path.join(__dirname, 'reanexarPdfHotmart.js'), '--token=' + token, ...pares], { encoding: 'utf8' });
   console.log(saida.trim());
   // Sai da fila so quem a API confirmou.
-  const confirmados = [...saida.matchAll(/^(\d+) uploadPDF=\w+ API confirma arquivo=true$/gm)].map(m => m[1]);
+  const confirmados = produtosConfirmados(saida);
   if (confirmados.length) {
     // Produto pausado so por esperar o PDF (16/09/2026) volta a vender aqui.
     const lista = confirmados.map(c => "'" + c + "'").join(',');
@@ -83,6 +96,6 @@ async function main() {
   fs.rmSync(destino, { recursive: true, force: true });
 }
 
-module.exports = { extrairJson };
+module.exports = { extrairJson, produtosConfirmados };
 
 if (require.main === module) main().catch(e => { console.error('ERRO ' + e.message); process.exit(1); });

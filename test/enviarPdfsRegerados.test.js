@@ -13,3 +13,10 @@ test('sem JSON na saida, falha dizendo o que veio (controle)', () => {
   assert.throws(() => extrairJson('erro: container parado'), /VPS nao devolveu JSON/);
   assert.throws(() => extrairJson(''), /VPS nao devolveu JSON/);
 });
+
+test('confirmados: upload confirmado e produto que ja tinha arquivo', () => {
+  const { produtosConfirmados } = require('../scripts/enviarPdfsRegerados');
+  const saida = '8534887 ja tem arquivo — nada a fazer\n8000001 uploadPDF=true API confirma arquivo=true\n8000002 uploadPDF=true API confirma arquivo=false\nlixo 8000003 ja tem arquivo';
+  assert.deepStrictEqual(produtosConfirmados(saida), ['8000001', '8534887']);
+  assert.deepStrictEqual(produtosConfirmados(undefined), []);
+});
