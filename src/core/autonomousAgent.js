@@ -567,11 +567,23 @@ async function loop() {
       logger.error('Ciclo falhou: ' + err.message);
       setState({ lastError: err.message, currentStep: 'error' });
       // Backoff adaptativo por tipo de erro
+      let esperaCota = null;
+      try {
+        const { esperaPorCota } = require('./agendaIa');
+        esperaCota = esperaPorCota(err.message, require('./aiClient').loadState().degraded);
+      } catch (e) { logger.warn('agenda de cota indisponivel: ' + e.message); }
       if (err.message && err.message.includes('PAID_PROVIDER_RECOVERED:')) {
         // Provider pago voltou -- reiniciar imediatamente (sem pausa de intervalo)
         logger.info('Provider pago recuperado -- reiniciando em 5s...');
         await sleep(5000);
         continue; // pula a pausa de intervalo e reinicia o ciclo imediatamente
+      } else if (esperaCota !== null) {
+        // Cota esgotada: agenda a volta para a proxima chance real de uma chave.
+        const volta = new Date(Date.now() + esperaCota).toISOString();
+        setState({ currentStep: 'aguardando-cota', nextRunAt: volta });
+        logger.info(`⏳ Cota de IA esgotada — geracao retoma as ${new Date(volta).toLocaleTimeString('pt-BR')} (em ${Math.round(esperaCota / 60000)} min)`);
+        await sleep(esperaCota);
+        continue;
       } else if (getIntervalMs() === 0) {
         // Modo continuo: backoff curto (30s)
         await sleep(30000);

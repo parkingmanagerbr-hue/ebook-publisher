@@ -287,6 +287,26 @@ function isDegraded(state, key) {
   return true;
 }
 
+/**
+ * Quando vale a pena tentar de novo com TODAS as chaves bloqueadas. Pura.
+ *
+ * Agenda da geracao (16/09/2026): com a cota do dia esgotada o agente girava a
+ * cada poucos minutos so para ouvir "todos os providers falharam". O instante
+ * certo e o primeiro em que alguma marca vence ou fica elegivel a sondagem
+ * (isDegraded libera uma sondagem a cada PROBE_MS). Sem marca nenhuma a falha
+ * nao e de cota: devolve null e quem chama usa o backoff normal.
+ */
+function proximaTentativaIa(degraded, agora = Date.now(), probeMs = PROBE_MS) {
+  let proxima = null;
+  for (const d of Object.values(degraded || {})) {
+    if (!d || !d.until) continue;
+    const sondagem = (d.lastProbe || d.since_ms || 0) + probeMs;
+    const quando = Math.max(agora, Math.min(d.until, sondagem));
+    if (proxima === null || quando < proxima) proxima = quando;
+  }
+  return proxima;
+}
+
 // Rotação de chaves (pega a próxima chave válida de um provider)
 function getNextKey(state, provider) {
   const keys = PROVIDER_KEYS[provider];
@@ -990,6 +1010,6 @@ function resetDegraded(provider = null) {
 
 module.exports = { getErrorTTL, callHuggingFace, MODELOS_HF, mesclarDegradados, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
   // exportados para teste: e onde moraram os defeitos que pararam a geracao
-  acaoParaErroGroq, isDegraded, getNextKey, loadState, saveState, markDegraded,
+  acaoParaErroGroq, isDegraded, getNextKey, loadState, proximaTentativaIa, saveState, markDegraded,
   callGemini, callCerebras, callGroq, callSambaNova, callDeepSeek, callPollinations, callOllamaVps, callOllama,
   ehCotaOuModeloIndisponivel, segundosDaDica, hostPortaRedis };
