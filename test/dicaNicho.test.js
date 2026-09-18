@@ -105,3 +105,9 @@ test('frase que comeca no meio (quebra do PDF) fica de fora', () => {
   assert.strictEqual(frasesUteis('Priorize o que trará retorno imediato e registre o gasto no mesmo dia da compra.').length, 1);
   assert.strictEqual(frasesUteis('“Anote tudo”: registre o gasto no mesmo dia em que ele acontece, sem exceção.').length, 1);
 });
+
+test('sobra de frase anterior (fecha o que nao abriu) fica de fora', () => {
+  assert.deepStrictEqual(frasesUteis('Terreno Ideal”) e faça um mapa mental com as prioridades da sua semana inteira.'), []);
+  assert.deepStrictEqual(frasesUteis('Ideal) e faça um mapa mental com as prioridades da sua semana de trabalho.'), []);
+  assert.strictEqual(frasesUteis('Monte um mapa mental (bem simples) com as prioridades da sua semana inteira.').length, 1);
+});

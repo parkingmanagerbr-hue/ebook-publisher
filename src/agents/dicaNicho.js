@@ -28,6 +28,9 @@ function frasesUteis(texto, { min = 60, max = 180 } = {}) {
     // ou comecava no meio ("detalhado dos custos e priorize...").
     .filter(f => /[.!?]$/.test(f))
     .filter(f => /^[A-ZÀÁÂÃÄÉÊËÍÎÓÔÕÖÚÛÜÇ“"]/.test(f))
+    // Fecha o que nao abriu = sobra de frase anterior ("Terreno Ideal”) e faca...").
+    .filter(f => (f.match(/\)/g) || []).length <= (f.match(/\(/g) || []).length)
+    .filter(f => (f.match(/”/g) || []).length <= (f.match(/“/g) || []).length)
     .filter(f => f.length >= min && f.length <= max)
     // fora: sumario, cabecalho, aviso de direitos e promessa
     .filter(f => !/sum[áa]rio|cap[íi]tulo\s+\d|todos os direitos|veloxis|https?:|@|\bp[áa]gina\b/i.test(f))
