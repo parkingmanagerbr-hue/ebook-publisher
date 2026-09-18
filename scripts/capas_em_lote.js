@@ -132,8 +132,18 @@ function buscarPendentes(limite) {
       valido + naoSubiu + "ORDER BY e.rowid DESC LIMIT ?"
     ).all(${limite} * 6);
 
+    // Produtos que estao no Hotmart e NAO no banco (capa_externa): 134 ativos
+    // sem imagem em 18/09/2026, gerados por scripts/capasExternasHotmart.js.
+    let externas = [];
+    try {
+      externas = db.prepare(
+        "SELECT produto AS pid, title, cover_path, language FROM capa_externa WHERE " +
+        "NOT EXISTS (SELECT 1 FROM cover_backfill b WHERE b.produto = capa_externa.produto AND b.ok = 1) LIMIT ?"
+      ).all(${limite} * 6);
+    } catch (e) { /* tabela ainda nao existe */ }
+
     const vistos = new Set(), rows = [];
-    for (const r of [...virais, ...geral]) {
+    for (const r of [...externas, ...virais, ...geral]) {
       if (vistos.has(r.pid)) continue;
       vistos.add(r.pid);
       rows.push(r);
