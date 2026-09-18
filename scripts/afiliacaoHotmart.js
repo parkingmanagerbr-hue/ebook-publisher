@@ -76,6 +76,7 @@ function texto(comissao) {
     '- Afiliação de 1 clique, sem espera por aprovação.',
     '- Produto de ticket baixo, fácil de indicar em redes sociais, grupos e listas de e-mail.',
     '- Capa profissional e descrição completa na página do produto, prontas para divulgação.',
+    '- Material e lista de livros em destaque: veloxisit.com.br/livros/afiliados/',
     '',
     'Regras: não use promessas de resultado garantido, números inventados ou spam. Divulgue de forma honesta, mostrando o que o leitor encontra no e-book.',
     '',

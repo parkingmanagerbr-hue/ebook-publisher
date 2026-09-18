@@ -196,7 +196,7 @@ footer{text-align:center;color:#77778f;font-size:12px;padding:30px 20px}
 <p>Guias diretos ao ponto sobre dinheiro, carreira e produtividade. Pagamento e entrega pela Hotmart.</p></header>
 <main class="grid">${cards}
 </main>
-<footer>Veloxis Editorial · atualizado em ${agora.toISOString().slice(0, 10)} · <a href="/privacy.html" style="color:#99a">Privacidade</a></footer>
+<footer>Veloxis Editorial · atualizado em ${agora.toISOString().slice(0, 10)} · <a href="afiliados/" style="color:#99a">Divulgue e ganhe comissão</a> · <a href="/privacy.html" style="color:#99a">Privacidade</a></footer>
 </body></html>
 `;
 }
