@@ -17,6 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { montarPaginaAfiliados } = require('./paginaAfiliados');
 
 const SITE = process.env.SITE_ROOT || '/app/landing_pages';
 const BASE_URL = 'https://veloxisit.com.br/livros/';
@@ -217,7 +218,7 @@ async function main() {
   const tok = fs.readFileSync(process.env.HOTMART_TOKEN_FILE || '/app/data/hotmart_access_token.txt', 'utf8').trim();
   const H = { authorization: 'Bearer ' + tok, accept: 'application/json' };
   const destaques = db.prepare(
-    'SELECT e.hotmart_product_id AS pid, e.title, e.description, e.cover_path FROM afiliacao_hotmart a ' +
+    'SELECT e.hotmart_product_id AS pid, e.title, e.description, e.cover_path, a.comissao FROM afiliacao_hotmart a ' +
     'JOIN ebooks e ON CAST(e.hotmart_product_id AS TEXT) = a.produto ' +
     "WHERE a.destaque = 1 AND a.resultado = 'ok' ORDER BY a.quando ASC"
   ).all();
@@ -232,7 +233,7 @@ async function main() {
     if (!p.salesPageLink) continue;
     const imagem = d.pid + '.jpg';
     execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', d.cover_path, '-vf', 'scale=600:-2', '-q:v', '4', path.join(dirImg, imagem)]);
-    livros.push({ titulo: d.title, descricao: d.description, preco: p.price && p.price.value, link: p.salesPageLink, imagem, slug: slug(d.title, d.pid) });
+    livros.push({ titulo: d.title, descricao: d.description, preco: p.price && p.price.value, link: p.salesPageLink, imagem, slug: slug(d.title, d.pid), ucode: p.ucode || null, comissao: d.comissao || 70 });
   }
   if (!livros.length) throw new Error('nenhum livro com capa e link — nada publicado');
   gravarAtomico(path.join(SITE, 'livros', 'index.html'), montarPagina(livros));
@@ -245,7 +246,10 @@ async function main() {
     gravarAtomico(path.join(dir, 'index.html'), montarPaginaLivro(l, outros));
   }
   const hoje = new Date().toISOString().slice(0, 10);
-  gravarAtomico(path.join(SITE, 'sitemap-livros.xml'), sitemapLivros(livros, hoje));
+  const dirAfil = path.join(SITE, 'livros', 'afiliados');
+  fs.mkdirSync(dirAfil, { recursive: true });
+  gravarAtomico(path.join(dirAfil, 'index.html'), montarPaginaAfiliados(livros, { esc, precoBR }));
+  gravarAtomico(path.join(SITE, 'sitemap-livros.xml'), sitemapLivros(livros.concat([{ slug: 'afiliados' }]), hoje));
   const robots = path.join(SITE, 'robots.txt');
   if (fs.existsSync(robots)) {
     const antes = fs.readFileSync(robots, 'utf8');
