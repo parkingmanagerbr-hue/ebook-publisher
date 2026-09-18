@@ -25,7 +25,9 @@ function frasesUteis(texto, { min = 60, max = 180 } = {}) {
     .flatMap(l => l.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/))
     .map(f => f.trim().replace(/^[•\-–—*\d.)\s]+/, '').trim())
     // Frase inteira: o PDF quebra linha no meio e saia "... ou caderno) e"
+    // ou comecava no meio ("detalhado dos custos e priorize...").
     .filter(f => /[.!?]$/.test(f))
+    .filter(f => /^[A-ZÀÁÂÃÄÉÊËÍÎÓÔÕÖÚÛÜÇ“"]/.test(f))
     .filter(f => f.length >= min && f.length <= max)
     // fora: sumario, cabecalho, aviso de direitos e promessa
     .filter(f => !/sum[áa]rio|cap[íi]tulo\s+\d|todos os direitos|veloxis|https?:|@|\bp[áa]gina\b/i.test(f))

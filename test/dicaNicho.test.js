@@ -99,3 +99,9 @@ test('frase que so faz sentido dentro do livro fica de fora', () => {
   const ok = 'Separe dez por cento do que entra assim que o pagamento cair na sua conta corrente.';
   assert.strictEqual(frasesUteis(ok).length, 1);
 });
+
+test('frase que comeca no meio (quebra do PDF) fica de fora', () => {
+  assert.deepStrictEqual(frasesUteis('detalhado dos custos e priorize o que trará retorno imediato no seu caixa.'), []);
+  assert.strictEqual(frasesUteis('Priorize o que trará retorno imediato e registre o gasto no mesmo dia da compra.').length, 1);
+  assert.strictEqual(frasesUteis('“Anote tudo”: registre o gasto no mesmo dia em que ele acontece, sem exceção.').length, 1);
+});
