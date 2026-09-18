@@ -38,7 +38,7 @@ try {
   Registrar ('publicar: ' + $ultima)
 
   # 5) capa e idioma dos recem-publicados (o assistente de cadastro nem sempre sobe a capa)
-  $saida = & node scripts\capas_em_lote.js --lote=10 2>&1 | Out-String
+  $saida = & node scripts\capas_em_lote.js --limite=10 2>&1 | Out-String
   $ultima = ($saida.Trim() -split "`n")[-1]
   Registrar ('capas: ' + $ultima)
 }
