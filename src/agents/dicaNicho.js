@@ -16,6 +16,11 @@
  */
 const NICHO = /financ|dinheiro|renda|divida|d[ií]vida|or[çc]amento|invest|aut[oô]nomo|freelanc|carreira|produtivid/i;
 
+// Fora do rodizio: recomendacao de investimento tem regra propria de
+// publicidade (CVM/CONAR) e nao e o que vendemos. Um post com "desvio padrao
+// dos retornos" de um livro de cripto entrou na fila em 18/09/2026.
+const SENSIVEL = /cripto|bitcoin|day ?trade|forex|op[çc][õo]es bin[áa]rias|a[çc][õo]es da bolsa|renda fixa|tesouro direto/i;
+
 /** Frases que servem de dica: praticas, do tamanho de um card. Pura. */
 function frasesUteis(texto, { min = 60, max = 180 } = {}) {
   return String(texto || '')
@@ -47,7 +52,8 @@ function escolherLivro(livros, usados = new Map(), agora = Date.now()) {
   const candidatos = (livros || []).filter(l =>
     l && l.pdf &&
     String(l.language || '').toLowerCase().startsWith('pt') &&
-    NICHO.test(String(l.title || '') + ' ' + String(l.topic || '')));
+    NICHO.test(String(l.title || '') + ' ' + String(l.topic || '')) &&
+    !SENSIVEL.test(String(l.title || '') + ' ' + String(l.topic || '')));
   if (!candidatos.length) return null;
   const quando = l => usados.get(String(l.id)) || 0;
   const ordenado = [...candidatos].sort((a, b) => quando(a) - quando(b) || (b.vendas || 0) - (a.vendas || 0));
@@ -88,4 +94,4 @@ function linhasDoCard(dica, largura = 26) {
   return linhas;
 }
 
-module.exports = { frasesUteis, escolherLivro, montarLegenda, primeiroComentario, linhasDoCard, NICHO };
+module.exports = { frasesUteis, escolherLivro, montarLegenda, primeiroComentario, linhasDoCard, NICHO, SENSIVEL };

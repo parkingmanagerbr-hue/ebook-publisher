@@ -117,3 +117,10 @@ test('marcacao de markdown do PDF sai do texto', () => {
   assert.strictEqual(f.length, 1);
   assert.ok(!f[0].includes('`'));
 });
+
+test('tema de investimento regulado fica fora do rodizio', () => {
+  const cripto = { id: 'k', title: 'Diversificando com Cripto para Conservadores', topic: 'investimentos', language: 'pt-BR', pdf: '/a.pdf', slug: 'k' };
+  assert.strictEqual(escolherLivro([cripto]), null);
+  const ok = { id: 'o', title: 'Reduza suas dívidas', topic: 'financas', language: 'pt-BR', pdf: '/a.pdf', slug: 'o' };
+  assert.strictEqual(escolherLivro([cripto, ok]).id, 'o');
+});
