@@ -111,3 +111,9 @@ test('sobra de frase anterior (fecha o que nao abriu) fica de fora', () => {
   assert.deepStrictEqual(frasesUteis('Ideal) e faça um mapa mental com as prioridades da sua semana de trabalho.'), []);
   assert.strictEqual(frasesUteis('Monte um mapa mental (bem simples) com as prioridades da sua semana inteira.').length, 1);
 });
+
+test('marcacao de markdown do PDF sai do texto', () => {
+  const f = frasesUteis('Use funções como `=SOMASE` para totalizar as categorias do mês automaticamente.');
+  assert.strictEqual(f.length, 1);
+  assert.ok(!f[0].includes('`'));
+});

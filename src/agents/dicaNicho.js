@@ -23,7 +23,8 @@ function frasesUteis(texto, { min = 60, max = 180 } = {}) {
     // primeira frase e derrubava a dica inteira no filtro.
     .split(/\r?\n+/)
     .flatMap(l => l.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/))
-    .map(f => f.trim().replace(/^[•\-–—*\d.)\s]+/, '').trim())
+    // tira marcador de lista e marcacao de markdown que sobra do PDF (`=SOMASE`)
+    .map(f => f.trim().replace(/^[•\-–—*\d.)\s]+/, '').replace(/[`*_]+/g, '').trim())
     // Frase inteira: o PDF quebra linha no meio e saia "... ou caderno) e"
     // ou comecava no meio ("detalhado dos custos e priorize...").
     .filter(f => /[.!?]$/.test(f))
