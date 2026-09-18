@@ -92,3 +92,10 @@ test('frase cortada no meio nao vira dica (caso do PDF real, 18/09/2026)', () =>
   assert.strictEqual(f.length, 1);
   assert.ok(f[0].startsWith('Aplicação imediata'), 'marcador removido');
 });
+
+test('frase que so faz sentido dentro do livro fica de fora', () => {
+  const fora = 'Faça as pausas de ação: ao final de cada seção há um checklist ou exercício prático para você.';
+  assert.deepStrictEqual(frasesUteis(fora), []);
+  const ok = 'Separe dez por cento do que entra assim que o pagamento cair na sua conta corrente.';
+  assert.strictEqual(frasesUteis(ok).length, 1);
+});

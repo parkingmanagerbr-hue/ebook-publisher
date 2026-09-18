@@ -29,6 +29,8 @@ function frasesUteis(texto, { min = 60, max = 180 } = {}) {
     .filter(f => f.length >= min && f.length <= max)
     // fora: sumario, cabecalho, aviso de direitos e promessa
     .filter(f => !/sum[áa]rio|cap[íi]tulo\s+\d|todos os direitos|veloxis|https?:|@|\bp[áa]gina\b/i.test(f))
+    // Fora do livro, "ao final de cada secao" nao quer dizer nada para quem le o post.
+    .filter(f => !/\b(se[çc][ãa]o|cap[íi]tulo|neste livro|deste livro|a seguir|acima|abaixo|tabela|figura|anexo)\b/i.test(f))
     .filter(f => !/garantid|ganhe \d|lucro certo|sem esfor[çc]o|100%/i.test(f))
     // dica de verdade costuma ter verbo de acao
     .filter(f => /\b(use|fa[çc]a|anote|separe|defina|comece|evite|reserve|revise|calcule|negocie|organize|registre|escolha|monte|guarde|priorize)\b/i.test(f));

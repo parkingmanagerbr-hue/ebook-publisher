@@ -39,17 +39,25 @@ async function textoDoPdf(caminho) {
 function gerarVideo(dica, livro, destino) {
   const linhas = linhasDoCard(dica, 24);
   const topo = Math.max(320, 760 - linhas.length * 45);   // bloco centralizado no terco de cima
+  // Texto por ARQUIVO: dois-pontos e aspas no texto quebravam os argumentos do
+  // drawtext ("Both text and text file provided", 18/09/2026).
+  const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'dica-'));
+  const arquivo = (nome, conteudo) => {
+    const c = path.join(tmp, nome + '.txt');
+    fs.writeFileSync(c, conteudo);
+    return c;
+  };
   const filtros = linhas.map((l, i) =>
-    `drawtext=fontfile=${FONTE}:text='${l.replace(/'/g, "")}':fontsize=64:fontcolor=white:x=(w-tw)/2:y=${topo + i * 90}`);
+    `drawtext=fontfile=${FONTE}:textfile=${arquivo('l' + i, l)}:fontsize=64:fontcolor=white:x=(w-tw)/2:y=${topo + i * 90}`);
   const fimDica = topo + linhas.length * 90;
   // Titulo cortado em palavra inteira: "para Freelance" ficava pela metade.
-  const titulo = linhasDoCard(String(livro.title).replace(/'/g, ''), 34)[0] +
-    (String(livro.title).length > 34 ? '…' : '');
-  filtros.push(`drawtext=fontfile=${FONTE}:text='${titulo}':fontsize=40:fontcolor=0xffcf5a:x=(w-tw)/2:y=${fimDica + 120}`);
-  filtros.push(`drawtext=fontfile=${FONTE}:text='veloxisit.com.br/livros':fontsize=44:fontcolor=0xff6a3d:x=(w-tw)/2:y=${fimDica + 210}`);
+  const titulo = linhasDoCard(String(livro.title), 34)[0] + (String(livro.title).length > 34 ? '…' : '');
+  filtros.push(`drawtext=fontfile=${FONTE}:textfile=${arquivo('t', titulo)}:fontsize=40:fontcolor=0xffcf5a:x=(w-tw)/2:y=${fimDica + 120}`);
+  filtros.push(`drawtext=fontfile=${FONTE}:textfile=${arquivo('u', 'veloxisit.com.br/livros')}:fontsize=44:fontcolor=0xff6a3d:x=(w-tw)/2:y=${fimDica + 210}`);
   execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=0x0e0e1a:s=1080x1920:d=8',
     '-vf', filtros.join(','), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p',
     '-movflags', '+faststart', destino]);
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 async function main() {
@@ -77,7 +85,11 @@ async function main() {
   if (seco) { console.log(JSON.stringify({ livro: livro.title, dica, legenda }, null, 1)); return; }
 
   fs.mkdirSync(SAIDA, { recursive: true });
-  const nome = new Date().toISOString().slice(0, 10);
+  // Varias no mesmo dia formam fila (util enquanto a conta de nicho nao existe):
+  // 2026-09-18.mp4, 2026-09-18-2.mp4, ...
+  const hoje = new Date().toISOString().slice(0, 10);
+  let nome = hoje;
+  for (let i = 2; fs.existsSync(path.join(SAIDA, nome + '.mp4')); i++) nome = hoje + '-' + i;
   const video = path.join(SAIDA, nome + '.mp4');
   gerarVideo(dica, livro, video);
   const meta = { data: nome, livro: livro.title, slug: livro.slug, dica, legenda, first_comment: comentario, video };
