@@ -2138,11 +2138,21 @@ async function publishToHotmart(ebook, opts) {
       if(!numericId || !/^\d+$/.test(String(numericId))) throw new Error('No product ID after creation (got: '+numericId+')');
     }
     // Step 2: Upload cover image (skip if already done during wizard)
+    //
+    // 18/09/2026: pelo campo escondido da pagina de cadastro a Hotmart responde
+    // 200 e NAO grava ("metodo reportou sucesso mas a API diz que NAO entrou") —
+    // todo produto novo nascia sem capa e ainda gastava ~2 min por tentativa,
+    // duas vezes. Quem sobe de verdade e o scripts/capas_em_lote.js (POST
+    // /product/photo com data=File, de dentro da pagina logada), que roda na
+    // tarefa local a cada 15 min. Aqui so tenta se alguem pedir de proposito.
+    const tentarCapaNoCadastro = String(process.env.HOTMART_CAPA_NO_CADASTRO || '').toLowerCase() === 'true';
     let coverUploaded = wizardCoverUploaded || false;
-    if (!coverUploaded) {
+    if (coverUploaded) {
+      log.info('Cover already uploaded during wizard — skipping post-creation upload');
+    } else if (tentarCapaNoCadastro) {
       coverUploaded = await uploadCoverImage(page, numericId, coverPath);
     } else {
-      log.info('Cover already uploaded during wizard — skipping post-creation upload');
+      log.info('Cover: fica para o capas_em_lote (upload no cadastro nao grava)');
     }
     log.info('Cover uploaded: '+coverUploaded);
     // Step 3: Upload PDF content (non-fatal — context-destroyed errors during OAM redirects)
@@ -2163,7 +2173,7 @@ async function publishToHotmart(ebook, opts) {
     // Step 4: Finalizar cadastro
     const finalized=await finalizarCadastro(page,numericId);
     // Step 4b: Retry cover upload after finalization (product has been live for 60-120s now)
-    if (!coverUploaded && finalized && coverPath && fs.existsSync(coverPath)) {
+    if (tentarCapaNoCadastro && !coverUploaded && finalized && coverPath && fs.existsSync(coverPath)) {
       log.info('Cover not uploaded yet — retrying after finalization...');
       coverUploaded = await uploadCoverImage(page, numericId, coverPath);
       log.info('Cover retry after finalize: '+coverUploaded);
