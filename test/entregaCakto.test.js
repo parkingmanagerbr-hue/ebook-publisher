@@ -103,3 +103,11 @@ test('comissao fora da faixa da Cakto (1% a 95%) e trocada; valida fica (caso re
   assert.strictEqual(alvo({ ...base, affiliateCommission: '1.00' }, LINK, false, { afiliacao: true }).affiliateCommission, undefined);
   assert.strictEqual(alvo({ ...base, affiliateCommission: '95.00' }, LINK, false, { afiliacao: true }).affiliateCommission, undefined);
 });
+
+test('404 marca oferta inexistente e sai da fila; outro erro continua tentando', () => {
+  const { resultadoDoErro } = require('../scripts/entregaCakto');
+  const e404 = Object.assign(new Error('GET offers/x/: HTTP 404'), { status: 404 });
+  assert.strictEqual(resultadoDoErro(e404), 'oferta-inexistente');
+  assert.ok(resultadoDoErro(new Error('timeout')).startsWith('erro: timeout'));
+  assert.ok(resultadoDoErro(null).startsWith('erro: '));
+});

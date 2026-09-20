@@ -116,7 +116,7 @@ async function main() {
   }
 
   const limite = parseInt(arg('limite', '1'), 10);
-  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v4','ok-v4')").all().map(r => r.ebook_id));
+  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v4','ok-v4','oferta-inexistente')").all().map(r => r.ebook_id));
   const fila = comPdf.filter(e => !feitos.has(e.id)).slice(0, limite);
   const pausados = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado = 'pausado-sem-pdf'").all().map(r => r.ebook_id));
   const vistosSemPdf = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('pausado-sem-pdf','sem-pdf-nao-ativo')").all().map(r => r.ebook_id));
@@ -167,7 +167,7 @@ async function main() {
       }
     } catch (err) {
       cont.erro = (cont.erro || 0) + 1;
-      marca.run(e.id, null, 'erro: ' + String(err.message).slice(0, 120), Date.now());
+      marca.run(e.id, null, resultadoDoErro(err), Date.now());
       console.log('ERRO', e.cakto_product_id, err.message.slice(0, 160));
       if (err.cloudflare) { console.log('parando: Cloudflare/sessao'); break; }
       await dormir(PAUSA_MS * 3);
@@ -201,6 +201,16 @@ async function main() {
 /** Livro sem PDF: so pausa o que esta ATIVO (vendendo). Pura. */
 function acaoSemPdf(produto) {
   return produto.status === 'active' ? 'pausar' : 'nada';
+}
+
+/**
+ * Como registrar a falha. Oferta que nao existe mais (404) nao volta para a
+ * fila: em 20/09/2026 um mesmo produto deu 404 a cada meia hora, para sempre.
+ * Pura.
+ */
+function resultadoDoErro(err) {
+  if (err && err.status === 404) return 'oferta-inexistente';
+  return 'erro: ' + String(err && err.message).slice(0, 120);
 }
 
 /** Produto sem imagem e com capa em disco. Pura. */
@@ -241,6 +251,6 @@ function camposAlterados(antes, depois) {
   return [...chaves].filter(k => JSON.stringify((antes || {})[k]) !== JSON.stringify((depois || {})[k]));
 }
 
-module.exports = { planejar, alvo, acaoSemPdf, mesmoValor, COMISSAO_AFILIADO, camposAlterados, precisaImagem, PRODUTOR };
+module.exports = { planejar, alvo, resultadoDoErro, acaoSemPdf, mesmoValor, COMISSAO_AFILIADO, camposAlterados, precisaImagem, PRODUTOR };
 
 if (require.main === module) main().catch(e => { console.error('ERRO', e.message); process.exit(1); });
