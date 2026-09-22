@@ -14,12 +14,14 @@
  * Aqui so a decisao (pura): qual livro, qual trecho e qual texto. Quem
  * desenha o video e publica e o script que chama.
  */
-const NICHO = /financ|dinheiro|renda|divida|d[ií]vida|or[çc]amento|invest|aut[oô]nomo|freelanc|carreira|produtivid/i;
+const NICHO = /financ|dinheiro|renda|divida|d[ií]vida|or[çc]amento|aut[oô]nomo|freelanc|carreira|produtivid|organiza/i;
 
 // Fora do rodizio: recomendacao de investimento tem regra propria de
 // publicidade (CVM/CONAR) e nao e o que vendemos. Um post com "desvio padrao
 // dos retornos" de um livro de cripto entrou na fila em 18/09/2026.
-const SENSIVEL = /cripto|bitcoin|day ?trade|forex|op[çc][õo]es bin[áa]rias|a[çc][õo]es da bolsa|renda fixa|tesouro direto/i;
+// "fundo de" sozinho derrubava "Fundo de Emergência", que e o livro que mais
+// vendeu — e reserva de emergencia nao e recomendacao de investimento.
+const SENSIVEL = /cripto|bitcoin|day ?trade|forex|op[çc][õo]es bin[áa]rias|a[çc][õo]es da bolsa|renda fixa|tesouro direto|invest|fundo de investimento|fundo imobili|b[oô]lsa|venture|startup/i;
 
 /** Frases que servem de dica: praticas, do tamanho de um card. Pura. */
 function frasesUteis(texto, { min = 60, max = 180 } = {}) {

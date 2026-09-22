@@ -73,12 +73,20 @@ async function main() {
     "FROM ebooks e WHERE e.hotmart_product_id IS NOT NULL AND e.hotmart_product_id <> '' AND e.pdf_path IS NOT NULL"
   ).all().filter(l => fs.existsSync(l.pdf)).map(l => ({ ...l, slug: slugDoTitulo(l.title, l.pid) }));
 
-  const livro = escolherLivro(linhas, usados);
+  // Livro sem frase nova nao encerra o dia: tenta o proximo da fila. Em
+  // 22/09/2026 o passe terminou com "sem frase nova" e nao gerou post nenhum.
+  let livro = null, dica = null;
+  const tentados = new Map(usados);
+  for (let i = 0; i < 8 && !dica; i++) {
+    livro = escolherLivro(linhas, tentados);
+    if (!livro) break;
+    tentados.set(String(livro.id), Date.now());
+    const texto = await textoDoPdf(livro.pdf);
+    dica = frasesUteis(texto).find(f => !jaDitas.has(f)) || null;
+    if (!dica) console.log('sem frase nova em ' + String(livro.title).slice(0, 40) + ' — proximo livro');
+  }
   if (!livro) { console.log(JSON.stringify({ erro: 'nenhum livro elegivel' })); return; }
-
-  const texto = await textoDoPdf(livro.pdf);
-  const dica = frasesUteis(texto).find(f => !jaDitas.has(f));
-  if (!dica) { console.log(JSON.stringify({ livro: livro.id, erro: 'sem frase nova' })); return; }
+  if (!dica) { console.log(JSON.stringify({ erro: 'nenhum livro com frase nova' })); return; }
 
   const legenda = montarLegenda(livro, dica, BASE);
   const comentario = primeiroComentario(livro, BASE);

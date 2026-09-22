@@ -124,3 +124,17 @@ test('tema de investimento regulado fica fora do rodizio', () => {
   const ok = { id: 'o', title: 'Reduza suas dívidas', topic: 'financas', language: 'pt-BR', pdf: '/a.pdf', slug: 'o' };
   assert.strictEqual(escolherLivro([cripto, ok]).id, 'o');
 });
+
+test('livro de investimento nao entra no rodizio (regra de publicidade propria)', () => {
+  const inv = { id: 'i', title: 'Fundo de Startups para Investidores', topic: 'investimentos', language: 'pt-BR', pdf: '/a.pdf', slug: 'i' };
+  assert.strictEqual(escolherLivro([inv]), null);
+  const org = { id: 'o', title: 'Organização financeira para autônomos', topic: 'financas', language: 'pt-BR', pdf: '/a.pdf', slug: 'o' };
+  assert.strictEqual(escolherLivro([inv, org]).id, 'o');
+});
+
+test('"Fundo de Emergência" continua no rodizio (nao e investimento)', () => {
+  const fundo = { id: 'f', title: 'Fundo de Emergência para Autônomos', topic: 'financas', language: 'pt-BR', pdf: '/a.pdf', slug: 'f' };
+  assert.strictEqual(escolherLivro([fundo]).id, 'f');
+  const fundoInv = { id: 'g', title: 'Fundo de investimento imobiliário na prática', topic: 'financas', language: 'pt-BR', pdf: '/a.pdf', slug: 'g' };
+  assert.strictEqual(escolherLivro([fundoInv]), null);
+});
