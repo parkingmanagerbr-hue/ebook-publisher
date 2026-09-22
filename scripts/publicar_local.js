@@ -45,6 +45,8 @@ function rodarNoContainer(js, timeout) {
 
 /** E-books prontos que nunca foram ao Hotmart e ainda tem PDF em disco. */
 function buscarPendentes(limite) {
+  // Portugues primeiro: as 5 vendas reais ate 22/09/2026 foram todas de livros
+  // em pt-BR. O resto da fila continua, so depois.
   const saida = rodarNoContainer(`
     const D = require('better-sqlite3');
     const fs = require('fs');
@@ -64,7 +66,7 @@ function buscarPendentes(limite) {
       // Livro que falha sempre (ex.: japones com descricao curta em 16/09/2026)
       // ocupava metade de cada lote. Depois de ${MAX_TENTATIVAS} falhas sai da fila.
       "AND e.id NOT IN (SELECT ebook_id FROM hotmart_publicar_falha WHERE tentativas >= ${MAX_TENTATIVAS}) " +
-      "ORDER BY e.rowid DESC LIMIT ?"
+      "ORDER BY (CASE WHEN LOWER(COALESCE(e.language, '')) LIKE 'pt%' THEN 0 ELSE 1 END), e.rowid DESC LIMIT ?"
     ).all(${limite} * 10);
     // PORTAO: so publica com CAPA VIRAL em disco. Produto entra no marketplace
     // uma vez so — se subir com o placeholder cinza, fica competindo com um
