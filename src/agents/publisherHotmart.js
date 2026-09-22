@@ -281,7 +281,21 @@ async function createProduct(page, session, ebook) {
     }).catch(()=>null);
     if (ebookBtn) { log.info('eBook card t='+(i+1)+'s tag='+ebookBtn.tag+' text="'+ebookBtn.text+'"'); break; }
   }
-  if (!ebookBtn) throw new Error('eBook card not found after 90s -- wizard not rendered. URL: ' + page.url().slice(0,80));
+  if (!ebookBtn) {
+    // 22/09/2026: o wizard nao renderizava porque um AVISO DE TERMOS ficava por
+    // cima ("Nossos Termos foram atualizados... OK, Entendi"). Clicar nisso e
+    // aceitar termo novo na conta do dono, entao o robo NAO clica: avisa.
+    const aviso = await page.evaluate(() => {
+      const t = document.body.innerText || '';
+      return /Termos? (foram|foi) atualizad|Termo de Uso [ÉE]tico|pol[íi]tica de pagamentos/i.test(t)
+        && /OK, Entendi|Aceitar|Concordo/i.test(t);
+    }).catch(() => false);
+    if (aviso) {
+      throw new Error('AVISO_DE_TERMOS_BLOQUEANDO: a Hotmart esta mostrando o aviso de termos atualizados. ' +
+        'Um humano precisa abrir app.hotmart.com e clicar em "OK, Entendi" — aceitar termo nao e coisa de robo.');
+    }
+    throw new Error('eBook card not found after 90s -- wizard not rendered. URL: ' + page.url().slice(0,80));
+  }
 
   await page.mouse.click(ebookBtn.x, ebookBtn.y);
   log.info('eBook clicked');
