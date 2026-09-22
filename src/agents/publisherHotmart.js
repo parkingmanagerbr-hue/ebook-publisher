@@ -2177,6 +2177,25 @@ async function publishToHotmart(ebook, opts) {
       const created = await createProduct(page,session,{title,topic,description,coverPath,pdfPath,language:ebook.language});
       numericId = created.numericId; category = created.category; wizardCoverUploaded = created.wizardCoverUploaded;
       if(!numericId || !/^\d+$/.test(String(numericId))) throw new Error('No product ID after creation (got: '+numericId+')');
+      // CONFERE O NOME antes de mandar arquivo (22/09/2026): quando o cadastro
+      // nao captura o id, a busca de reserva devolvia OUTRO produto da conta —
+      // tres livros diferentes tiveram o PDF enviado para o 8452258
+      // ("Orcamento de Viagem de Luxo"). Produto errado = comprador recebe o
+      // livro errado.
+      const nomeNoHotmart = await page.evaluate(async (id, tok) => {
+        try {
+          const r = await fetch('https://api-product.vulcano.hotmart.com/product/v1/product/' + id + '/basic-information',
+            { headers: { authorization: 'Bearer ' + tok } });
+          if (!r.ok) return null;
+          const j = await r.json();
+          return j && (j.name || (j.product && j.product.name)) || null;
+        } catch (e) { return null; }
+      }, numericId, session && session.jwt ? session.jwt : (await page.evaluate(() => localStorage.getItem('astrobox-token') || localStorage.getItem('token') || ''))).catch(() => null);
+      const normal = t => String(t || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+      if (nomeNoHotmart && normal(nomeNoHotmart) !== normal(title)) {
+        throw new Error('PRODUTO_ERRADO: id ' + numericId + ' e "' + String(nomeNoHotmart).slice(0, 40) +
+          '", nao "' + String(title).slice(0, 40) + '" — nada enviado');
+      }
     }
     // Step 2: Upload cover image (skip if already done during wizard)
     //
