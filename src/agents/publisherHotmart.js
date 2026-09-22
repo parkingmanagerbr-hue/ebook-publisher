@@ -291,10 +291,37 @@ async function createProduct(page, session, ebook) {
         && /OK, Entendi|Aceitar|Concordo/i.test(t);
     }).catch(() => false);
     if (aviso) {
-      throw new Error('AVISO_DE_TERMOS_BLOQUEANDO: a Hotmart esta mostrando o aviso de termos atualizados. ' +
-        'Um humano precisa abrir app.hotmart.com e clicar em "OK, Entendi" — aceitar termo nao e coisa de robo.');
+      // O dono autorizou fechar este aviso em 22/09/2026 (ele reaparece a cada
+      // aba nova, entao pedir clique humano toda vez pararia a publicacao).
+      const alvo = await page.evaluate(() => {
+        const e = [...document.querySelectorAll('button, a, [role=button], hc-button-2_11_14')]
+          .find(x => /OK,\s*Entendi|Entendi|Aceitar/i.test((x.innerText || '').trim()));
+        if (!e) return null;
+        e.scrollIntoView({ block: 'center' });
+        const r = e.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      }).catch(() => null);
+      if (alvo) {
+        await page.mouse.click(alvo.x, alvo.y);
+        log.info('Aviso de termos fechado (autorizado pelo dono) — recarregando o wizard');
+        await sleep(2500);
+        await page.goto('https://app.hotmart.com/products/add', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+        await sleep(6000);
+        ebookBtn = await page.evaluate(() => {
+          const b = [...document.querySelectorAll('button, a, [role=button], div')]
+            .find(x => /Cadastrar eBook/i.test((x.innerText || '').trim()));
+          if (!b) return null;
+          const r = b.getBoundingClientRect();
+          return r.width > 0 ? { x: r.left + r.width / 2, y: r.top + r.height / 2, text: 'Cadastrar eBook', tag: b.tagName } : null;
+        }).catch(() => null);
+      }
+      if (!ebookBtn) {
+        throw new Error('AVISO_DE_TERMOS_BLOQUEANDO: nao consegui fechar o aviso de termos da Hotmart.');
+      }
     }
-    throw new Error('eBook card not found after 90s -- wizard not rendered. URL: ' + page.url().slice(0,80));
+    if (!ebookBtn) {
+      throw new Error('eBook card not found after 90s -- wizard not rendered. URL: ' + page.url().slice(0,80));
+    }
   }
 
   await page.mouse.click(ebookBtn.x, ebookBtn.y);
