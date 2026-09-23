@@ -12,6 +12,10 @@ const path = require('path');
 const fs = require('fs');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Decisoes puras do cadastro (qual botao abre as categorias, que erro importa):
+// a Amazon muda o rotulo dos botoes sem aviso, entao a regra fica testada.
+const { melhorBotaoDeCategoria, errosQueImportam } = require('./kdpRegras');
+
 let log;
 try {
   const { createLogger } = require('../core/logger');
@@ -1127,31 +1131,30 @@ async function publishToAmazon(ebook) {
       // and sidebar links (Adicionar à série etc). Button must be in main form area.
       // Use page.evaluate instead of page.$$ to stay within the main frame context and avoid
       // detached-frame errors from CKEditor iframes still in Puppeteer's frame registry.
-      const catBtnPos = await page.evaluate(() => {
+      // A Amazon troca o rotulo do botao sem aviso: em 23/09/2026 "Adicionar
+      // categoria" virou "Editar categorias" (id categories-modal-button), o
+      // robo nao achou e o publish morreu em "Adicione uma categoria para seu
+      // livro". A decisao de qual elemento serve mora em kdpRegras (testada).
+      const candidatosCategoria = await page.evaluate(() => {
         const sel = 'button, a, [role="button"], span.a-button-text';
-        const candidates = Array.from(document.querySelectorAll(sel));
-        for (const el of candidates) {
-          const t = (el.textContent || '').toLowerCase().trim();
+        return Array.from(document.querySelectorAll(sel)).map((el, i) => {
           const r = el.getBoundingClientRect();
-          const vis = r.width > 0 && r.height > 0 && r.height < 80;
-          const isToast = t.includes('idioma') || t.includes('language') || t.includes('série');
-          const isMainArea = r.x > 200;
-          const childCount = el.children.length;
-          if (vis && childCount <= 3 && isMainArea && !isToast &&
-              (t === 'adicionar categoria' || t === 'add a category' ||
-               t.includes('adicionar categoria') || t.includes('add a category') ||
-               (t.includes('escolha') && t.includes('categor')) ||
-               (t.includes('choose') && t.includes('categor')))) {
-            return { x: r.left + r.width / 2, y: r.top + r.height / 2, t: t.slice(0, 50) };
-          }
-        }
-        return null;
-      }).catch(() => null);
+          return {
+            i, id: el.id || '', tag: el.tagName,
+            texto: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60),
+            x: r.left + r.width / 2, y: r.top + r.height / 2,
+            visivel: r.width > 0 && r.height > 0 && r.height < 80,
+            naArea: r.x > 200, filhos: el.children.length,
+          };
+        }).filter(c => c.visivel && c.naArea && c.filhos <= 3
+          && !/idioma|language|s[ée]rie/i.test(c.texto));
+      }).catch(() => []);
+      const catBtnPos = melhorBotaoDeCategoria(candidatosCategoria);
       let catBtnClicked = false;
       if (catBtnPos) {
         await page.mouse.click(catBtnPos.x, catBtnPos.y);
         catBtnClicked = true;
-        log.info('Category button clicked: "' + catBtnPos.t + '"');
+        log.info('Category button clicked: "' + catBtnPos.texto + '" (id=' + (catBtnPos.id || '-') + ')');
       }
       // --- legacy handle-based loop removed (caused detached-frame crash) ---
       // allHandles loop was replaced by page.evaluate above
@@ -2269,6 +2272,10 @@ async function publishToAmazon(ebook) {
         return { errors: [...new Set(errors)].slice(0, 12), flagged: [...new Set(flagged)].slice(0, 8) };
       }).catch(() => ({ errors: [], flagged: [] }));
       const step = finalUrl.includes('/pricing') ? 'pricing' : 'details';
+      // O KDP devolve dezenas de avisos de tela junto com o erro de verdade:
+      // sem filtrar, a causa (ex.: "Adicione uma categoria") some no meio.
+      const importam = errosQueImportam(diag.errors);
+      if (importam.length) log.error('Publish bloqueado — causa: ' + importam.join(' | ').slice(0, 300));
       log.warn('Publish blocked on /' + step + '. KDP errors: ' + JSON.stringify(diag.errors) +
                ' | flagged fields: ' + JSON.stringify(diag.flagged));
     }
