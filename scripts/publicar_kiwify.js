@@ -19,6 +19,7 @@ const puppeteer = require('puppeteer-core');
 const { publicarNaKiwify, credenciais } = require('../src/agents/publisherKiwify');
 const { portasCandidatas, escolherPorta } = require('../src/core/navegadorLocal');
 const { ehLimiteDeTaxa } = require('../src/agents/kiwifyRegras');
+const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 
 let log;
 try { log = require('../src/core/logger').createLogger('publicarKiwify'); }
@@ -62,13 +63,14 @@ function buscarPendentes(limite) {
     const colunas = db.prepare("PRAGMA table_info(ebooks)").all().map(c => c.name);
     if (!colunas.includes('kiwify_product_id')) db.prepare('ALTER TABLE ebooks ADD COLUMN kiwify_product_id TEXT').run();
     if (!colunas.includes('kiwify_url')) db.prepare('ALTER TABLE ebooks ADD COLUMN kiwify_url TEXT').run();
-    const rows = db.prepare(
-      "SELECT id, title, topic, description, language, price FROM ebooks " +
+    // Dois grupos separados: so "pt primeiro" enchia a lista de portugues e o
+    // rodizio de idioma nunca via um livro estrangeiro.
+    const base = "SELECT id, title, topic, description, language, price FROM ebooks " +
       "WHERE (kiwify_product_id IS NULL OR kiwify_product_id = '') AND pdf_path IS NOT NULL " +
-      "AND id NOT IN (SELECT ebook_id FROM kiwify_recusado) " +
-      "AND title IS NOT NULL AND title <> '' " +
-      "ORDER BY (CASE WHEN LOWER(COALESCE(language,'')) LIKE 'pt%' THEN 0 ELSE 1 END), rowid DESC LIMIT ${Number(limite) || 3}"
-    ).all();
+      "AND id NOT IN (SELECT ebook_id FROM kiwify_recusado) AND title IS NOT NULL AND title <> '' ";
+    const teto = ${(Number(limite) || 3) * 4};
+    const rows = db.prepare(base + "AND LOWER(COALESCE(language,'')) LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all()
+      .concat(db.prepare(base + "AND LOWER(COALESCE(language,'')) NOT LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all());
     // O link de entrega e assinado AQUI: o segredo (ENTREGA_SECRET) so existe
     // no servidor. A maquina local nunca ve a chave, so o link pronto.
     let urlEntrega = null;
@@ -123,8 +125,12 @@ function responde(porta) {
 async function principal() {
   const limite = Number(arg('limite', '3'));
   const seco = temFlag('dry-run');
-  const pendentes = buscarPendentes(limite);
-  log.info('pendentes para a Kiwify: ' + pendentes.length + (seco ? ' (dry-run)' : ''));
+  // Rodizio de idioma: parte das vagas vai para o catalogo estrangeiro, que
+  // ficava parado atras de 6.568 livros em portugues.
+  const candidatos = buscarPendentes(limite);
+  const rodada = Math.floor(Date.now() / 1800000); // gira a cada meia hora
+  const pendentes = filaDaRodada(candidatos, limite, { fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4), rodada });
+  log.info('pendentes para a Kiwify: ' + pendentes.length + ' (' + resumoDaFila(pendentes) + ')' + (seco ? ' (dry-run)' : ''));
   if (!pendentes.length) return { publicados: 0, falhas: 0, recusados: 0 };
 
   const porta = await escolherPorta(responde, portasCandidatas(process.env));

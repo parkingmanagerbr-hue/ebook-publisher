@@ -113,7 +113,27 @@ function ehBotaoDeAviso(texto) {
   return /^(OK,?\s*)?(Entendi|Aceitar|Concordo)$/i.test(String(texto || '').replace(/\s+/g, ' ').trim());
 }
 
+/**
+ * Como chamar o resultado de uma publicacao. Pura.
+ *
+ * O log dizia "FALHA" quando o produto TINHA sido criado e so faltava a
+ * finalizacao (rascunho): quem lia o log ia procurar defeito onde nao havia, e
+ * pior, podia mandar publicar de novo e duplicar o produto.
+ */
+function rotuloDoResultado(r) {
+  if (r && r.url) return 'OK';
+  if (r && r.hotmartProductId) return 'RASCUNHO';
+  return 'FALHA';
+}
+
+/** Explicacao curta do resultado, para a mesma linha de log. Pura. */
+function detalheDoResultado(r) {
+  if (r && r.url) return String(r.url);
+  if (r && r.hotmartProductId) return 'produto ' + String(r.hotmartProductId) + ' criado, aguardando finalizacao';
+  return umaLinha((r && r.error) || 'sem url', 80);
+}
+
 module.exports = {
-  norm, getCategoryPT, digitosDoPreco, idProdutoDaUrl, TECH_KW, HEALTH_KW, FINANCE_KW, BUSINESS_KW,
+  norm, rotuloDoResultado, detalheDoResultado, getCategoryPT, digitosDoPreco, idProdutoDaUrl, TECH_KW, HEALTH_KW, FINANCE_KW, BUSINESS_KW,
   nomeComparavel, mesmoProduto, motivoProdutoErrado, umaLinha, ehAvisoDeTermos, ehBotaoDeAviso,
 };

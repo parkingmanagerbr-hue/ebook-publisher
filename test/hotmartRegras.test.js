@@ -145,3 +145,21 @@ test('botao do aviso: so o que fecha, nao "Aceitar pagamento"', () => {
   for (const t of ['OK, Entendi', 'ok entendi', 'Entendi', 'Aceitar', 'Concordo']) assert.strictEqual(ehBotaoDeAviso(t), true, t);
   for (const t of ['Aceitar pagamento por Pix', 'Cadastrar eBook', 'Não concordo com nada', '', null]) assert.strictEqual(ehBotaoDeAviso(t), false, String(t));
 });
+
+// ── Rotulo do resultado da publicacao ───────────────────────────────────────
+const { rotuloDoResultado, detalheDoResultado } = require('../src/agents/hotmartRegras');
+
+test('rascunho nao e falha: o produto existe e so falta finalizar', () => {
+  assert.strictEqual(rotuloDoResultado({ url: 'https://hotmart.com/product/1', hotmartProductId: '1' }), 'OK');
+  assert.strictEqual(rotuloDoResultado({ hotmartProductId: '8419962' }), 'RASCUNHO');
+  assert.strictEqual(rotuloDoResultado({ error: 'Pricing save timeout' }), 'FALHA');
+  assert.strictEqual(rotuloDoResultado(null), 'FALHA');
+  assert.strictEqual(rotuloDoResultado({}), 'FALHA');
+});
+
+test('o detalhe explica o que aconteceu, em uma linha', () => {
+  assert.strictEqual(detalheDoResultado({ url: 'https://hotmart.com/product/1' }), 'https://hotmart.com/product/1');
+  assert.strictEqual(detalheDoResultado({ hotmartProductId: '8419962' }), 'produto 8419962 criado, aguardando finalizacao');
+  assert.strictEqual(detalheDoResultado({ error: 'wizard\nnot rendered' }), 'wizard not rendered', 'sem quebra de linha no log');
+  assert.strictEqual(detalheDoResultado(null), 'sem url');
+});

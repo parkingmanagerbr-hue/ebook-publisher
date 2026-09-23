@@ -18,6 +18,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { rotuloDoResultado, detalheDoResultado } = require('../src/agents/hotmartRegras');
+const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
@@ -55,21 +57,24 @@ function buscarPendentes(limite) {
     const db = new D('/app/data/metrics.db');
     db.pragma('busy_timeout = 5000');
     db.prepare('CREATE TABLE IF NOT EXISTS hotmart_publicar_falha (ebook_id TEXT PRIMARY KEY, tentativas INTEGER, erro TEXT, quando INTEGER)').run();
-    const rows = db.prepare(
+    // Dois grupos de idioma, consultados separado: com "pt primeiro" numa
+    // consulta so, os 1.156 livros em portugues elegiveis enchiam o lote e os
+    // 362 estrangeiros prontos nunca chegavam nele (medido em 23/09/2026).
+    const CONDICOES =
       "SELECT e.id, e.title, e.subtitle, e.topic, e.description, e.pdf_path, e.cover_path, e.price, e.language " +
       "FROM ebooks e WHERE (e.hotmart_url IS NULL OR e.hotmart_url = '') " +
       "AND (e.hotmart_product_id IS NULL OR e.hotmart_product_id = '') " +
       // Nao republicar titulo que ja tem produto no ar: auditoria de 02/09/2026
-      // achou 51 titulos duplicados no Hotmart, um com DEZOITO copias. A causa e
-      // o reciclo de topicos gerando o mesmo titulo, sem ninguem checar.
+      // achou 51 titulos duplicados no Hotmart, um com DEZOITO copias.
       "AND NOT EXISTS (SELECT 1 FROM ebooks d WHERE d.title = e.title " +
       "  AND d.hotmart_product_id IS NOT NULL AND d.hotmart_product_id <> '') " +
+      // PORTAO: so publica com PDF e CAPA VIRAL em disco.
       "AND e.pdf_path IS NOT NULL AND e.cover_path IS NOT NULL AND e.cover_path <> '' " +
-      // Livro que falha sempre (ex.: japones com descricao curta em 16/09/2026)
-      // ocupava metade de cada lote. Depois de ${MAX_TENTATIVAS} falhas sai da fila.
-      "AND e.id NOT IN (SELECT ebook_id FROM hotmart_publicar_falha WHERE tentativas >= ${MAX_TENTATIVAS}) " +
-      "ORDER BY (CASE WHEN LOWER(COALESCE(e.language, '')) LIKE 'pt%' THEN 0 ELSE 1 END), e.rowid DESC LIMIT ?"
-    ).all(${limite} * 10);
+      // Livro que falha sempre saia da fila depois de ${MAX_TENTATIVAS} tentativas.
+      "AND e.id NOT IN (SELECT ebook_id FROM hotmart_publicar_falha WHERE tentativas >= ${MAX_TENTATIVAS}) ";
+    const teto = ${limite} * 6;
+    const rows = db.prepare(CONDICOES + "AND LOWER(COALESCE(e.language, '')) LIKE 'pt%' ORDER BY e.rowid DESC LIMIT ?").all(teto)
+      .concat(db.prepare(CONDICOES + "AND LOWER(COALESCE(e.language, '')) NOT LIKE 'pt%' ORDER BY e.rowid DESC LIMIT ?").all(teto));
     // PORTAO: so publica com CAPA VIRAL em disco. Produto entra no marketplace
     // uma vez so — se subir com o placeholder cinza, fica competindo com um
     // icone generico e nao ha segunda impressao. Melhor nao publicar hoje do
@@ -103,8 +108,10 @@ function buscarPendentes(limite) {
           }
           continue;
         }
+        // Devolve todos os aprovados (a consulta ja limita o tamanho): quem
+        // escolhe o idioma da rodada e o rodizio do lado de ca (filaIdioma).
+        // Com o corte aqui, so os aprovados em portugues chegavam ao lote.
         ok.push(r);
-        if (ok.length >= ${limite}) break;
       }
       console.log(JSON.stringify(ok));
     })();
@@ -155,7 +162,15 @@ async function main() {
   const dryRun = process.argv.includes('--dry-run');
 
   console.log('consultando a fila no VPS...');
-  const itens = buscarPendentes(limite);
+  const candidatos = buscarPendentes(limite);
+  // Rodizio de idioma: parte das vagas para o catalogo estrangeiro (3.641
+  // livros que ficavam atras dos 6.568 em portugues).
+  const itens = filaDaRodada(candidatos, limite, {
+    fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4),
+    rodada: Math.floor(Date.now() / 1800000),
+  });
+  if (candidatos.length) console.log('candidatos: ' + resumoDaFila(candidatos));
+  if (itens.length) console.log('fila da rodada: ' + resumoDaFila(itens));
   if (!itens.length) { console.log('nada pendente'); return; }
   console.log(`${itens.length} e-books a publicar`);
 
