@@ -21,7 +21,9 @@ const { execFileSync } = require('child_process');
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
-const CDP = process.env.HOTMART_CDP || 'http://127.0.0.1:9223';
+const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
+// A porta do Chrome muda quando o dono reabre o navegador: descobrir, nao supor.
+let CDP = process.env.HOTMART_CDP || null;
 const TMP = path.join(os.tmpdir(), 'publicar-hotmart');
 const MAX_TENTATIVAS = 3;
 
@@ -164,7 +166,7 @@ async function main() {
 
   const puppeteer = require('puppeteer');
   const { publishToHotmart } = require('../src/agents/publisherHotmart');
-  const browser = await puppeteer.connect({ browserURL: CDP, defaultViewport: { width: 1280, height: 900 } });
+  const browser = await puppeteer.connect({ browserURL: (CDP = CDP || await urlCdpObrigatoria()), defaultViewport: { width: 1280, height: 900 } });
 
   let ok = 0;
   const t0 = Date.now();

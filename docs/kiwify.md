@@ -82,6 +82,19 @@ Ou seja: `id`, `created_at`, `club`, `gateway_type`, `soft_ban`,
 em `kiwifyRegras.corpoDeAtualizacao` — com PUT assim a resposta é
 `{"product_updated":true}`.
 
+## Limite de ritmo (medido em 23/09/2026)
+
+A conta estrangula a criação de produtos. Depois de ~37 produtos no mesmo dia,
+**toda** chamada (inclusive `GET /v1/products`) passou a responder
+`429 Rate limit exceeded`. O robô espera 5s, 15s e 45s, faz pausa de 6s entre
+livros e **para o lote depois de 5 estrangulamentos seguidos** — retomar no dia
+seguinte é mais rápido do que insistir.
+
+Recusa de conteúdo é outra coisa: `400 {"error":"ProductNotAllowed","keyword":"..."}`.
+Não adianta repetir — o livro sai da fila (tabela `kiwify_recusado`). Já houve
+falso positivo: um livro sobre bem-estar escolar acusado pela palavra "casino",
+que não aparece em nenhum campo enviado.
+
 ## Entrega do PDF (resolvido sem upload)
 
 O `GET /v1/products/{id}` **esconde** categoria, garantia e `approved_url`; use

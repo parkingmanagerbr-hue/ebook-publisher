@@ -23,7 +23,9 @@ const { execFileSync } = require('child_process');
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
-const CDP = process.env.HOTMART_CDP || 'http://127.0.0.1:9223';
+const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
+// A porta do Chrome muda quando o dono reabre o navegador: descobrir, nao supor.
+let CDP = process.env.HOTMART_CDP || null;
 const DESTINO = '/app/data/hotmart_access_token.txt';
 
 /** Um JWT utilizavel: tres partes e `exp` no futuro. */
@@ -46,7 +48,7 @@ function validade(t) {
 
 async function main() {
   const puppeteer = require('puppeteer');
-  const browser = await puppeteer.connect({ browserURL: CDP });
+  const browser = await puppeteer.connect({ browserURL: (CDP = CDP || await urlCdpObrigatoria()) });
   let token = null;
   try {
     for (const p of await browser.pages()) {
