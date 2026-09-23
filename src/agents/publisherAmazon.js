@@ -14,7 +14,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Decisoes puras do cadastro (qual botao abre as categorias, que erro importa):
 // a Amazon muda o rotulo dos botoes sem aviso, entao a regra fica testada.
-const { melhorBotaoDeCategoria, errosQueImportam } = require('./kdpRegras');
+const { melhorBotaoDeCategoria, errosQueImportam, precoDoMercado, royaltyPara } = require('./kdpRegras');
 
 let log;
 try {
@@ -2138,32 +2138,42 @@ async function publishToAmazon(ebook) {
     }).catch(() => {});
     await sleep(300);
 
-    // Royalty: 35% (compatible with all prices, no KDP Select enrollment required)
-    await page.evaluate(() => {
-      const radios = document.querySelectorAll('input[type="radio"]');
+    // Royalty pela FAIXA do preco: 70% so vale entre US$ 2,99 e 9,99 — marcar
+    // 70% fora da faixa (ou 35% dentro dela) faz a pagina recusar ou pagar menos
+    // do que poderia. A escolha vem de kdpRegras (testada).
+    const faixaRoyalty = royaltyPara(parseFloat(process.env.KDP_PRICE_USD || '2.99'));
+    const royaltyMarcado = await page.evaluate(alvo => {
+      const radios = [...document.querySelectorAll('input[type="radio"]')];
+      const querido = alvo === '70_PERCENT' ? '70' : '35';
       for (const r of radios) {
-        const v = (r.value || r.id || '').toLowerCase();
-        const lbl = (r.labels?.[0]?.textContent || r.closest('label')?.textContent || '').toLowerCase();
-        if (v.includes('35') || r.id?.toLowerCase().includes('35') || lbl.includes('35%')) {
-          r.click(); break;
-        }
+        const v = String(r.value || r.id || '');
+        const lbl = (r.labels?.[0]?.textContent || r.closest('label')?.textContent || '');
+        if (v.includes(querido) || lbl.includes(querido + '%')) { r.click(); return v || lbl.slice(0, 20); }
       }
-    }).catch(() => {});
+      return null;
+    }, faixaRoyalty).catch(() => null);
+    log.info('Royalty: ' + faixaRoyalty + (royaltyMarcado ? ' (marcado: ' + String(royaltyMarcado).slice(0, 20) + ')' : ' — radio nao encontrado'));
     await sleep(300);
 
     // Price in USD — KDP price inputs are type="text" and appear AFTER ~200 territory checkboxes
     // so selector-based fillField never reaches them (sliced at 25). Use evaluate to find all text inputs.
-    const kdpMinUsd = parseFloat(process.env.KDP_PRICE_USD || '0.99');
-    const priceUsd = Math.max(0.99, kdpMinUsd).toFixed(2);
+    // Preco base em dolar. 2,99 e o piso da faixa de 70% de royalty (0,99 so
+    // rende 35%): em 23/09/2026 a tela recusou o lote com "Defina um preco
+    // sugerido entre $0,99-$200,00" e "multiplos de 1 INR" porque a tabela era
+    // fixa e incoerente com o preco base. Agora cada mercado sai de kdpRegras.
+    const kdpUsd = parseFloat(process.env.KDP_PRICE_USD || '2.99');
+    const priceUsd = (Number.isFinite(kdpUsd) && kdpUsd >= 0.99 ? kdpUsd : 2.99).toFixed(2);
 
-    // Preço US no formato VÍRGULA via TECLADO — só assim o KDP dispara a auto-conversão
-    // "Com base em Amazon.com" que preenche os outros 12 mercados. (native-setter + ponto NÃO
-    // dispara → mercados vazios → publish bloqueado.)
-    // Preenche TODOS os 13 mercados explicitamente (vírgula; JP/IN inteiros — exigência das moedas).
-    // Não confiar na auto-conversão: ela gera IN/JP com decimais → "múltiplos de 1 INR/JPY" bloqueia.
-    const priceComma = priceUsd.replace('.', ',');
-    const PRICES = { US: priceComma, UK: '3,99', DE: '4,49', FR: '4,49', ES: '4,49', IT: '4,49',
-                     NL: '4,49', JP: '750', CA: '6,49', MX: '99', AU: '7,99', IN: '249', BR: '14,99' };
+    // Preco US no formato VIRGULA via TECLADO — so assim o KDP dispara a
+    // auto-conversao "Com base em Amazon.com". Mesmo assim os demais mercados
+    // sao preenchidos explicitamente: a conversao gera decimais em INR/JPY, que
+    // a Amazon recusa.
+    const MERCADOS = ['US', 'UK', 'DE', 'FR', 'ES', 'IT', 'NL', 'JP', 'CA', 'MX', 'AU', 'IN', 'BR'];
+    const PRICES = {};
+    for (const mk of MERCADOS) {
+      const v = precoDoMercado(mk, priceUsd);
+      if (v) PRICES[mk] = v;
+    }
     const digitar = async (mk, val) => {
       const h = await page.evaluateHandle((m) =>
         [...document.querySelectorAll('input')].find(i => (i.name || '').includes('[' + m + '][price_vat_inclusive]') && i.type === 'text') || null, mk);
@@ -2208,7 +2218,7 @@ async function publishToAmazon(ebook) {
       [...document.querySelectorAll('input')]
         .filter(i => i.type === 'text' && /\[([A-Z]{2})\]\[price_vat_inclusive\]/.test(i.name || ''))
         .map(i => ((i.name.match(/\[([A-Z]{2})\]\[price_vat_inclusive\]/) || [])[1]) + '=' + i.value));
-    log.info('Preços (vírgula, 13 mercados): preenchidos ' + filledCount + '/13 | final: ' + estado.join(' '));
+    log.info('Precos (base US$ ' + priceUsd + '): preenchidos ' + filledCount + '/' + MERCADOS.length + ' | final: ' + estado.join(' '));
     await sleep(1500);
 
     // Verify auto-conversion populated other marketplaces; if not, the publish will be blocked.

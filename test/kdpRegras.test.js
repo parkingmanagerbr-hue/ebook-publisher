@@ -70,3 +70,39 @@ test('candidato sem tag definida ainda serve de ultimo recurso', () => {
   const r = melhorBotaoDeCategoria([{ texto: 'Editar categorias' }]);
   assert.deepStrictEqual(r, { texto: 'Editar categorias' });
 });
+
+// ── Preco por mercado (o publish travava em "Use um formato de preco de 0,00") ──
+const { mercadoDoCampo, precoDoMercado, royaltyPara } = require('../src/agents/kdpRegras');
+
+test('o mercado sai do name do campo (o id vem vazio, por isso preenchia 0 de 13)', () => {
+  assert.strictEqual(mercadoDoCampo('data[digital][channels][amazon][US][price_vat_inclusive]'), 'US');
+  assert.strictEqual(mercadoDoCampo('data[digital][channels][amazon][IN][price_vat_inclusive]'), 'IN');
+  assert.strictEqual(mercadoDoCampo('data[title]'), null);
+  assert.strictEqual(mercadoDoCampo(null), null);
+});
+
+test('India e Japao sem centavos; o resto com virgula', () => {
+  assert.strictEqual(precoDoMercado('US', 2.99), '2,99');
+  assert.strictEqual(precoDoMercado('IN', 2.99), '249', 'multiplo de 1 INR, como o KDP exige');
+  assert.strictEqual(precoDoMercado('JP', 2.99), '443');
+  assert.strictEqual(precoDoMercado('DE', 2.99), '4,49');
+  assert.strictEqual(precoDoMercado('BR', 2.99), '14,95');
+  assert.ok(!precoDoMercado('UK', 2.99).includes('.'), 'ponto decimal e recusado pelo KDP');
+});
+
+test('mercado desconhecido e preco invalido nao inventam valor', () => {
+  assert.strictEqual(precoDoMercado('ZZ', 2.99), null);
+  assert.strictEqual(precoDoMercado('', 2.99), null);
+  assert.strictEqual(precoDoMercado('US', 0), '2,99', 'preco zero cai no padrao');
+  assert.strictEqual(precoDoMercado('US', 'abc'), '2,99');
+  assert.strictEqual(precoDoMercado('us', 9.99), '9,99', 'caixa do mercado nao importa');
+});
+
+test('royalty: 70% so vale na faixa que a Amazon permite', () => {
+  assert.strictEqual(royaltyPara(2.99), '70_PERCENT');
+  assert.strictEqual(royaltyPara(9.99), '70_PERCENT');
+  assert.strictEqual(royaltyPara(0.99), '35_PERCENT');
+  assert.strictEqual(royaltyPara(10), '35_PERCENT');
+  assert.strictEqual(royaltyPara('x'), '35_PERCENT');
+  assert.strictEqual(royaltyPara(), '70_PERCENT', 'o padrao do projeto e 2,99');
+});

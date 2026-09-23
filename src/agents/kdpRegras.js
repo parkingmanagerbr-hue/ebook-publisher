@@ -54,4 +54,42 @@ function errosQueImportam(lista) {
     .filter(t => !RUIDO.some(r => r.test(t)));
 }
 
-module.exports = { ehBotaoDeCategoria, melhorBotaoDeCategoria, errosQueImportam };
+/**
+ * Preco por mercado. O campo do KDP e `data[digital][channels][amazon][XX]
+ * [price_vat_inclusive]` (id vazio — por isso a busca antiga preenchia 0 de 13).
+ * India e Japao nao aceitam centavos; os demais usam VIRGULA decimal.
+ * Fatores tirados da propria tela do KDP (auto-conversao a partir do dolar). Pura.
+ */
+const FATOR = { US: 1, UK: 1.33, DE: 1.5, FR: 1.5, ES: 1.5, IT: 1.5, NL: 1.5, CA: 2.17, AU: 2.67, BR: 5, MX: 33.1, IN: 83.3, JP: 148 };
+const SEM_CENTAVOS = new Set(['IN', 'JP']);
+
+/** Codigo do mercado a partir do name do campo, ou null. Pura. */
+function mercadoDoCampo(nome) {
+  const m = String(nome || '').match(/channels\]\[amazon\]\[([A-Z]{2})\]/);
+  return m ? m[1] : null;
+}
+
+/** Valor a digitar naquele mercado, no formato que o KDP aceita. Pura. */
+function precoDoMercado(mercado, precoUSD = 2.99) {
+  const base = Number(precoUSD);
+  const usd = Number.isFinite(base) && base > 0 ? base : 2.99;
+  const fator = FATOR[String(mercado || '').toUpperCase()];
+  if (!fator) return null;
+  const v = usd * fator;
+  if (SEM_CENTAVOS.has(String(mercado).toUpperCase())) return String(Math.round(v));
+  return v.toFixed(2).replace('.', ',');
+}
+
+/**
+ * Faixa de royalty: 70% exige preco entre US$ 2,99 e US$ 9,99; fora disso, a
+ * Amazon so aceita 35% e recusa a pagina se o radio estiver errado. Pura.
+ */
+function royaltyPara(precoUSD = 2.99) {
+  const v = Number(precoUSD);
+  return Number.isFinite(v) && v >= 2.99 && v <= 9.99 ? '70_PERCENT' : '35_PERCENT';
+}
+
+module.exports = {
+  ehBotaoDeCategoria, melhorBotaoDeCategoria, errosQueImportam,
+  mercadoDoCampo, precoDoMercado, royaltyPara,
+};
