@@ -127,7 +127,10 @@ function corpoDeAtualizacao(base, livro, categoria) {
     checkout_color: b.checkout_color || '#2353ff',
     checkout_logo: b.checkout_logo || null,
     support_email: b.support_email || null,
-    approved_url: b.approved_url || '',
+    // Entrega: a Kiwify manda o comprador para esta URL depois da aprovacao.
+    // E o mesmo link assinado (HMAC) que a Cakto usa desde 15/09/2026 — o PDF
+    // sai do nosso servidor, nao vira link publico.
+    approved_url: livro.linkDeEntrega || b.approved_url || '',
     boleto_url: b.boleto_url || '',
     pixels: Array.isArray(b.pixels) ? b.pixels : [],
   };

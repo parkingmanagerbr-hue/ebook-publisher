@@ -58,6 +58,14 @@ function buscarPendentes(limite) {
       "AND title IS NOT NULL AND title <> '' " +
       "ORDER BY (CASE WHEN LOWER(COALESCE(language,'')) LIKE 'pt%' THEN 0 ELSE 1 END), rowid DESC LIMIT ${Number(limite) || 3}"
     ).all();
+    // O link de entrega e assinado AQUI: o segredo (ENTREGA_SECRET) so existe
+    // no servidor. A maquina local nunca ve a chave, so o link pronto.
+    let urlEntrega = null;
+    try { urlEntrega = require('/app/src/core/entrega').urlEntrega; } catch (e) {}
+    for (const r of rows) {
+      try { r.link_entrega = urlEntrega ? urlEntrega(r.id) : ''; }
+      catch (e) { r.link_entrega = ''; r.sem_entrega = String(e.message).slice(0, 80); }
+    }
     console.log('@@' + JSON.stringify(rows));
   `);
   const linha = saida.split('\n').find(l => l.startsWith('@@'));
@@ -100,8 +108,10 @@ async function principal() {
       topic: livro.topic,
       preco: livro.price || 5,
       paginaDeVendas: VITRINE + slug(livro.title) + '/',
+      linkDeEntrega: livro.link_entrega || '',
     };
-    if (seco) { log.info('[dry-run] publicaria "' + umaLinha(livro.title) + '"'); continue; }
+    if (!dados.linkDeEntrega) log.warn('sem link de entrega: "' + umaLinha(livro.title) + '"' + (livro.sem_entrega ? ' (' + umaLinha(livro.sem_entrega, 80) + ')' : ''));
+    if (seco) { log.info('[dry-run] publicaria "' + umaLinha(livro.title) + '" entrega=' + (dados.linkDeEntrega ? 'ok' : 'FALTA')); continue; }
     try {
       const r = await publicarNaKiwify(pagina, dados, { cred });
       gravarResultado(livro.id, r.id, r.url);

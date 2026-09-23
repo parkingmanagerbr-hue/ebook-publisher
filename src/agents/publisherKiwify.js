@@ -104,7 +104,8 @@ async function publicarNaKiwify(page, livro, { cred, espera } = {}) {
   log.info('criado id=' + umaLinha(id, 40) + ' "' + umaLinha(titulo) + '" ' + corpo.currency + ' ' + corpo.price + ' centavos');
 
   // Categoria e ajustes de checkout: a Kiwify so aceita o objeto inteiro (nao ha PATCH).
-  const atual = await chamar(page, credenciais_, 'GET', '/v1/products/' + id);
+  // ?full=true: sem isso o GET nao devolve categoria, approved_url nem garantia.
+  const atual = await chamar(page, credenciais_, 'GET', '/v1/products/' + id + '?full=true');
   const base = (atual.json && (atual.json.product || atual.json)) || {};
   if (!mesmoProdutoKiwify(base.name, titulo)) {
     log.error('PRODUTO_ERRADO na Kiwify: id ' + umaLinha(id, 40) + ' e "' + umaLinha(base.name) + '", nao "' + umaLinha(titulo) + '" — nada alterado');

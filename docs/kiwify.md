@@ -82,6 +82,24 @@ Ou seja: `id`, `created_at`, `club`, `gateway_type`, `soft_ban`,
 em `kiwifyRegras.corpoDeAtualizacao` — com PUT assim a resposta é
 `{"product_updated":true}`.
 
+## Entrega do PDF (resolvido sem upload)
+
+O `GET /v1/products/{id}` **esconde** categoria, garantia e `approved_url`; use
+`GET /v1/products/{id}?full=true`.
+
+A entrega usa o mesmo link assinado (HMAC) que a Cakto já usa desde 15/09/2026:
+`approved_url = https://publisher.veloxisit.com.br/entrega/<id>.<assinatura>`.
+Medido em 22/09/2026: o link devolve `200 application/pdf` (3,3 MB) e um token
+adulterado devolve `404`. Assim o arquivo sai do nosso servidor e não vira link
+público.
+
+Área de membros (caminho alternativo, mapeado mas não usado para e-book):
+- `GET /v1/clubs?count=50` lista as áreas; o id do club serve de id do course.
+- `GET /v1/courses/{club}` (módulos), `GET /v1/courses/{club}/classes` (turmas).
+- `POST /v1/courses/{club}/modules {name, classes:[idDaTurma], free:false}`.
+- `POST /v1/courses/{club}/lessons {module_id, title, delivery_type:'INSTANT'}`
+  (`delivery_type` só aceita DAY, INSTANT ou DATE).
+
 ## Upload de arquivo
 
 `GET /v1/uploads/signature` devolve `{signature, signature384, expires, store}` —

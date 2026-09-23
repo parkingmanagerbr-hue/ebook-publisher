@@ -141,3 +141,11 @@ test('PUT sem objeto anterior usa os padroes do painel', () => {
   assert.strictEqual(semArray.mobile_required, false);
   assert.strictEqual(semArray.email_confirmation_required, false);
 });
+
+test('entrega: o link assinado do nosso servidor vai no approved_url', () => {
+  const { corpoDeAtualizacao } = require('../src/agents/kiwifyRegras');
+  const c = corpoDeAtualizacao({ approved_url: 'https://antigo/' }, { title: 'x', linkDeEntrega: 'https://publisher.veloxisit.com.br/entrega/abc.def' }, 3);
+  assert.strictEqual(c.approved_url, 'https://publisher.veloxisit.com.br/entrega/abc.def');
+  const semLink = corpoDeAtualizacao({ approved_url: 'https://antigo/' }, { title: 'x' }, 3);
+  assert.strictEqual(semLink.approved_url, 'https://antigo/', 'sem link novo, mantem o que estava');
+});
