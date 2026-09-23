@@ -103,3 +103,45 @@ test('URL sem id (login, wizard no inicio, numero curto) devolve null', () => {
     assert.strictEqual(idProdutoDaUrl(u), null, u);
   }
 });
+
+// ── Produto certo antes de mandar o arquivo (22/09/2026) ────────────────────
+const { mesmoProduto, motivoProdutoErrado, umaLinha, ehAvisoDeTermos, ehBotaoDeAviso } = require('../src/agents/hotmartRegras');
+
+test('produto de nome diferente nao recebe o arquivo (caso 8452258)', () => {
+  assert.strictEqual(mesmoProduto('Orçamento de Viagem de Luxo Gastando Pouco', 'Fundo de Emergência para Autônomos'), false);
+  assert.strictEqual(mesmoProduto('Fundo de Emergência para Autônomos', 'Fundo de Emergência para Autônomos'), true);
+});
+
+test('acento, caixa e espaco a mais nao reprovam o mesmo produto', () => {
+  assert.strictEqual(mesmoProduto('  FUNDO  de Emergência ', 'Fundo de Emergência'), true);
+  assert.strictEqual(mesmoProduto('Fundo de Emergencia', 'Fundo de Emergência'), false, 'sem acento e outro titulo');
+});
+
+test('sem resposta da API o envio segue (consulta que falhou nao bloqueia)', () => {
+  for (const vazio of [null, undefined, '', '   ']) assert.strictEqual(mesmoProduto(vazio, 'Qualquer Livro'), true);
+  assert.strictEqual(mesmoProduto('Algum Livro', null), false, 'titulo vazio com nome no ar = produto errado');
+});
+
+test('motivo do bloqueio cabe em uma linha de log e nao forja outra', () => {
+  const m = motivoProdutoErrado('8452258', 'Orçamento de Viagem\nINFO: tudo certo', 'Fundo de Emergência');
+  assert.ok(m.startsWith('PRODUTO_ERRADO: id 8452258'));
+  assert.ok(!m.includes('\n'), 'quebra de linha vinda do nome forjaria uma linha de log');
+  assert.ok(m.includes('Fundo de Emergência'));
+  assert.strictEqual(umaLinha('a\r\nb\tc', 60), 'a b c');
+  assert.strictEqual(umaLinha(null), '');
+  assert.strictEqual(umaLinha('abcdef', 3), 'abc');
+});
+
+// ── Aviso de termos por cima do wizard ──────────────────────────────────────
+test('aviso de termos so conta com o texto E o botao', () => {
+  assert.strictEqual(ehAvisoDeTermos('Nossos Termos foram atualizados. Leia. OK, Entendi'), true);
+  assert.strictEqual(ehAvisoDeTermos('Termo de Uso Ético da Hotmart. Concordo'), true);
+  assert.strictEqual(ehAvisoDeTermos('Nossos Termos foram atualizados. Leia mais.'), false, 'sem botao nao e o aviso');
+  assert.strictEqual(ehAvisoDeTermos('Cadastrar eBook. Aceitar'), false, 'so o botao nao e o aviso');
+  assert.strictEqual(ehAvisoDeTermos(null), false);
+});
+
+test('botao do aviso: so o que fecha, nao "Aceitar pagamento"', () => {
+  for (const t of ['OK, Entendi', 'ok entendi', 'Entendi', 'Aceitar', 'Concordo']) assert.strictEqual(ehBotaoDeAviso(t), true, t);
+  for (const t of ['Aceitar pagamento por Pix', 'Cadastrar eBook', 'Não concordo com nada', '', null]) assert.strictEqual(ehBotaoDeAviso(t), false, String(t));
+});

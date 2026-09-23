@@ -106,6 +106,6 @@ module.exports = { backfill, buscarCandidatos, garantirTabela, jaTentado, regist
 
 if (require.main === module) {
   backfill({ limite: arg('limite', '10'), dryRun: process.argv.includes('--dry-run') })
-    .then(r => { console.log(JSON.stringify(r)); process.exit(0); })
-    .catch(e => { console.error('ERRO:', e.message); process.exit(1); });
+    .then(r => { log.info('resumo'); console.log(JSON.stringify(r)); process.exit(0); })
+    .catch(e => { console.error('ERRO: ' + e.message); process.exit(1); });
 }

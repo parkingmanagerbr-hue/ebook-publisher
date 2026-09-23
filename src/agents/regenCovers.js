@@ -197,6 +197,6 @@ module.exports = { regerar, buscarSemArquivo, buscarTodas, contarTentativa, gara
 
 if (require.main === module) {
   regerar({ limite: arg('limite', '20'), todas: process.argv.includes('--todas') })
-    .then(r => { console.log(JSON.stringify(r)); process.exit(0); })
-    .catch(e => { console.error('ERRO:', e.message); process.exit(1); });
+    .then(r => { log.info('resumo'); console.log(JSON.stringify(r)); process.exit(0); })
+    .catch(e => { console.error('ERRO: ' + e.message); process.exit(1); });
 }

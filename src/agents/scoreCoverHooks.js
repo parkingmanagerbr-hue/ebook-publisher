@@ -133,5 +133,5 @@ module.exports = { pontuarCapas };
 if (require.main === module) {
   const dryRun = process.argv.includes('--dry-run');
   const r = pontuarCapas({ dryRun });
-  console.log(JSON.stringify(r, null, 2));
+  log.info('resumo'); console.log(JSON.stringify(r, null, 2));
 }

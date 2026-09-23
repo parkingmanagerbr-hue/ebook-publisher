@@ -32,7 +32,8 @@ try {
 
 // Categoria, digitos do preco e id do produto na URL: regras puras, testadas
 // em test/hotmartRegras.test.js.
-const { getCategoryPT, digitosDoPreco, idProdutoDaUrl } = require('./hotmartRegras');
+const { getCategoryPT, digitosDoPreco, idProdutoDaUrl, mesmoProduto, motivoProdutoErrado, umaLinha,
+  ehAvisoDeTermos, ehBotaoDeAviso } = require('./hotmartRegras');
 const { descricaoHotmart } = require('./hotmartDescricao');
 
 function getCASTicket(tgt, serviceUrl) {
@@ -283,27 +284,24 @@ async function createProduct(page, session, ebook) {
   }
   if (!ebookBtn) {
     // 22/09/2026: o wizard nao renderizava porque um AVISO DE TERMOS ficava por
-    // cima ("Nossos Termos foram atualizados... OK, Entendi"). Clicar nisso e
-    // aceitar termo novo na conta do dono, entao o robo NAO clica: avisa.
-    const aviso = await page.evaluate(() => {
-      const t = document.body.innerText || '';
-      return /Termos? (foram|foi) atualizad|Termo de Uso [ÉE]tico|pol[íi]tica de pagamentos/i.test(t)
-        && /OK, Entendi|Aceitar|Concordo/i.test(t);
-    }).catch(() => false);
+    // cima ("Nossos Termos foram atualizados... OK, Entendi"). O dono autorizou
+    // fechar esse aviso em 22/09/2026 — ele reaparece a cada aba nova, e pedir
+    // clique humano toda vez pararia a publicacao. Regra em hotmartRegras.js.
+    const textoDaPagina = await page.evaluate(() => document.body.innerText || '').catch(() => '');
+    const aviso = ehAvisoDeTermos(textoDaPagina);
     if (aviso) {
       // O dono autorizou fechar este aviso em 22/09/2026 (ele reaparece a cada
       // aba nova, entao pedir clique humano toda vez pararia a publicacao).
-      const alvo = await page.evaluate(() => {
-        const e = [...document.querySelectorAll('button, a, [role=button], hc-button-2_11_14')]
-          .find(x => /OK,\s*Entendi|Entendi|Aceitar/i.test((x.innerText || '').trim()));
-        if (!e) return null;
-        e.scrollIntoView({ block: 'center' });
-        const r = e.getBoundingClientRect();
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-      }).catch(() => null);
+      const candidatos = await page.evaluate(() => [...document.querySelectorAll('button, a, [role=button], hc-button-2_11_14')]
+        .map((e, i) => {
+          const r = e.getBoundingClientRect();
+          return { i, texto: (e.innerText || '').trim().slice(0, 40), x: r.x + r.width / 2, y: r.y + r.height / 2, largura: r.width };
+        })
+        .filter(c => c.largura > 0)).catch(() => []);
+      const alvo = candidatos.find(c => ehBotaoDeAviso(c.texto)) || null;
       if (alvo) {
         await page.mouse.click(alvo.x, alvo.y);
-        log.info('Aviso de termos fechado (autorizado pelo dono) — recarregando o wizard');
+        log.info('Aviso de termos fechado (autorizado pelo dono, botao "' + umaLinha(alvo.texto, 20) + '") — recarregando o wizard');
         await sleep(2500);
         await page.goto('https://app.hotmart.com/products/add', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
         await sleep(6000);
@@ -316,6 +314,8 @@ async function createProduct(page, session, ebook) {
         }).catch(() => null);
       }
       if (!ebookBtn) {
+        log.error('AVISO_DE_TERMOS_BLOQUEANDO: ' + candidatos.length + ' botoes na tela, ' +
+          (alvo ? 'cliquei em "' + umaLinha(alvo.texto, 20) + '" e o wizard nao voltou' : 'nenhum deles fecha o aviso'));
         throw new Error('AVISO_DE_TERMOS_BLOQUEANDO: nao consegui fechar o aviso de termos da Hotmart.');
       }
     }
@@ -2191,11 +2191,13 @@ async function publishToHotmart(ebook, opts) {
           return j && (j.name || (j.product && j.product.name)) || null;
         } catch (e) { return null; }
       }, numericId, session && session.jwt ? session.jwt : (await page.evaluate(() => localStorage.getItem('astrobox-token') || localStorage.getItem('token') || ''))).catch(() => null);
-      const normal = t => String(t || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
-      if (nomeNoHotmart && normal(nomeNoHotmart) !== normal(title)) {
-        throw new Error('PRODUTO_ERRADO: id ' + numericId + ' e "' + String(nomeNoHotmart).slice(0, 40) +
-          '", nao "' + String(title).slice(0, 40) + '" — nada enviado');
+      if (!mesmoProduto(nomeNoHotmart, title)) {
+        const motivo = motivoProdutoErrado(numericId, nomeNoHotmart, title);
+        log.error(motivo);
+        throw new Error(motivo);
       }
+      log.info('Nome conferido: id=' + umaLinha(numericId, 20) +
+        ' nome=' + (nomeNoHotmart ? '"' + umaLinha(nomeNoHotmart) + '"' : 'nao respondido (segue)'));
     }
     // Step 2: Upload cover image (skip if already done during wizard)
     //

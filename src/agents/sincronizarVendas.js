@@ -173,6 +173,11 @@ module.exports = { sincronizar, extrairVenda, agregarPorProduto, marcarSuspeitas
 
 if (require.main === module) {
   sincronizar()
-    .then(r => { console.log(JSON.stringify(r)); process.exit(0); })
-    .catch(e => { console.error('ERRO: ' + e.message); process.exit(1); });
+    // stdout so o JSON (quem chama le a saida); o diagnostico vai para o log.
+    .then(r => { log.info('resumo: ' + JSON.stringify(r)); console.log(JSON.stringify(r)); process.exit(0); })
+    .catch(e => {
+      log.error('ERRO: ' + String(e && e.message).replace(/[\r\n]+/g, ' ').slice(0, 300));
+      console.error('ERRO: ' + e.message);
+      process.exit(1);
+    });
 }

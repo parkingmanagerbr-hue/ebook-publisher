@@ -69,4 +69,51 @@ function idProdutoDaUrl(u) {
   return m ? m[1] : null;
 }
 
-module.exports = { norm, getCategoryPT, digitosDoPreco, idProdutoDaUrl, TECH_KW, HEALTH_KW, FINANCE_KW, BUSINESS_KW };
+/** Comparacao de nome de produto: acento, caixa e espaco nao contam. */
+function nomeComparavel(t) {
+  return String(t == null ? '' : t).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * O produto aberto e mesmo o livro que vamos enviar?
+ *
+ * 22/09/2026: quando o cadastro nao capturava o id, a busca de reserva devolvia
+ * OUTRO produto da conta — tres livros diferentes tiveram o PDF enviado para o
+ * 8452258 ("Orcamento de Viagem de Luxo") e o comprador receberia o livro
+ * errado. Sem nome (API nao respondeu) nao da para afirmar que esta errado:
+ * segue, porque bloquear toda publicacao por uma consulta que falhou e pior.
+ * Pura.
+ */
+function mesmoProduto(nomeNoHotmart, titulo) {
+  const a = nomeComparavel(nomeNoHotmart);
+  if (!a) return true;
+  return a === nomeComparavel(titulo);
+}
+
+/** Uma linha de log nunca pode vir com quebra: o valor do usuario forjaria outra. */
+function umaLinha(s, limite = 60) {
+  return String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, limite);
+}
+
+/** Motivo do bloqueio, pronto para o log e para a mensagem do erro. Pura. */
+function motivoProdutoErrado(id, nomeNoHotmart, titulo) {
+  return 'PRODUTO_ERRADO: id ' + umaLinha(id, 20) + ' e "' + umaLinha(nomeNoHotmart) +
+    '", nao "' + umaLinha(titulo) + '" — nada enviado';
+}
+
+/** Aviso de termos da Hotmart por cima do wizard (bloqueia o cadastro). Pura. */
+function ehAvisoDeTermos(textoDaPagina) {
+  const t = String(textoDaPagina || '');
+  return /Termos? (foram|foi) atualizad|Termo de Uso [ÉE]tico|pol[íi]tica de pagamentos/i.test(t)
+    && /OK, Entendi|Aceitar|Concordo/i.test(t);
+}
+
+/** Texto do botao que fecha o aviso. Pura (usada tambem dentro da pagina). */
+function ehBotaoDeAviso(texto) {
+  return /^(OK,?\s*)?(Entendi|Aceitar|Concordo)$/i.test(String(texto || '').replace(/\s+/g, ' ').trim());
+}
+
+module.exports = {
+  norm, getCategoryPT, digitosDoPreco, idProdutoDaUrl, TECH_KW, HEALTH_KW, FINANCE_KW, BUSINESS_KW,
+  nomeComparavel, mesmoProduto, motivoProdutoErrado, umaLinha, ehAvisoDeTermos, ehBotaoDeAviso,
+};

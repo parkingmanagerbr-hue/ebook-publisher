@@ -300,6 +300,6 @@ if (require.main === module) {
     limite: arg('limite', '10'),
     paralelo: arg('paralelo', '3'),
   })
-    .then(r => { console.log(JSON.stringify(r)); process.exit(0); })
-    .catch(e => { console.error('ERRO:', e.message); process.exit(1); });
+    .then(r => { log.info('resumo'); console.log(JSON.stringify(r)); process.exit(0); })
+    .catch(e => { console.error('ERRO: ' + e.message); process.exit(1); });
 }

@@ -24,13 +24,20 @@ function carregar(t, { contas = [A, B], env = {}, sessoesGoogle = [A, B], dataDi
   comAmbiente(t, { ...limpar, DATA_DIR: dir, GMAIL_ACCOUNTS: contas.join(','), ...env });
   fs.mkdirSync(path.join(dir, 'sessions'), { recursive: true });
   for (const e of sessoesGoogle) fs.writeFileSync(path.join(dir, 'sessions', 'google_' + e.replace(/[@.]/g, '_') + '.json'), '{}');
+  // O modulo passou a logar pelo winston (grava em arquivo e escreve no
+  // stdout), entao capturar so console.log deixava de ver o evento.
   const logs = [];
   t.mock.method(console, 'log', m => logs.push(String(m)));
+  const escrever = process.stdout.write.bind(process.stdout);
+  t.mock.method(process.stdout, 'write', (m, ...resto) => { logs.push(String(m)); return escrever(m, ...resto); });
   const ct = recarregar('src/agents/webEbookAgents/creditTracker.js');
   const arquivo = path.join(dir, 'web_ebook_credits.json');
   const ler = () => JSON.parse(fs.readFileSync(arquivo, 'utf8'));
   return { ct, dir, arquivo, ler, logs };
 }
+
+/** O log passa pelo winston, que acrescenta data e nivel na frente. */
+const temLog = (logs, texto) => logs.some(l => l.includes(texto));
 
 const mesAtual = () => new Date().toISOString().slice(0, 7);
 
@@ -89,7 +96,7 @@ test('ordem: servico por prioridade, depois conta; limite exato esgota a conta',
 test('conta sem login Google e pulada, com aviso', t => {
   const { ct, logs } = carregar(t, { sessoesGoogle: [B] });
   assert.strictEqual(ct.getNextSlot().email, B);
-  assert.ok(logs.includes('[creditTracker] Sem sessão Google para ' + A + ' — pulando'));
+  assert.ok(temLog(logs, '[creditTracker] Sem sessão Google para ' + A + ' — pulando'));
 });
 
 test('sem nenhuma conta configurada tudo esta esgotado', t => {
@@ -153,7 +160,7 @@ test('virada do mes zera os creditos; mesmo mes preserva', t => {
   assert.strictEqual(ler().month, '2026-09');
   t.mock.timers.setTime(Date.UTC(2026, 9, 1, 0, 0, 1));
   assert.strictEqual(ct.getNextSlot().used, 0);
-  assert.ok(logs.includes('[creditTracker] Novo mês detectado (2026-09 → 2026-10) — resetando créditos'));
+  assert.ok(temLog(logs, '[creditTracker] Novo mês detectado (2026-09 → 2026-10) — resetando créditos'));
 });
 
 test('arquivo corrompido ou ausente comeca o mes do zero', t => {
@@ -183,7 +190,7 @@ test('resetMonthly recria o mes e espelha em genia/', t => {
   assert.strictEqual(espelho.month, mesAtual());
   assert.match(espelho._description, /créditos web ebook/);
   assert.ok(espelho._updatedAt);
-  assert.ok(logs.includes('[creditTracker] ✅ Créditos mensais resetados para ' + mesAtual()));
+  assert.ok(temLog(logs, '[creditTracker] ✅ Créditos mensais resetados para ' + mesAtual()));
   assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['genia', 'sessions', 'web_ebook_credits.json']);
 });
 
