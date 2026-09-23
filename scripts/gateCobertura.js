@@ -37,6 +37,8 @@ const MODULOS_NO_GATE = [
   'src/agents/hotmartConteudo.js',
   'src/agents/hotmartDescricao.js',
   'src/agents/hotmartRegras.js',
+  'src/agents/kiwifyRegras.js',
+  'src/agents/publisherKiwify.js',
   'src/agents/pdfIdioma.js',
   'src/agents/publishBacklog.js',
   'src/agents/regenCovers.js',
