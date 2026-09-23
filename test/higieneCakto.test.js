@@ -69,3 +69,37 @@ test('produto nulo nao quebra o passe', () => {
   const m = alvoHigiene(null, { checkout: CHECKOUT });
   assert.strictEqual(m.producerName, PRODUTOR);
 });
+
+// ── Metodos de pagamento (a API devolve o que ela mesma recusa) ─────────────
+const { metodosDePagamentoValidos } = require('../src/agents/higieneCakto');
+const DO_PRODUTO = ['pix', 'pix_auto', 'credit_card', 'threeDs', 'picpay', 'googlepay', 'applepay', 'oxxo', 'spei'];
+
+test('BRL sem assinatura: sai spei, oxxo e pix automatico', () => {
+  const m = metodosDePagamentoValidos(DO_PRODUTO, { moeda: 'BRL', tipo: 'unique' });
+  assert.deepStrictEqual(m, ['pix', 'credit_card', 'threeDs', 'picpay', 'googlepay', 'applepay']);
+});
+
+test('assinatura mantem o Pix Automatico', () => {
+  const m = metodosDePagamentoValidos(['pix', 'pix_auto'], { moeda: 'BRL', tipo: 'subscription' });
+  assert.deepStrictEqual(m, ['pix', 'pix_auto']);
+});
+
+test('fora do BRL, os metodos mexicanos continuam valendo', () => {
+  const m = metodosDePagamentoValidos(['oxxo', 'spei', 'credit_card'], { moeda: 'MXN', tipo: 'unique' });
+  assert.deepStrictEqual(m, ['oxxo', 'spei', 'credit_card']);
+});
+
+test('lista ausente, vazia ou com lixo nao quebra', () => {
+  assert.deepStrictEqual(metodosDePagamentoValidos(null), []);
+  assert.deepStrictEqual(metodosDePagamentoValidos('pix'), []);
+  assert.deepStrictEqual(metodosDePagamentoValidos([null, '', 'pix']), ['pix']);
+  assert.deepStrictEqual(metodosDePagamentoValidos(['PIX', 'OXXO'], { moeda: 'brl' }), ['PIX'], 'caixa nao engana');
+  assert.deepStrictEqual(metodosDePagamentoValidos(['pix']), ['pix'], 'padrao e BRL e pagamento unico');
+});
+
+test('a higiene corrige os metodos junto com o resto (era 400 em 60 de 60)', () => {
+  const m = alvoHigiene({ paymentMethods: DO_PRODUTO, currency: 'BRL', type: 'unique' }, { checkout: CHECKOUT });
+  assert.deepStrictEqual(m.paymentMethods, ['pix', 'credit_card', 'threeDs', 'picpay', 'googlepay', 'applepay']);
+  const jaLimpo = alvoHigiene({ paymentMethods: ['pix'], currency: 'BRL', type: 'unique', producerName: 'Veloxis Editorial', salesPage: CHECKOUT, affiliate: true, affiliateCommission: 50, affiliateDescription: 'x' }, { checkout: CHECKOUT });
+  assert.ok(!('paymentMethods' in jaLimpo), 'lista ja valida nao e reescrita');
+});

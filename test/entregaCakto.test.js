@@ -111,3 +111,15 @@ test('404 marca oferta inexistente e sai da fila; outro erro continua tentando',
   assert.ok(resultadoDoErro(new Error('timeout')).startsWith('erro: timeout'));
   assert.ok(resultadoDoErro(null).startsWith('erro: '));
 });
+
+test('metodo de pagamento que a API recusa sai do PUT (era 400 no catalogo todo)', () => {
+  const produto = {
+    emailAccessLink: 'https://publisher.veloxisit.com.br/entrega/x.y',
+    producerName: 'Veloxis Editorial', currency: 'BRL', type: 'unique',
+    paymentMethods: ['pix', 'pix_auto', 'credit_card', 'oxxo', 'spei'],
+  };
+  const m = alvo(produto, 'https://publisher.veloxisit.com.br/entrega/x.y');
+  assert.deepStrictEqual(m.paymentMethods, ['pix', 'credit_card']);
+  const limpo = { ...produto, paymentMethods: ['pix', 'credit_card'] };
+  assert.ok(!('paymentMethods' in alvo(limpo, 'https://publisher.veloxisit.com.br/entrega/x.y')), 'lista valida nao e reescrita');
+});

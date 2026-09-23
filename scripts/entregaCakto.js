@@ -75,6 +75,12 @@ const DESCRICAO_AFILIADO = 'E-book digital com entrega imediata por link. Comiss
 function alvo(produto, linkEsperado, pausadoPorNos = false, opcoes = {}) {
   const atual = produto.emailAccessLink || '';
   const out = {};
+  // A Cakto devolve metodos de pagamento que ela mesma recusa na gravacao
+  // (spei/oxxo com BRL, Pix Automatico sem assinatura) e o PUT inteiro voltava
+  // 400 — medido em 23/09/2026, parando a correcao do catalogo inteiro.
+  const { metodosDePagamentoValidos } = require('../src/agents/higieneCakto');
+  const limpos = metodosDePagamentoValidos(produto.paymentMethods, { moeda: produto.currency, tipo: produto.type });
+  if (Array.isArray(produto.paymentMethods) && limpos.length !== produto.paymentMethods.length) out.paymentMethods = limpos;
   // Link de terceiro nunca e sobrescrito: alguem configurou a entrega a mao.
   if (atual !== linkEsperado && (!atual || atual.includes('/entrega/'))) out.emailAccessLink = linkEsperado;
   if (!produto.producerName) out.producerName = PRODUTOR;

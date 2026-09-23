@@ -33,6 +33,9 @@ function paginaDeVendasRuim(url) {
 function alvoHigiene(produto, opcoes = {}) {
   const p = produto || {};
   const out = {};
+  // A API devolve metodos que ela mesma recusa: limpar antes de devolver.
+  const limpos = metodosDePagamentoValidos(p.paymentMethods, { moeda: p.currency, tipo: p.type });
+  if (Array.isArray(p.paymentMethods) && limpos.length !== p.paymentMethods.length) out.paymentMethods = limpos;
   if (!p.producerName) out.producerName = PRODUTOR;
   if (opcoes.checkout && paginaDeVendasRuim(p.salesPage)) out.salesPage = opcoes.checkout;
   if (!p.affiliate) {
@@ -43,6 +46,29 @@ function alvoHigiene(produto, opcoes = {}) {
     if (!p.affiliateDescription) out.affiliateDescription = DESCRICAO_AFILIADO;
   }
   return out;
+}
+
+/**
+ * Metodos de pagamento que a Cakto aceita de volta no PUT.
+ *
+ * 23/09/2026: a propria API DEVOLVE metodos que ela recusa na gravacao, e o
+ * PUT inteiro falhava com 400 — parando a higiene (60 de 60) e a correcao de
+ * entrega do catalogo:
+ *   "Metodos de pagamento invalidos para a moeda BRL: spei, oxxo"
+ *   "O metodo de pagamento Pix Automatico nao e permitido para produtos sem assinatura"
+ * Pura.
+ */
+const SO_MEXICO = new Set(['spei', 'oxxo']);
+const SO_ASSINATURA = new Set(['pix_auto']);
+function metodosDePagamentoValidos(metodos, { moeda = 'BRL', tipo = 'unique' } = {}) {
+  const lista = Array.isArray(metodos) ? metodos : [];
+  return lista.filter(m => {
+    const nome = String(m || '').toLowerCase();
+    if (!nome) return false;
+    if (String(moeda).toUpperCase() === 'BRL' && SO_MEXICO.has(nome)) return false;
+    if (String(tipo).toLowerCase() !== 'subscription' && SO_ASSINATURA.has(nome)) return false;
+    return true;
+  });
 }
 
 /** Precisa subir imagem? So quando o produto nao tem e existe capa em disco. Pura. */
@@ -58,4 +84,4 @@ function resumoDaCorrecao(produtoId, mudancas, subiuCapa) {
   return id + ': ' + [...(subiuCapa ? ['capa'] : []), ...campos].join(', ');
 }
 
-module.exports = { alvoHigiene, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, DESCRICAO_AFILIADO };
+module.exports = { alvoHigiene, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, metodosDePagamentoValidos, DESCRICAO_AFILIADO };
