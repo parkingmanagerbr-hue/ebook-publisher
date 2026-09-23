@@ -92,6 +92,34 @@ function corpoDeCriacao(livro) {
   };
 }
 
+/**
+ * Recusa do filtro de conteudo da Kiwify: `{"error":"ProductNotAllowed",
+ * "keyword":"casino"}`. Devolve a palavra acusada (ou 'desconhecida'), ou null
+ * quando a falha foi outra. Medido em 23/09/2026 num livro sobre bem-estar
+ * escolar, cujo texto nao tem a palavra — falso positivo do lado deles. Sem
+ * isso o livro voltava para a fila a cada rodada, para sempre. Pura.
+ */
+function motivoRecusa(textoDaApi) {
+  const t = String(textoDaApi || '');
+  if (!/ProductNotAllowed/i.test(t)) return null;
+  const m = t.match(/"keyword"\s*:\s*"([^"]{1,40})"/i);
+  return m ? m[1] : 'desconhecida';
+}
+
+/**
+ * A Kiwify limita o ritmo: em 23/09/2026 um lote de 60 publicou 3 e levou 57
+ * respostas `429 Rate limit exceeded` em segundos. Pura.
+ */
+function ehLimiteDeTaxa(status, texto) {
+  return Number(status) === 429 || /rate limit/i.test(String(texto || ''));
+}
+
+/** Espera antes da proxima tentativa: 5s, 15s, 45s (teto 2 min). Pura. */
+function esperaPorTentativa(tentativa, base = 5000, teto = 120000) {
+  const n = Math.max(1, Math.floor(Number(tentativa) || 1));
+  return Math.min(teto, base * Math.pow(3, n - 1));
+}
+
 /** O produto aberto e o livro certo? Mesmo cuidado da Hotmart. Pura. */
 function mesmoProdutoKiwify(nomeNaKiwify, titulo) {
   const n = t => String(t == null ? '' : t).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -138,5 +166,5 @@ function corpoDeAtualizacao(base, livro, categoria) {
 
 module.exports = {
   CATEGORIAS, categoriaKiwify, precoCentavos, moedaPorIdioma, descricaoKiwify,
-  descritorFatura, corpoDeCriacao, corpoDeAtualizacao, mesmoProdutoKiwify,
+  descritorFatura, corpoDeCriacao, corpoDeAtualizacao, mesmoProdutoKiwify, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa,
 };

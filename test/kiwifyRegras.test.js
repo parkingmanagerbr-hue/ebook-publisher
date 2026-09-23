@@ -149,3 +149,26 @@ test('entrega: o link assinado do nosso servidor vai no approved_url', () => {
   const semLink = corpoDeAtualizacao({ approved_url: 'https://antigo/' }, { title: 'x' }, 3);
   assert.strictEqual(semLink.approved_url, 'https://antigo/', 'sem link novo, mantem o que estava');
 });
+
+test('recusa do filtro de conteudo e reconhecida (e nao volta para a fila)', () => {
+  const { motivoRecusa } = require('../src/agents/kiwifyRegras');
+  assert.strictEqual(motivoRecusa('{"error":"ProductNotAllowed","keyword":"casino"}'), 'casino');
+  assert.strictEqual(motivoRecusa('{"error":"ProductNotAllowed"}'), 'desconhecida');
+  assert.strictEqual(motivoRecusa('{"error":"price too low"}'), null, 'outra falha pode ser retentada');
+  assert.strictEqual(motivoRecusa(''), null);
+  assert.strictEqual(motivoRecusa(null), null);
+});
+
+test('limite de ritmo: reconhece o 429 e espera cada vez mais', () => {
+  const { ehLimiteDeTaxa, esperaPorTentativa } = require('../src/agents/kiwifyRegras');
+  assert.strictEqual(ehLimiteDeTaxa(429, ''), true);
+  assert.strictEqual(ehLimiteDeTaxa(400, 'Rate limit exceeded'), true);
+  assert.strictEqual(ehLimiteDeTaxa(200, 'tudo certo'), false);
+  assert.strictEqual(ehLimiteDeTaxa(null, null), false);
+  assert.strictEqual(esperaPorTentativa(1), 5000);
+  assert.strictEqual(esperaPorTentativa(2), 15000);
+  assert.strictEqual(esperaPorTentativa(3), 45000);
+  assert.strictEqual(esperaPorTentativa(9), 120000, 'tem teto');
+  assert.strictEqual(esperaPorTentativa(0), 5000);
+  assert.strictEqual(esperaPorTentativa('nao numero'), 5000);
+});

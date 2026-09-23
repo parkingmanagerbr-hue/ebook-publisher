@@ -14,7 +14,7 @@
  * Ele nao preenche cadastro, documento nem dado bancario: a conta so recebe
  * quando o titular completa isso no painel.
  */
-const { corpoDeCriacao, corpoDeAtualizacao, categoriaKiwify, mesmoProdutoKiwify } = require('./kiwifyRegras');
+const { corpoDeCriacao, corpoDeAtualizacao, categoriaKiwify, mesmoProdutoKiwify, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa } = require('./kiwifyRegras');
 
 let log;
 try { log = require('../core/logger').createLogger('kiwify'); }
@@ -47,8 +47,23 @@ async function credenciais(page, { espera = 14000 } = {}) {
   return { bearer, device };
 }
 
-/** Uma chamada a API, feita de dentro da pagina (o navegador resolve CORS e TLS). */
-async function chamar(page, cred, metodo, caminho, corpo) {
+/**
+ * Uma chamada a API, feita de dentro da pagina (o navegador resolve CORS e TLS).
+ * Em 429 espera e tenta de novo: a Kiwify limita o ritmo e sem isso o lote
+ * inteiro vira falha em segundos (medido em 23/09/2026: 57 de 60).
+ */
+async function chamar(page, cred, metodo, caminho, corpo, { tentativas = 3, esperar = dormir } = {}) {
+  let r = await chamarUmaVez(page, cred, metodo, caminho, corpo);
+  for (let n = 1; n < tentativas && ehLimiteDeTaxa(r.status, r.texto); n++) {
+    const espera = esperaPorTentativa(n);
+    log.warn('limite de ritmo da Kiwify em ' + umaLinha(caminho, 60) + ' — esperando ' + Math.round(espera / 1000) + 's (tentativa ' + n + ')');
+    await esperar(espera);
+    r = await chamarUmaVez(page, cred, metodo, caminho, corpo);
+  }
+  return r;
+}
+
+async function chamarUmaVez(page, cred, metodo, caminho, corpo) {
   const r = await page.evaluate(async (api, auth, dev, m, c, body) => {
     try {
       const resp = await fetch(api + c, {
@@ -66,8 +81,8 @@ async function chamar(page, cred, metodo, caminho, corpo) {
 }
 
 /** Produtos que ja existem na conta, por nome normalizado (evita duplicar). */
-async function catalogo(page, cred) {
-  const r = await chamar(page, cred, 'GET', '/v1/products');
+async function catalogo(page, cred, opcoes) {
+  const r = await chamar(page, cred, 'GET', '/v1/products', null, opcoes);
   const lista = Array.isArray(r.json) ? r.json : (r.json && (r.json.data || r.json.products)) || [];
   const porNome = new Map();
   for (const p of lista) {
@@ -81,12 +96,12 @@ async function catalogo(page, cred) {
  * Publica um livro. Devolve { id, url, jaExistia } ou lanca.
  * `livro`: { title, description, language, preco, paginaDeVendas, topic }
  */
-async function publicarNaKiwify(page, livro, { cred, espera } = {}) {
+async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada } = {}) {
   const credenciais_ = cred || await credenciais(page, { espera });
   const titulo = String(livro.title || '').trim();
   if (!titulo) throw new Error('KIWIFY_SEM_TITULO: livro sem nome');
 
-  const { porNome, total } = await catalogo(page, credenciais_);
+  const { porNome, total } = await catalogo(page, credenciais_, opcoesDeChamada);
   const chave = titulo.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
   if (porNome.has(chave)) {
     const id = porNome.get(chave);
@@ -95,8 +110,14 @@ async function publicarNaKiwify(page, livro, { cred, espera } = {}) {
   }
 
   const corpo = corpoDeCriacao(livro);
-  const criado = await chamar(page, credenciais_, 'POST', '/v1/products', corpo);
+  const criado = await chamar(page, credenciais_, 'POST', '/v1/products', corpo, opcoesDeChamada);
   if (criado.status !== 200 && criado.status !== 201) {
+    const recusa = motivoRecusa(criado.texto);
+    if (recusa) {
+      // Recusa de conteudo nao se resolve tentando de novo: sai da fila.
+      log.warn('recusado pelo filtro da Kiwify: "' + umaLinha(titulo) + '" palavra=' + umaLinha(recusa, 40));
+      throw new Error('KIWIFY_RECUSADO: ' + umaLinha(recusa, 40));
+    }
     throw new Error('KIWIFY_CRIACAO_FALHOU: status ' + criado.status + ' ' + umaLinha(criado.texto, 120));
   }
   const id = criado.json && (criado.json.id || (criado.json.product && criado.json.product.id));
@@ -105,14 +126,14 @@ async function publicarNaKiwify(page, livro, { cred, espera } = {}) {
 
   // Categoria e ajustes de checkout: a Kiwify so aceita o objeto inteiro (nao ha PATCH).
   // ?full=true: sem isso o GET nao devolve categoria, approved_url nem garantia.
-  const atual = await chamar(page, credenciais_, 'GET', '/v1/products/' + id + '?full=true');
+  const atual = await chamar(page, credenciais_, 'GET', '/v1/products/' + id + '?full=true', null, opcoesDeChamada);
   const base = (atual.json && (atual.json.product || atual.json)) || {};
   if (!mesmoProdutoKiwify(base.name, titulo)) {
     log.error('PRODUTO_ERRADO na Kiwify: id ' + umaLinha(id, 40) + ' e "' + umaLinha(base.name) + '", nao "' + umaLinha(titulo) + '" — nada alterado');
     throw new Error('KIWIFY_PRODUTO_ERRADO: ' + umaLinha(id, 40));
   }
   const categoria = categoriaKiwify(titulo, livro.topic);
-  const atualizado = await chamar(page, credenciais_, 'PUT', '/v1/products/' + id, corpoDeAtualizacao(base, livro, categoria));
+  const atualizado = await chamar(page, credenciais_, 'PUT', '/v1/products/' + id, corpoDeAtualizacao(base, livro, categoria), opcoesDeChamada);
   if (atualizado.status >= 400) {
     log.warn('produto criado mas categoria nao entrou: id=' + umaLinha(id, 40) + ' status=' + atualizado.status + ' ' + umaLinha(atualizado.texto, 160));
   } else {

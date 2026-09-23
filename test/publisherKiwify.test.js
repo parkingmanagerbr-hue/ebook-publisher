@@ -253,3 +253,41 @@ test('painel que nao abre e localStorage bloqueado nao derrubam o processo', asy
   p2.evaluate = async () => { throw new Error('localStorage bloqueado'); };
   await assert.rejects(() => credenciais(p2, { espera: 0 }), /device=false/);
 });
+
+test('livro recusado pelo filtro da Kiwify nao insiste (erro proprio)', async () => {
+  const p = paginaFalsa({ criar: { status: 400, texto: '{"error":"ProductNotAllowed","keyword":"casino"}' } });
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), e => {
+    assert.match(e.message, /^KIWIFY_RECUSADO: casino$/);
+    return true;
+  });
+  assert.ok(!p.chamadas.some(c => c.metodo === 'PUT'), 'nada mais e enviado');
+});
+
+test('429 nao perde o livro: espera e tenta de novo', async () => {
+  let vez = 0;
+  const p = paginaFalsa({});
+  const esperas = [];
+  p.evaluate = async (fn, ...args) => {
+    const [, , , metodo, caminho] = args;
+    if (metodo === 'GET' && caminho.endsWith('/v1/products')) return { status: 200, texto: '[]' };
+    if (metodo === 'POST') { vez++; return vez < 3 ? { status: 429, texto: 'Rate limit exceeded' } : { status: 200, texto: JSON.stringify({ id: 'pr' }) }; }
+    if (metodo === 'GET') return { status: 200, texto: JSON.stringify({ product: { id: 'pr', name: 'Livro Novo' } }) };
+    return { status: 200, texto: '{}' };
+  };
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, opcoesDeChamada: { tentativas: 3, esperar: async ms => { esperas.push(ms); } } });
+  assert.strictEqual(r.id, 'pr');
+  assert.strictEqual(vez, 3, 'tentou ate passar');
+  assert.deepStrictEqual(esperas, [5000, 15000], 'esperou mais a cada vez');
+});
+
+test('429 insistente desiste com a mensagem da API', async () => {
+  const p = paginaFalsa({});
+  p.evaluate = async (fn, ...args) => {
+    const [, , , metodo, caminho] = args;
+    if (metodo === 'GET' && caminho.endsWith('/v1/products')) return { status: 200, texto: '[]' };
+    return { status: 429, texto: 'Rate limit exceeded' };
+  };
+  await assert.rejects(
+    () => publicarNaKiwify(p, LIVRO, { cred: CRED, opcoesDeChamada: { tentativas: 2, esperar: async () => {} } }),
+    /KIWIFY_CRIACAO_FALHOU: status 429/);
+});

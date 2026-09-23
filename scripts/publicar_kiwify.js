@@ -18,6 +18,7 @@ const http = require('http');
 const puppeteer = require('puppeteer-core');
 const { publicarNaKiwify, credenciais } = require('../src/agents/publisherKiwify');
 const { portasCandidatas, escolherPorta } = require('../src/core/navegadorLocal');
+const { ehLimiteDeTaxa } = require('../src/agents/kiwifyRegras');
 
 let log;
 try { log = require('../src/core/logger').createLogger('publicarKiwify'); }
@@ -28,6 +29,11 @@ const VPS = process.env.VPS_ALIAS || 'vps';
 
 const VITRINE = 'https://veloxisit.com.br/livros/';
 const TMP = path.join(os.tmpdir(), 'publicar-kiwify');
+// A Kiwify estrangula o ritmo (429). Com pausa entre livros o lote anda; sem
+// ela, 57 de 60 falharam em segundos (23/09/2026).
+const PAUSA_MS = Number(process.env.KIWIFY_PAUSA_MS || 6000);
+const DESISTIR_APOS = 5;
+const dormir = ms => new Promise(r => setTimeout(r, ms));
 
 const arg = (nome, padrao) => {
   const p = process.argv.find(a => a.startsWith('--' + nome + '='));
@@ -52,12 +58,14 @@ function buscarPendentes(limite) {
     const D = require('better-sqlite3');
     const db = new D('/app/data/metrics.db');
     db.pragma('busy_timeout = 5000');
+    db.prepare('CREATE TABLE IF NOT EXISTS kiwify_recusado (ebook_id TEXT PRIMARY KEY, palavra TEXT, quando INTEGER)').run();
     const colunas = db.prepare("PRAGMA table_info(ebooks)").all().map(c => c.name);
     if (!colunas.includes('kiwify_product_id')) db.prepare('ALTER TABLE ebooks ADD COLUMN kiwify_product_id TEXT').run();
     if (!colunas.includes('kiwify_url')) db.prepare('ALTER TABLE ebooks ADD COLUMN kiwify_url TEXT').run();
     const rows = db.prepare(
       "SELECT id, title, topic, description, language, price FROM ebooks " +
       "WHERE (kiwify_product_id IS NULL OR kiwify_product_id = '') AND pdf_path IS NOT NULL " +
+      "AND id NOT IN (SELECT ebook_id FROM kiwify_recusado) " +
       "AND title IS NOT NULL AND title <> '' " +
       "ORDER BY (CASE WHEN LOWER(COALESCE(language,'')) LIKE 'pt%' THEN 0 ELSE 1 END), rowid DESC LIMIT ${Number(limite) || 3}"
     ).all();
@@ -73,6 +81,19 @@ function buscarPendentes(limite) {
   `);
   const linha = saida.split('\n').find(l => l.startsWith('@@'));
   return linha ? JSON.parse(linha.slice(2)) : [];
+}
+
+/** Livro recusado pelo filtro de conteudo: sai da fila com o motivo registrado. */
+function marcarRecusado(id, palavra) {
+  rodarNoContainer(`
+    const D = require('better-sqlite3');
+    const db = new D('/app/data/metrics.db');
+    db.pragma('busy_timeout = 5000');
+    db.prepare('CREATE TABLE IF NOT EXISTS kiwify_recusado (ebook_id TEXT PRIMARY KEY, palavra TEXT, quando INTEGER)').run();
+    db.prepare('INSERT OR REPLACE INTO kiwify_recusado (ebook_id, palavra, quando) VALUES (?, ?, ?)')
+      .run(${JSON.stringify(String(id))}, ${JSON.stringify(String(palavra))}, Date.now());
+    console.log('@@ok');
+  `);
 }
 
 function gravarResultado(id, produtoId, url) {
@@ -104,7 +125,7 @@ async function principal() {
   const seco = temFlag('dry-run');
   const pendentes = buscarPendentes(limite);
   log.info('pendentes para a Kiwify: ' + pendentes.length + (seco ? ' (dry-run)' : ''));
-  if (!pendentes.length) return { publicados: 0, falhas: 0 };
+  if (!pendentes.length) return { publicados: 0, falhas: 0, recusados: 0 };
 
   const porta = await escolherPorta(responde, portasCandidatas(process.env));
   if (!porta) throw new Error('CHROME_FORA_DO_AR: nenhuma porta de depuracao respondeu (rode scripts/vigia_navegador.js)');
@@ -114,7 +135,7 @@ async function principal() {
   const cred = await credenciais(pagina);
   log.info('sessao da Kiwify pronta');
 
-  let publicados = 0, falhas = 0;
+  let publicados = 0, falhas = 0, recusados = 0, seguidasPorRitmo = 0;
   for (const livro of pendentes) {
     const dados = {
       title: livro.title,
@@ -131,14 +152,31 @@ async function principal() {
       const r = await publicarNaKiwify(pagina, dados, { cred });
       gravarResultado(livro.id, r.id, r.url);
       publicados++;
+      seguidasPorRitmo = 0;
       log.info((r.jaExistia ? 'ja existia' : 'publicado') + ': "' + umaLinha(livro.title) + '" -> ' + r.url);
     } catch (e) {
       falhas++;
-      log.error('FALHA "' + umaLinha(livro.title) + '": ' + umaLinha(e && e.message, 160));
+      const msg = String((e && e.message) || '');
+      const recusa = msg.match(/^KIWIFY_RECUSADO: (.+)$/);
+      if (recusa) {
+        marcarRecusado(livro.id, recusa[1]);
+        recusados++;
+        log.warn('fora da fila (filtro de conteudo, palavra "' + umaLinha(recusa[1], 40) + '"): "' + umaLinha(livro.title) + '"');
+      } else {
+        log.error('FALHA "' + umaLinha(livro.title) + '": ' + umaLinha(msg, 160));
+      }
+      if (ehLimiteDeTaxa(null, msg)) {
+        seguidasPorRitmo++;
+        if (seguidasPorRitmo >= DESISTIR_APOS) {
+          log.warn('a Kiwify segue estrangulando o ritmo (' + seguidasPorRitmo + ' seguidas) — parando o lote para nao queimar a fila');
+          break;
+        }
+      }
     }
+    await dormir(PAUSA_MS);
   }
   browser.disconnect();
-  return { publicados, falhas };
+  return { publicados, falhas, recusados };
 }
 
 if (require.main === module) {
