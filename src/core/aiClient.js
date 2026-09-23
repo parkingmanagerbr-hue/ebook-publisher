@@ -138,7 +138,23 @@ const _QUOTA_SYS = 'ebook';
 // ele e o maior consumidor legitimo: cada capa viral pede um gancho, e 200/dia
 // levaria cinco dias so para o catalogo atual. Medido em 11/09/2026: systemcaster
 // 266, music 1 — sobra folga. Configuravel para reduzir sem novo deploy.
-const _QUOTA_MAX = parseInt(process.env.EBOOK_GEMINI_DAILY_MAX || '1500', 10);
+//
+// 23/09/2026: o teto de 1.500 era o limite de UMA chave, mas o sistema tem 6.
+// Com 1.747 chamadas no dia o Gemini inteiro ficou barrado enquanto as 6 chaves
+// ainda estavam liberadas — e a geracao de e-book parou ("Todos os providers de
+// AI falharam. Providers tentados: ", sem dizer por que). O teto agora nasce do
+// numero de chaves, guardando uma fatia para os outros sistemas do ecossistema.
+const _QUOTA_POR_CHAVE = parseInt(process.env.GEMINI_RPD_POR_CHAVE || '1500', 10);
+const _QUOTA_FATIA = Number(process.env.EBOOK_GEMINI_FATIA || '0.6');
+/** Teto diario deste sistema: chaves x limite por chave x fatia. Pura. */
+function tetoDiarioGemini(nChaves, porChave = _QUOTA_POR_CHAVE, fatia = _QUOTA_FATIA) {
+  const chaves = Math.max(1, Math.floor(Number(nChaves) || 1));
+  const teto = Math.floor(chaves * (Number(porChave) || 1500) * Math.min(1, Math.max(0.05, Number(fatia) || 0.6)));
+  return Math.max(100, teto);
+}
+const _QUOTA_MAX = parseInt(process.env.EBOOK_GEMINI_DAILY_MAX || '0', 10)
+  || tetoDiarioGemini((process.env.GEMINI_API_KEY ? 1 : 0) +
+    Object.keys(process.env).filter(k => /^GEMINI_API_KEY_\d+$/.test(k)).length);
 // A bandeira global gemini:daily_exhausted nao e mais lida nem acesa por este
 // cliente (ver generate). As duas funcoes que a tocavam ficaram sem chamador e
 // sairam; outros sistemas do ecossistema ainda podem usa-la no Redis.
@@ -753,6 +769,9 @@ async function generate(prompt, systemPrompt = '', options = {}) {
 
   const triedProviders = [];
   const errors = [];
+  // Por que cada provider ficou de fora. Sem isso a falha saia muda
+  // ("Providers tentados: . Erros: ") e nao havia como investigar.
+  const pulados = [];
 
   for (const provider of PROVIDERS) {
     if (skip.includes(provider)) continue;
@@ -760,6 +779,7 @@ async function generate(prompt, systemPrompt = '', options = {}) {
     // Verificar se provider inteiro está degradado
     if (isDegraded(state, provider)) {
       logger.info(`⏭️  Pulando ${provider} (degraded até ${new Date(state.degraded[provider]?.until).toLocaleTimeString()})`);
+      pulados.push(provider + '(degradado)');
       continue;
     }
 
@@ -771,6 +791,7 @@ async function generate(prompt, systemPrompt = '', options = {}) {
       apiKey = getNextKey(state, provider);
       if (!apiKey) {
         logger.info(`⏭️  Pulando ${provider} (sem chave válida disponível)`);
+        pulados.push(provider + '(sem chave livre)');
         continue;
       }
     }
@@ -793,6 +814,8 @@ async function generate(prompt, systemPrompt = '', options = {}) {
       // enquanto 8 de 12 chaves respondiam nos modelos gemini-3. O teto diario
       // (_withinDailyBudget) continua — e ele que protege os outros sistemas.
       if (!(await _withinDailyBudget())) {
+        logger.info('⏭️  Pulando gemini (teto diario deste sistema: ' + _QUOTA_MAX + ')');
+        pulados.push('gemini(teto diario ' + _QUOTA_MAX + ')');
         continue; // proxima chamada reavalia; a trava expira sozinha
       }
     }
@@ -947,8 +970,10 @@ async function generate(prompt, systemPrompt = '', options = {}) {
 
   // Absolutamente tudo falhou (nem Ollama disponivel)
   const summary = errors.map(e => e.provider + '(' + e.reason + ')').join(', ');
-  logger.error('Todos os providers falharam sem Ollama disponivel: ' + summary);
-  throw new Error('Todos os providers de AI falharam. Providers tentados: ' + triedProviders.join(', ') + '. Erros: ' + summary);
+  const motivoPulo = pulados.length ? ' Pulados: ' + pulados.join(', ') + '.' : '';
+  logger.error('Todos os providers falharam sem Ollama disponivel: ' + (summary || '(nenhum chegou a ser tentado)') + motivoPulo);
+  throw new Error('Todos os providers de AI falharam. Providers tentados: ' + (triedProviders.join(', ') || '(nenhum)') +
+    '. Erros: ' + (summary || '(nenhum)') + '.' + motivoPulo);
 }
 
 // ═══════════════════════════════════════════════════
@@ -1008,7 +1033,8 @@ function resetDegraded(provider = null) {
   saveState(state);
 }
 
-module.exports = { getErrorTTL, callHuggingFace, MODELOS_HF, mesclarDegradados, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
+module.exports = {
+  tetoDiarioGemini, getErrorTTL, callHuggingFace, MODELOS_HF, mesclarDegradados, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
   // exportados para teste: e onde moraram os defeitos que pararam a geracao
   acaoParaErroGroq, isDegraded, getNextKey, loadState, proximaTentativaIa, saveState, markDegraded,
   callGemini, callCerebras, callGroq, callSambaNova, callDeepSeek, callPollinations, callOllamaVps, callOllama,

@@ -538,7 +538,10 @@ test('primeira chamada do dia conta no Redis e agenda a expiracao para depois da
 test('teto diario do Gemini: acima pula para o proximo provedor sem degradar', async t => {
   let contagem = ':1501\r\n';
   const redis = redisFalso(() => contagem);
-  const { ai, lerEstado, arquivo } = carregar(t, { redis, env: { GEMINI_API_KEY: 'AIza-gem-11111111' } });
+  // Teto fixado aqui: o padrao passou a depender de quantas chaves o ambiente
+  // tem (1.500 por chave x 60% guardados para os outros sistemas). O que este
+  // teste guarda e o comportamento no limite, nao o numero.
+  const { ai, lerEstado, arquivo } = carregar(t, { redis, env: { GEMINI_API_KEY: 'AIza-gem-11111111', EBOOK_GEMINI_DAILY_MAX: '1500' } });
   axiosFalso(t, [['pollinations.ai', async () => ok('poll')]]);
   const r = await ai.generate('p', 's', so('gemini', 'pollinations'));
   assert.strictEqual(r.provider, 'pollinations');
@@ -656,7 +659,7 @@ test('todas as chaves e provedores falham, sem Ollama: erro lista quem foi tenta
   ]);
   await assert.rejects(() => ai.generate('p', 's', so('huggingface', 'pollinations')), e => {
     assert.match(e.message, /Providers tentados: huggingface, pollinations\./);
-    assert.match(e.message, /Erros: huggingface\(quota\/rate-limit\), huggingface\(quota\/rate-limit\), pollinations\(unknown\)$/);
+    assert.match(e.message, /Erros: huggingface\(quota\/rate-limit\), huggingface\(quota\/rate-limit\), pollinations\(unknown\)\./);
     assert.ok(!e.message.includes('undefined'), 'o operador precisa ler o motivo de cada chave');
     return true;
   });
@@ -798,4 +801,26 @@ test('Ctrl+C encerra o processo', t => {
   ouvinte();
   assert.strictEqual(exit.mock.callCount(), 1);
   process.removeListener('SIGINT', ouvinte);
+});
+
+test('quando ninguem e tentado, a falha DIZ por que cada um ficou de fora', async t => {
+  // 23/09/2026: com o teto diario estourado a excecao saia muda — "Providers
+  // tentados: . Erros: " — e nao havia como descobrir que era o teto.
+  const { ai } = carregar(t, {
+    redis: redisFalso(() => ':9999\r\n'),
+    env: { GEMINI_API_KEY: 'AIza-gem-11111111', EBOOK_GEMINI_DAILY_MAX: '10' },
+  });
+  axiosFalso(t, []);
+  await assert.rejects(() => ai.generate('p', 's', so('gemini')), e => {
+    assert.match(e.message, /Providers tentados: \(nenhum\)/);
+    assert.match(e.message, /Erros: \(nenhum\)/);
+    assert.match(e.message, /Pulados: gemini\(teto diario 10\)/);
+    return true;
+  });
+});
+
+test('teto calculado: mais chaves, mais teto', () => {
+  const { tetoDiarioGemini } = require('../src/core/aiClient');
+  assert.strictEqual(tetoDiarioGemini(6), 5400);
+  assert.strictEqual(tetoDiarioGemini(2, 1000, 0.5), 1000);
 });

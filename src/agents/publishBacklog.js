@@ -114,6 +114,7 @@ function esgotado(db, ebookId, plataforma) {
 /** Busca e-books com PDF em disco e sem URL na plataforma alvo. */
 function buscarPendentes(plataforma, limite) {
   const fs = require('fs');
+const { filaDaRodada, resumoDaFila } = require('../core/filaIdioma');
   const { getDb } = require('../core/database');
   const db = getDb();
   const coluna = plataforma === 'hotmart' ? 'hotmart_url' : 'cakto_url';
@@ -145,11 +146,29 @@ function buscarPendentes(plataforma, limite) {
     'ORDER BY e.rowid DESC LIMIT ?'
   ).all(limite * 4);
 
+  // Rodizio de idioma (23/09/2026): a fila vinha so por data e o catalogo
+  // estrangeiro — 3.641 livros — ficava sempre atras do portugues. Aqui o
+  // grupo estrangeiro e consultado a parte, senao ele nem aparece entre os
+  // candidatos.
+  const estrangeiros = db.prepare(
+    'SELECT e.id, e.title, e.subtitle, e.topic, e.description, e.pdf_path, e.cover_path, e.price, e.language ' +
+    'FROM ebooks e WHERE (e.' + coluna + ' IS NULL OR e.' + coluna + " = '') " +
+    'AND NOT EXISTS (SELECT 1 FROM ebooks d WHERE d.title = e.title ' +
+    '  AND d.' + coluna + " IS NOT NULL AND d." + coluna + " <> '') " +
+    'AND e.pdf_path IS NOT NULL AND e.cover_path IS NOT NULL' +
+    " AND e.cover_path <> '' AND LOWER(COALESCE(e.language, '')) NOT LIKE 'pt%' " +
+    'ORDER BY e.rowid DESC LIMIT ?'
+  ).all(limite * 4);
+  const candidatos = filaDaRodada(cand.concat(estrangeiros), limite * 8, {
+    fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4),
+    rodada: Math.floor(Date.now() / 1800000),
+  });
+
   garantirTabela(db);
   garantirTabelaFalhas(db);
   const validos = [];
   let semArquivo = 0, reservados = 0, queimados = 0, semCapa = 0;
-  for (const e of cand) {
+  for (const e of candidatos) {
     if (validos.length >= limite) break;
     if (!e.pdf_path || !fs.existsSync(e.pdf_path)) { semArquivo++; continue; }
     if (!e.cover_path || !fs.existsSync(e.cover_path)) { semCapa++; continue; }
@@ -157,6 +176,7 @@ function buscarPendentes(plataforma, limite) {
     if (!reservar(db, e.id, plataforma)) { reservados++; continue; }
     validos.push(e);
   }
+  if (validos.length) log.info('fila da rodada: ' + resumoDaFila(validos));
   if (semArquivo) log.info('ignorados ' + semArquivo + ' sem PDF em disco (retencao ja apagou)');
   if (reservados) log.info('ignorados ' + reservados + ' ja reservados por outro lote');
   if (semCapa) log.info('ignorados ' + semCapa + ' sem capa viral em disco');

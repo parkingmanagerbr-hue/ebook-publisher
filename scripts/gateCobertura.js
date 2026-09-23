@@ -50,6 +50,7 @@ const MODULOS_NO_GATE = [
   'src/infrastructure/db/',
   'src/infrastructure/queue/',
   'src/core/agendaIa.js',
+  'src/core/conteudoEbook.js',
   'src/core/filaIdioma.js',
   'src/core/navegadorLocal.js',
   'src/core/cdpLocal.js',

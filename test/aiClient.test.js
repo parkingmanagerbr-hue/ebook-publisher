@@ -109,3 +109,21 @@ test('getNextKey nao devolve chave de provider inteiramente degradado', () => {
   const r = getNextKey(st, 'provider-inexistente');
   assert.equal(r, null);
 });
+
+test('teto diario do Gemini nasce do numero de chaves (23/09/2026)', () => {
+  const { tetoDiarioGemini } = require('../src/core/aiClient');
+  // 6 chaves x 1500 x 60% para os outros sistemas do ecossistema
+  assert.strictEqual(tetoDiarioGemini(6), 5400);
+  assert.strictEqual(tetoDiarioGemini(12), 10800);
+  assert.strictEqual(tetoDiarioGemini(1), 900);
+  assert.strictEqual(tetoDiarioGemini(0), 900, 'sem chave declarada, conta como uma');
+  assert.strictEqual(tetoDiarioGemini('nao numero'), 900);
+  assert.strictEqual(tetoDiarioGemini(6, 1500, 0.1), 900);
+  assert.strictEqual(tetoDiarioGemini(1, 100, 0.05), 100, 'nunca abaixo do piso');
+  assert.strictEqual(tetoDiarioGemini(6, 1500, 5), 9000, 'fatia acima de 1 vale como 1');
+  assert.strictEqual(tetoDiarioGemini(6, 1500, -2), 450, 'fatia negativa cai no piso de 5%, o lado seguro');
+  assert.strictEqual(tetoDiarioGemini(6, 'nao numero'), 5400, 'limite por chave invalido cai no padrao de 1500');
+  assert.strictEqual(tetoDiarioGemini(6, 0), 5400, 'zero por chave nao zera o teto');
+  assert.strictEqual(tetoDiarioGemini(6, 1500, 0), 5400, 'fatia zero cai no padrao de 60%');
+  assert.ok(tetoDiarioGemini(6) > 1747, 'o dia que barrou a geracao (1.747 chamadas) caberia hoje');
+});

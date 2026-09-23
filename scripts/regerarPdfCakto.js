@@ -48,6 +48,7 @@ async function main() {
   if (!fila.length) { console.log(JSON.stringify({ pendentes: 0 })); return; }
 
   const { generateFullEbook } = require('../src/agents/writerAgent');
+  const { salvarConteudo, carregarConteudo, quantosGuardados } = require('../src/core/conteudoEbook');
   const { generatePDF } = require('../src/agents/pdfAgent');
   const grava = db.prepare('UPDATE ebooks SET pdf_path = ? WHERE id = ?');
   // Sai da lista de pausados para o entregaCakto reativar na proxima rodada.
@@ -55,19 +56,23 @@ async function main() {
   let ok = 0, falha = 0;
   for (const e of fila) {
     try {
-      const novo = await generateFullEbook(e.topic || e.title, e.language || 'pt-BR');
+      // Se o texto ja foi guardado, refazer o PDF nao custa IA nenhuma
+      // (medido em 23/09/2026: 113 s e ~10 chamadas por livro reescrito).
+      const guardado = carregarConteudo(db, e.id);
+      const novo = guardado || await generateFullEbook(e.topic || e.title, e.language || 'pt-BR');
+      if (!guardado) salvarConteudo(db, e.id, novo);
       const capa = e.cover_path && fs.existsSync(e.cover_path) ? e.cover_path : null;
       const caminho = await generatePDF({ ...novo, title: e.title, subtitle: e.subtitle || novo.subtitle, id: e.id, language: e.language || 'pt-BR' }, capa);
       grava.run(caminho, e.id);
       reabre.run(e.id);
       ok++;
-      console.log('OK ' + e.id.slice(0, 8) + ' ' + String(e.title).slice(0, 50) + ' -> ' + caminho);
+      console.log('OK ' + e.id.slice(0, 8) + ' ' + (guardado ? '(texto guardado) ' : '(reescrito) ') + String(e.title).slice(0, 50) + ' -> ' + caminho);
     } catch (err) {
       falha++;
       console.log('FALHA ' + e.id.slice(0, 8) + ': ' + String(err.message).slice(0, 120));
     }
   }
-  console.log(JSON.stringify({ fila: fila.length, ok, falha }));
+  console.log(JSON.stringify({ fila: fila.length, ok, falha, textosGuardados: quantosGuardados(db) }));
 }
 
 module.exports = { pendentes, nota };
