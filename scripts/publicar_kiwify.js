@@ -2,7 +2,8 @@
 /**
  * publicar_kiwify.js — publica e-books na Kiwify a partir da MAQUINA DO LOGIN.
  *
- * Mesmo motivo da Hotmart: a sessao vive no Chrome do dono (porta 9223). Os
+ * Mesmo motivo da Hotmart: a sessao vive no Chrome do dono (a porta e
+ * descoberta: 9222, 9223 ou CHROME_CDP_PORT). Os
  * livros moram no VPS; daqui so sai o pedido e para ca volta o id do produto.
  *
  * Uso:
@@ -13,8 +14,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const http = require('http');
 const puppeteer = require('puppeteer-core');
 const { publicarNaKiwify, credenciais } = require('../src/agents/publisherKiwify');
+const { portasCandidatas, escolherPorta } = require('../src/core/navegadorLocal');
 
 let log;
 try { log = require('../src/core/logger').createLogger('publicarKiwify'); }
@@ -22,7 +25,7 @@ catch { log = { info: console.log, warn: console.warn, error: console.error }; }
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
-const CDP = process.env.KIWIFY_CDP || 'http://127.0.0.1:9223';
+
 const VITRINE = 'https://veloxisit.com.br/livros/';
 const TMP = path.join(os.tmpdir(), 'publicar-kiwify');
 
@@ -87,6 +90,15 @@ function gravarResultado(id, produtoId, url) {
 const slug = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
   .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 
+/** A porta do Chrome de automacao muda quando o dono reabre o navegador. */
+function responde(porta) {
+  return new Promise(resolve => {
+    const req = http.get({ host: '127.0.0.1', port: porta, path: '/json/version', timeout: 4000 }, res => { res.resume(); resolve(res.statusCode === 200); });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
 async function principal() {
   const limite = Number(arg('limite', '3'));
   const seco = temFlag('dry-run');
@@ -94,7 +106,10 @@ async function principal() {
   log.info('pendentes para a Kiwify: ' + pendentes.length + (seco ? ' (dry-run)' : ''));
   if (!pendentes.length) return { publicados: 0, falhas: 0 };
 
-  const browser = await puppeteer.connect({ browserURL: CDP, defaultViewport: null, protocolTimeout: 180000 });
+  const porta = await escolherPorta(responde, portasCandidatas(process.env));
+  if (!porta) throw new Error('CHROME_FORA_DO_AR: nenhuma porta de depuracao respondeu (rode scripts/vigia_navegador.js)');
+  log.info('Chrome de automacao na porta ' + porta);
+  const browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:' + porta, defaultViewport: null, protocolTimeout: 180000 });
   const pagina = (await browser.pages()).find(p => /kiwify\.com/.test(p.url())) || await browser.newPage();
   const cred = await credenciais(pagina);
   log.info('sessao da Kiwify pronta');
