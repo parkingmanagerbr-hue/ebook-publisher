@@ -137,7 +137,10 @@ async function principal() {
   if (!porta) throw new Error('CHROME_FORA_DO_AR: nenhuma porta de depuracao respondeu (rode scripts/vigia_navegador.js)');
   log.info('Chrome de automacao na porta ' + porta);
   const browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:' + porta, defaultViewport: null, protocolTimeout: 180000 });
-  const pagina = (await browser.pages()).find(p => /kiwify\.com/.test(p.url())) || await browser.newPage();
+  // Aba propria: reaproveitar a aba aberta trouxe "Requesting main frame too
+  // early!" quando ela ficava em estado ruim depois de outro lote (24/09/2026).
+  // A sessao vive no perfil do Chrome, nao na aba.
+  const pagina = await browser.newPage();
   const cred = await credenciais(pagina);
   log.info('sessao da Kiwify pronta');
 
@@ -181,6 +184,7 @@ async function principal() {
     }
     await dormir(PAUSA_MS);
   }
+  await pagina.close().catch(() => {});
   browser.disconnect();
   return { publicados, falhas, recusados };
 }
