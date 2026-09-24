@@ -67,3 +67,19 @@ inclusive nos pausados, sem tocar em `status`. Cron a cada 20 min, 60 por rodada
 
 `https://pay.cakto.com.br/qzj9ys5` passou a mostrar **"Termos de uso de Veloxis
 Editorial"** no lugar do e-mail pessoal.
+
+## Incidente de 24/09/2026: escrita fora do ar (HTTP 500)
+
+A partir da manhã de 24/09 **todo `PUT /api/product/{uuid}/` passou a responder
+`500` com HTML de "Server Error"** — inclusive um PUT devolvendo o objeto
+exatamente como o `GET` entregou, sem nenhuma alteração nossa. Testado em cinco
+produtos diferentes, todos 500. A criação de produto pela UI (job de backlog)
+falhou junto: "Produto não criado (URL ficou em ?tab=products sem ID)".
+
+Conclusão: é incidente da Cakto, não do nosso conteúdo — de manhã cedo o mesmo
+passe corrigia 5 de 5.
+
+O que mudou no nosso lado: `higieneCakto.ehErroDaLoja(status, corpo)` reconhece
+5xx (ou HTML no lugar de JSON) e **para a rodada na hora**, em vez de registrar
+60 falhas e voltar a martelar a cada 20 minutos. O resultado da rodada passa a
+trazer `foraDoAr: true`.
