@@ -20,6 +20,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { rotuloDoResultado, detalheDoResultado } = require('../src/agents/hotmartRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
+const { comTentativas } = require('../src/core/tentativas');
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
@@ -120,10 +121,18 @@ function buscarPendentes(limite) {
   return m ? JSON.parse(m[0]) : [];
 }
 
-function baixar(remoto, destino) {
-  ssh(`docker cp ${CONTAINER}:${remoto} /tmp/arquivo_atual`);
-  execFileSync('scp', [`${VPS}:/tmp/arquivo_atual`, destino], { timeout: 180000 });
-  return fs.existsSync(destino) && fs.statSync(destino).size > 1000;
+/**
+ * Traz o arquivo do servidor. Repete quando a queda e de rede: num lote de 18
+ * livros, 5 se perderam por soluco de ssh/scp (24/09/2026) — nenhuma falha era
+ * da loja, e cada uma ainda gastava uma das tres tentativas do livro.
+ */
+async function baixar(remoto, destino) {
+  return comTentativas(async () => {
+    ssh(`docker cp ${CONTAINER}:${remoto} /tmp/arquivo_atual`);
+    execFileSync('scp', [`${VPS}:/tmp/arquivo_atual`, destino], { timeout: 180000 });
+    if (!(fs.existsSync(destino) && fs.statSync(destino).size > 1000)) throw new Error('arquivo veio vazio do VPS');
+    return true;
+  }, { vezes: 3, aoFalhar: (e, n) => console.log('  rede falhou (tentativa ' + n + '): ' + String(e.message).slice(0, 80)) });
 }
 
 function gravarFalha(ebookId, erro) {
@@ -194,9 +203,9 @@ async function main() {
       const capaLocal = path.join(TMP, 'capa_' + i + '.png');
       let r = null;
       try {
-        if (!baixar(e.pdf_path, pdfLocal)) throw new Error('PDF nao veio do VPS');
+        if (!await baixar(e.pdf_path, pdfLocal)) throw new Error('PDF nao veio do VPS');
         // A capa deixou de ser opcional: sem ela, nao publica.
-        if (!baixar(e.cover_path, capaLocal)) throw new Error('capa viral nao veio do VPS — nao publico sem capa');
+        if (!await baixar(e.cover_path, capaLocal)) throw new Error('capa viral nao veio do VPS — nao publico sem capa');
 
         r = await publishToHotmart({
           title: e.title, subtitle: e.subtitle, topic: e.topic, description: e.description,

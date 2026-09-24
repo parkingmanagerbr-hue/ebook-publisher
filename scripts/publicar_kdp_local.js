@@ -20,6 +20,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
+const { comTentativas } = require('../src/core/tentativas');
 
 let log;
 try { log = require('../src/core/logger').createLogger('publicarKdp'); }
@@ -72,10 +73,14 @@ function gravarResultado(id, produtoId, url) {
   `);
 }
 
-function baixar(remoto, destino) {
-  execFileSync('ssh', [VPS, 'docker cp ' + CONTAINER + ':' + remoto + ' /tmp/kdp_arquivo'], { timeout: 180000 });
-  execFileSync('scp', [VPS + ':/tmp/kdp_arquivo', destino], { timeout: 180000 });
-  return fs.existsSync(destino) && fs.statSync(destino).size > 1000;
+/** Traz o arquivo do servidor, repetindo quando a queda e de rede. */
+async function baixar(remoto, destino) {
+  return comTentativas(async () => {
+    execFileSync('ssh', [VPS, 'docker cp ' + CONTAINER + ':' + remoto + ' /tmp/kdp_arquivo'], { timeout: 180000 });
+    execFileSync('scp', [VPS + ':/tmp/kdp_arquivo', destino], { timeout: 180000 });
+    if (!(fs.existsSync(destino) && fs.statSync(destino).size > 1000)) throw new Error('arquivo veio vazio do VPS');
+    return true;
+  }, { vezes: 3, aoFalhar: (e, n) => log.warn('rede falhou (tentativa ' + n + '): ' + umaLinha(e.message, 80)) });
 }
 
 async function principal() {
@@ -100,8 +105,8 @@ async function principal() {
     const pdfLocal = path.join(TMP, 'livro.pdf');
     const capaLocal = path.join(TMP, 'capa.png');
     try {
-      if (!baixar(e.pdf_path, pdfLocal)) throw new Error('PDF nao veio do VPS');
-      if (!baixar(e.cover_path, capaLocal)) throw new Error('capa nao veio do VPS');
+      if (!await baixar(e.pdf_path, pdfLocal)) throw new Error('PDF nao veio do VPS');
+      if (!await baixar(e.cover_path, capaLocal)) throw new Error('capa nao veio do VPS');
       const r = await publishToAmazon({
         title: e.title, subtitle: e.subtitle, topic: e.topic, description: e.description,
         language: e.language, price: e.price, pdfPath: pdfLocal, coverPath: capaLocal,
