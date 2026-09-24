@@ -94,3 +94,24 @@ test('catalogo que nao e lista tambem devolve fila vazia', () => {
   assert.deepStrictEqual(filaDaRodada('nao e lista', 5), []);
   assert.deepStrictEqual(filaDaRodada({ 0: L('p', 'pt') }, 5), []);
 });
+
+test('REGRESSAO: titulo repetido no lote virava produto duplicado na loja', () => {
+  const { semTitulosRepetidos } = require('../src/core/filaIdioma');
+  const lote = [
+    { id: 'a', title: 'Alimentação Anti-inflamatória', language: 'pt-BR' },
+    { id: 'b', title: 'alimentação anti-inflamatória ', language: 'pt-BR' },
+    { id: 'c', title: 'Outro Livro', language: 'pt-BR' },
+  ];
+  assert.deepStrictEqual(semTitulosRepetidos(lote).map(l => l.id), ['a', 'c']);
+  // e a fila da rodada ja entrega sem repetidos
+  const fila = filaDaRodada(lote.concat([{ id: 'd', title: 'Alimentação Anti-inflamatória', language: 'en' }]), 4, { fatiaEstrangeira: 0.5 });
+  const titulos = fila.map(l => String(l.title).toLowerCase().trim());
+  assert.strictEqual(new Set(titulos).size, titulos.length, 'nenhum titulo repetido: ' + titulos.join(' | '));
+});
+
+test('livro sem titulo nao e descartado por engano', () => {
+  const { semTitulosRepetidos } = require('../src/core/filaIdioma');
+  const r = semTitulosRepetidos([{ id: 'x' }, { id: 'y' }, null, { id: 'z', title: '' }]);
+  assert.deepStrictEqual(r.map(l => l.id), ['x', 'y', 'z']);
+  assert.deepStrictEqual(semTitulosRepetidos(null), []);
+});

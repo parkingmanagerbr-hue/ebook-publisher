@@ -68,7 +68,29 @@ function filaDaRodada(livros, limite, { fatiaEstrangeira = 0.4, rodada = 0 } = {
   }
 
   const restantes = vagas - escolhidosFora.length;
-  return pt.slice(0, restantes).concat(escolhidosFora);
+  // Titulo repetido no mesmo lote vira produto duplicado na loja.
+  return semTitulosRepetidos(pt.slice(0, restantes).concat(escolhidosFora));
+}
+
+/**
+ * Tira do lote titulos repetidos.
+ *
+ * 24/09/2026: 39 titulos ficaram com DUAS copias ativas na Hotmart, sempre com
+ * ids consecutivos — o mesmo titulo estava duas vezes na fila e o catalogo,
+ * lido no inicio do lote, ainda nao conhecia a copia criada minutos antes.
+ * Produto duplicado em marketplace nao se desfaz sozinho. Pura.
+ */
+function semTitulosRepetidos(livros) {
+  const vistos = new Set();
+  const saida = [];
+  for (const l of livros || []) {
+    if (!l) continue;
+    const chave = String(l.title || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (chave && vistos.has(chave)) continue;
+    if (chave) vistos.add(chave);
+    saida.push(l);
+  }
+  return saida;
 }
 
 /** Quantos de cada idioma saíram — para o log da rodada. Pura. */
@@ -81,4 +103,4 @@ function resumoDaFila(fila) {
   return Object.keys(conta).sort().map(k => k + '=' + conta[k]).join(' ');
 }
 
-module.exports = { filaDaRodada, resumoDaFila, ehPortugues, base };
+module.exports = { filaDaRodada, resumoDaFila, semTitulosRepetidos, ehPortugues, base };
