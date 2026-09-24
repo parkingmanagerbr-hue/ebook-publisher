@@ -103,3 +103,14 @@ test('a higiene corrige os metodos junto com o resto (era 400 em 60 de 60)', () 
   const jaLimpo = alvoHigiene({ paymentMethods: ['pix'], currency: 'BRL', type: 'unique', producerName: 'Veloxis Editorial', salesPage: CHECKOUT, affiliate: true, affiliateCommission: 50, affiliateDescription: 'x' }, { checkout: CHECKOUT });
   assert.ok(!('paymentMethods' in jaLimpo), 'lista ja valida nao e reescrita');
 });
+
+test('500 da loja e reconhecido como incidente dela, nao erro nosso', () => {
+  const { ehErroDaLoja } = require('../src/agents/higieneCakto');
+  assert.strictEqual(ehErroDaLoja(500, ''), true);
+  assert.strictEqual(ehErroDaLoja(503, ''), true);
+  assert.strictEqual(ehErroDaLoja(200, '<!doctype html><title>Server Error (500)</title>'), true, 'HTML no lugar de JSON');
+  assert.strictEqual(ehErroDaLoja(400, '{"paymentMethods":["invalido"]}'), false, 'erro de conteudo e nosso');
+  assert.strictEqual(ehErroDaLoja(404, '{"detail":"Nao encontrado."}'), false);
+  assert.strictEqual(ehErroDaLoja(null, null), false);
+  assert.strictEqual(ehErroDaLoja('500', ''), true, 'status como texto tambem conta');
+});

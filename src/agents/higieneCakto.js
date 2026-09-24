@@ -71,6 +71,20 @@ function metodosDePagamentoValidos(metodos, { moeda = 'BRL', tipo = 'unique' } =
   });
 }
 
+/**
+ * A loja esta fora do ar? 5xx ou HTML no lugar de JSON.
+ *
+ * 24/09/2026: o PUT passou a responder 500 em TODOS os produtos — inclusive
+ * devolvendo o objeto exatamente como o GET entregou, sem mudanca nenhuma.
+ * E incidente da Cakto, nao do nosso conteudo. Sem reconhecer isso, o passe
+ * marcava 60 falhas por rodada e voltava a martelar a cada 20 minutos. Pura.
+ */
+function ehErroDaLoja(status, corpo) {
+  const n = Number(status);
+  if (n >= 500 && n <= 599) return true;
+  return /^\s*<(!doctype|html)/i.test(String(corpo || ''));
+}
+
 /** Precisa subir imagem? So quando o produto nao tem e existe capa em disco. Pura. */
 function precisaSubirCapa(produto, capaExiste) {
   return !!capaExiste && !(produto && produto.image);
@@ -84,4 +98,4 @@ function resumoDaCorrecao(produtoId, mudancas, subiuCapa) {
   return id + ': ' + [...(subiuCapa ? ['capa'] : []), ...campos].join(', ');
 }
 
-module.exports = { alvoHigiene, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, metodosDePagamentoValidos, DESCRICAO_AFILIADO };
+module.exports = { alvoHigiene, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, metodosDePagamentoValidos, ehErroDaLoja, DESCRICAO_AFILIADO };

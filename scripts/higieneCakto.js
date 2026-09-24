@@ -16,7 +16,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { alvoHigiene, precisaSubirCapa, resumoDaCorrecao } = require('../src/agents/higieneCakto');
+const { alvoHigiene, precisaSubirCapa, resumoDaCorrecao, ehErroDaLoja } = require('../src/agents/higieneCakto');
 
 let log;
 try { log = require('../src/core/logger').createLogger('higieneCakto'); }
@@ -86,7 +86,7 @@ async function main() {
 
   const H = await cabecalhos();
   const marca = db.prepare('INSERT OR REPLACE INTO cakto_higiene (ebook_id, resultado, quando) VALUES (?,?,?)');
-  let corrigidos = 0, semMudanca = 0, falhas = 0;
+  let corrigidos = 0, semMudanca = 0, falhas = 0, foraDoAr = false;
 
   for (const e of livros) {
     try {
@@ -122,10 +122,16 @@ async function main() {
       const msg = umaLinha(err && err.message, 160);
       log.error('FALHA ' + umaLinha(e.cakto_product_id, 20) + ': ' + msg);
       if (err && err.cloudflare) { log.warn('Cloudflare barrou — parando esta rodada'); break; }
+      // 500 da loja: nao adianta seguir nem voltar daqui a 20 min martelando.
+      if (ehErroDaLoja(err && err.status, msg)) {
+        log.warn('a Cakto esta respondendo erro de servidor — parando a rodada (tenta na proxima)');
+        foraDoAr = true;
+        break;
+      }
       await dormir(PAUSA_MS);
     }
   }
-  return { fila: livros.length, corrigidos, semMudanca, falhas };
+  return { fila: livros.length, corrigidos, semMudanca, falhas, foraDoAr };
 }
 
 if (require.main === module) {
