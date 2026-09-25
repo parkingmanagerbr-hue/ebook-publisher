@@ -224,6 +224,7 @@ async function main() {
       const pdfLocal = path.join(TMP, 'ebook_' + i + '.pdf');
       const capaLocal = path.join(TMP, 'capa_' + i + '.png');
       let r = null;
+      let ultimoErro = null;
       try {
         if (!await baixar(e.pdf_path, pdfLocal)) throw new Error('PDF nao veio do VPS');
         // A capa deixou de ser opcional: sem ela, nao publica.
@@ -239,6 +240,7 @@ async function main() {
           gravarResultado(e.id, r.url || '', r.hotmartProductId || '');
         }
       } catch (err) {
+        ultimoErro = err;
         console.log('  erro: ' + String(err.message).slice(0, 100));
       }
       for (const f of [pdfLocal, capaLocal]) { try { fs.unlinkSync(f); } catch {} }
@@ -246,7 +248,14 @@ async function main() {
       const sucesso = !!(r && r.url);
       if (sucesso) ok++;
       else if (!(r && r.hotmartProductId)) {
-        try { gravarFalha(e.id, (r && r.error) || 'sem url'); } catch (err) { console.log('  falha nao registrada: ' + String(err.message).slice(0, 80)); }
+        // Queda de rede NAO conta tentativa: o livro nao tem culpa de o ssh ter
+        // caido, e tres quedas o tirariam da fila para sempre (25/09/2026).
+        if (ultimoErro && valeTentarDeNovo(ultimoErro)) {
+          console.log('  falha de rede — o livro continua na fila (nao conta tentativa)');
+        } else {
+          const motivo = (r && r.error) || (ultimoErro && ultimoErro.message) || 'sem url';
+          try { gravarFalha(e.id, String(motivo).slice(0, 200)); } catch (err) { console.log('  falha nao registrada: ' + String(err.message).slice(0, 80)); }
+        }
       }
       const min = ((Date.now() - t0) / 60000).toFixed(1);
       console.log(`  [${i + 1}/${itens.length}] ${sucesso ? 'OK  ' : 'FALHA'} ${String(e.title).slice(0, 40)}` +
