@@ -291,3 +291,17 @@ test('429 insistente desiste com a mensagem da API', async () => {
     () => publicarNaKiwify(p, LIVRO, { cred: CRED, opcoesDeChamada: { tentativas: 2, esperar: async () => {} } }),
     /KIWIFY_CRIACAO_FALHOU: status 429/);
 });
+
+test('REGRESSAO: catalogo grande nao pode ser cortado (JSON quebrado = duplicata)', async () => {
+  // 25/09/2026: a resposta era cortada em 4.000 caracteres, o JSON da listagem
+  // virava invalido, o catalogo voltava VAZIO e o robo republicava o que ja
+  // estava na loja.
+  const muitos = Array.from({ length: 200 }, (_, i) => ({
+    id: 'p' + i, name: 'Livro numero ' + i + ' com um titulo longo o suficiente para encher a resposta',
+  }));
+  const p = paginaFalsa({ produtos: muitos });
+  const { total, porNome } = await catalogo(p, CRED);
+  assert.strictEqual(total, 200, 'a lista inteira precisa chegar');
+  assert.strictEqual(porNome.size, 200);
+  assert.ok(porNome.has('livro numero 199 com um titulo longo o suficiente para encher a resposta'));
+});

@@ -72,7 +72,11 @@ async function chamarUmaVez(page, cred, metodo, caminho, corpo) {
         body: body ? JSON.stringify(body) : undefined,
       });
       const texto = await resp.text();
-      return { status: resp.status, texto: texto.slice(0, 4000) };
+      // NAO cortar aqui: o corte em 4.000 caracteres quebrava o JSON da
+      // listagem (25/09/2026). Com o catalogo ilegivel, `catalogo()` devolvia
+      // vazio e o robo republicava titulo que ja estava na loja. Quem quiser
+      // um trecho curto corta na hora de logar.
+      return { status: resp.status, texto };
     } catch (e) { return { status: 0, texto: String(e).slice(0, 200) }; }
   }, API, cred.bearer, cred.device, metodo, caminho, corpo || null);
   let json = null;
