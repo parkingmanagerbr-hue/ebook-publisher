@@ -40,6 +40,7 @@ const MODULOS_NO_GATE = [
   'src/agents/higieneCakto.js',
   'src/agents/idiomaHotmart.js',
   'src/agents/kdpRegras.js',
+  'src/agents/ofertaViral.js',
   'src/agents/kiwifyRegras.js',
   'src/agents/publisherKiwify.js',
   'src/agents/pdfIdioma.js',
