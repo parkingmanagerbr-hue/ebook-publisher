@@ -20,7 +20,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { rotuloDoResultado, detalheDoResultado } = require('../src/agents/hotmartRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
-const { comTentativas } = require('../src/core/tentativas');
+const { comTentativas, valeTentarDeNovo, esperaDaTentativa } = require('../src/core/tentativas');
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
@@ -35,15 +35,37 @@ function arg(nome, padrao) {
   return p ? p.split('=')[1] : padrao;
 }
 
+/**
+ * Repeticao para os comandos SINCRONOS de ssh/scp deste script.
+ *
+ * 25/09/2026: o lote 14 perdeu 6 livros com 'spawnSync ssh ETIMEDOUT'. O
+ * `baixar()` ja repetia, mas `ssh()` — usada para gravar o resultado no banco —
+ * nao, entao a oscilacao da rede ainda custava o livro.
+ */
+function comTentativasSincrono(acao, vezes = 4) {
+  let ultimo;
+  for (let n = 1; n <= vezes; n++) {
+    try { return acao(); } catch (e) {
+      ultimo = e;
+      if (n >= vezes || !valeTentarDeNovo(e)) break;
+      const espera = esperaDaTentativa(n);
+      console.log('  rede falhou (tentativa ' + n + '): ' + String(e.message).slice(0, 70) + ' — esperando ' + Math.round(espera / 1000) + 's');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, espera);
+    }
+  }
+  throw ultimo;
+}
+
 function ssh(cmd, timeout) {
-  return execFileSync('ssh', [VPS, cmd], { encoding: 'utf8', timeout: timeout || 180000, maxBuffer: 8 * 1024 * 1024 });
+  return comTentativasSincrono(() =>
+    execFileSync('ssh', [VPS, cmd], { encoding: 'utf8', timeout: timeout || 180000, maxBuffer: 8 * 1024 * 1024 }));
 }
 
 function rodarNoContainer(js, timeout) {
   fs.mkdirSync(TMP, { recursive: true });
   const local = path.join(TMP, 'cmd.js');
   fs.writeFileSync(local, js);
-  execFileSync('scp', [local, `${VPS}:/tmp/cmd.js`], { timeout: 120000 });
+  comTentativasSincrono(() => execFileSync('scp', [local, `${VPS}:/tmp/cmd.js`], { timeout: 120000 }));
   ssh(`docker cp /tmp/cmd.js ${CONTAINER}:/app/cmd.js`);
   return ssh(`docker exec ${CONTAINER} sh -c "cd /app && node cmd.js"`, timeout);
 }
@@ -129,7 +151,7 @@ function buscarPendentes(limite) {
 async function baixar(remoto, destino) {
   return comTentativas(async () => {
     ssh(`docker cp ${CONTAINER}:${remoto} /tmp/arquivo_atual`);
-    execFileSync('scp', [`${VPS}:/tmp/arquivo_atual`, destino], { timeout: 180000 });
+    comTentativasSincrono(() => execFileSync('scp', [`${VPS}:/tmp/arquivo_atual`, destino], { timeout: 180000 }));
     if (!(fs.existsSync(destino) && fs.statSync(destino).size > 1000)) throw new Error('arquivo veio vazio do VPS');
     return true;
   }, { vezes: 3, aoFalhar: (e, n) => console.log('  rede falhou (tentativa ' + n + '): ' + String(e.message).slice(0, 80)) });
