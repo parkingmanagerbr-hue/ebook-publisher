@@ -31,16 +31,18 @@ try {
   $ultima = ($vigia.Trim() -split "`n")[-1]
   Registrar ('navegador: ' + $ultima)
   if ($ultima -notmatch '"porta":\d+') { Registrar 'sem Chrome de automacao - nada a fazer nesta rodada'; exit 0 }
-  $semHotmart = $ultima -match '"hotmart":"deslogado"'
   $semKiwify = $ultima -match '"kiwify":"deslogado"'
+
+  # O vigia erra: em 26/09/2026 ele disse "hotmart: deslogado" enquanto o painel
+  # estava LOGADO - o que morrera era a aba do app - e oito lotes seguidos
+  # publicaram zero. Quem decide agora e o agente de sessao, que ABRE a tela e
+  # olha; ele so pede gente quando ha senha ou codigo na frente (codigo 2).
+  $saida = & node scripts\sessaoHotmart.js 2>&1 | Out-String
+  $semHotmart = ($LASTEXITCODE -eq 2)
+  Registrar ('sessao: ' + (($saida.Trim() -split "`n")[-1]))
   if ($semHotmart -and $semKiwify) { Registrar 'Hotmart e Kiwify deslogadas - so o dono pode logar (senha/2FA)'; exit 0 }
 
   if (-not $semHotmart) {
-    $saida = & node scripts\garantir_aba_hotmart.js 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) { Registrar ('aba do app: ' + $saida.Trim()) }
-
-    $saida = & node scripts\renovar_token_local.js 2>&1 | Out-String
-    Registrar ('token: ' + $saida.Trim())
 
     $saida = & node scripts\enviarPdfsRegerados.js --limite=3 2>&1 | Out-String
     Registrar ('pdfs: ' + (($saida.Trim() -split "`n")[-1]))

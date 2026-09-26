@@ -40,6 +40,7 @@ const MODULOS_NO_GATE = [
   'src/agents/higieneCakto.js',
   'src/agents/caktoApiRegras.js',
   'src/agents/aprovacaoHotmart.js',
+  'src/agents/sessaoHotmart.js',
   'src/agents/idiomaHotmart.js',
   'src/agents/kdpRegras.js',
   'src/agents/ofertaViral.js',

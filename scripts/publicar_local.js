@@ -114,7 +114,11 @@ function buscarPendentes(limite) {
         const tok = fs.readFileSync('/app/data/hotmart_access_token.txt', 'utf8').trim();
         catalogo = await require('/app/src/agents/hotmartCatalogo').baixarCatalogo(tok);
       } catch (e) { console.error('catalogo indisponivel: ' + e.message); }
-      if (!catalogo) { console.log('[]'); return; }  // sem conferir, nao publica
+      // Sem conferir o catalogo nao se publica (duplicaria produto). Mas o
+      // aviso tem de ser DISTINTO de fila vazia: em 26/09/2026 o token venceu,
+      // isto imprimia "[]" e oito lotes seguidos registraram "nada pendente" —
+      // parecia que o trabalho tinha acabado.
+      if (!catalogo) { console.log('@@CATALOGO_INDISPONIVEL'); return; }
       const { idsPorTitulo } = require('/app/src/agents/hotmartCatalogo');
       const liga = db.prepare("UPDATE ebooks SET hotmart_product_id = ?, hotmart_url = ?, status = 'published' WHERE id = ?");
       for (const r of candidatos) {
@@ -140,6 +144,11 @@ function buscarPendentes(limite) {
       console.log(JSON.stringify(ok));
     })();
   `);
+  if (saida.includes('@@CATALOGO_INDISPONIVEL')) {
+    const e = new Error('CATALOGO_INDISPONIVEL: nao deu para ler o catalogo da Hotmart (token vencido?) — nada foi publicado');
+    e.catalogo = true;
+    throw e;
+  }
   const m = saida.match(/\[.*\]/s);
   return m ? JSON.parse(m[0]) : [];
 }
