@@ -83,3 +83,48 @@ O que mudou no nosso lado: `higieneCakto.ehErroDaLoja(status, corpo)` reconhece
 5xx (ou HTML no lugar de JSON) e **para a rodada na hora**, em vez de registrar
 60 falhas e voltar a martelar a cada 20 minutos. O resultado da rodada passa a
 trazer `foraDoAr: true`.
+
+## 26/09/2026: o wizard do painel quebrou — publicação passou a ser pela API
+
+O erro 500 de 24/09 **passou** (a escrita voltou a responder 200). Mas o robô de
+navegador que criava produto (`publishBacklog --plataforma=cakto`, wizard de
+`/dashboard/products/new`) parou de funcionar: na etapa 2 não havia mais botão
+"Continuar", nem campo de arquivo, nem botão de publicar. Resultado medido:
+**0 de 2 publicados, 3 minutos por livro** e o navegador pendurado.
+
+Sondagem das rotas no mesmo dia (404 = não existe, 400/405 = existe):
+
+| rota | método | resultado |
+|---|---|---|
+| `api/product/` | POST | 404 — **singular não é coleção** |
+| `api/products/` | POST | **201 — cria** (exige só `name` e `description`) |
+| `api/products/` | GET | 200 — catálogo paginado (`count`, `next`, `results`) |
+| `api/product/{uuid}/` | GET/PUT | 200 — objeto inteiro (PATCH continua 405) |
+| `api/product/{uuid}/` | DELETE | 200 `{"detail":"Produto removido com sucesso."}` |
+| `api/product/create/` | POST | 405 |
+
+**O que a Cakto preenche sozinha na criação:** `price` 5.00, `currency` BRL,
+`type` unique, `installments` 12, `guarantee` 7, `status` **active**, uma
+categoria qualquer, e **uma oferta padrão** — cujo `id` é o *shortcode* do
+checkout (`https://pay.cakto.com.br/<shortcode>`) e é o que o resto do sistema
+guarda como `cakto_product_id` (é o que `/api/offers/{shortcode}/` aceita).
+
+Fluxo novo (`scripts/publicar_cakto_api.js`, roda **dentro do container**, sem
+navegador, ~18 s por livro):
+
+1. `POST /api/products/` `{name, description}`
+2. `GET /api/product/{id}/` — e **conferir que o nome é o pedido** antes de gravar
+3. `PUT /api/product/{id}/` com `{...produto, ...ajustes}`: entrega
+   (`contentDeliveries:['external']` + `emailAccessLink`), `producerName`,
+   afiliação (50%, automática, na vitrine), `salesPage` e métodos de pagamento
+   filtrados
+4. `PUT /api/product/{id}/image/` multipart com a capa
+
+**Regra que não se negocia:** livro **sem link de entrega** é gravado em
+`waiting_config`, nunca `active` — vender sem ter o que entregar é pior que não
+vender. Há teste unitário que fica vermelho se alguém trocar isso
+(`test/caktoApiRegras.test.js`).
+
+⚠️ **Sonda que apaga**: um script de diagnóstico que terminava em `DELETE`
+apagou um produto recém-publicado de verdade. Script de sonda não pode ter
+efeito destrutivo no fim — o livro teve de voltar para a fila na mão.
