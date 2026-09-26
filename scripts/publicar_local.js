@@ -21,6 +21,7 @@ const { execFileSync } = require('child_process');
 const { rotuloDoResultado, detalheDoResultado } = require('../src/agents/hotmartRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { comTentativas, valeTentarDeNovo, esperaDaTentativa } = require('../src/core/tentativas');
+const { travar } = require('../src/core/travaLocal');
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
@@ -270,5 +271,18 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().then(() => process.exit(0)).catch(e => { console.error('ERRO:', e.message); process.exit(1); });
+  // Um publicador da Hotmart por vez. Em 26/09/2026 a tarefa agendada
+  // (--limite=6, de 30 em 30 min) e um lote lancado a mao (--limite=18)
+  // rodaram juntos no mesmo Chrome: 27 dos 110 produtos do dia sairam com
+  // titulo repetido, alguns em triplicata. A trava fica AQUI porque quem
+  // esquece de travar e sempre a chamada nova.
+  const soltar = travar('hotmart', { avisar: m => console.log(m) });
+  if (!soltar) {
+    console.log('ja existe uma publicacao da Hotmart em andamento — saindo sem publicar');
+    process.exit(0);
+  }
+  const fim = codigo => { soltar(); process.exit(codigo); };
+  process.on('SIGINT', () => fim(130));
+  process.on('SIGTERM', () => fim(143));
+  main().then(() => fim(0)).catch(e => { console.error('ERRO:', e.message); fim(1); });
 }

@@ -19,6 +19,7 @@ const { publicarNaCakto, cabecalhos } = require('../src/agents/publisherCaktoApi
 const { ehErroDaLoja } = require('../src/agents/higieneCakto');
 const { resumoDaPublicacao, semTitulosJaPublicados } = require('../src/agents/caktoApiRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
+const { travar } = require('../src/core/travaLocal');
 
 let log;
 try { log = require('../src/core/logger').createLogger('publicarCakto'); }
@@ -28,34 +29,10 @@ const arg = (n, p) => { const a = process.argv.find(x => x.startsWith('--' + n +
 const temFlag = n => process.argv.includes('--' + n);
 const umaLinha = (s, n = 60) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, n);
 
-/**
- * Trava de um publicador por vez. Dois processos leem a MESMA fila (quem nao
- * tem cakto_product_id) e publicariam o mesmo livro duas vezes — em 26/09/2026
- * duas rodadas se sobrepuseram por 2 minutos e so nao duplicaram por sorte.
- * Devolve a funcao que solta a trava, ou null se ja ha um rodando.
- */
-function travar() {
-  const caminho = process.env.CAKTO_LOCK || '/tmp/publicar_cakto_api.lock';
-  let fd;
-  try { fd = fs.openSync(caminho, 'wx'); }
-  catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-    // Trava orfa (processo morreu com o container): so vale a de hoje.
-    const idade = Date.now() - fs.statSync(caminho).mtimeMs;
-    if (idade < 2 * 60 * 60 * 1000) return null;
-    log.warn('trava antiga de ' + Math.round(idade / 60000) + ' min — assumindo que o dono morreu');
-    fs.unlinkSync(caminho);
-    fd = fs.openSync(caminho, 'wx');
-  }
-  fs.writeSync(fd, String(process.pid));
-  fs.closeSync(fd);
-  return () => { try { fs.unlinkSync(caminho); } catch (_) {} };
-}
-
 async function principal() {
   const limite = Number(arg('limite', '6'));
   const seco = temFlag('dry-run');
-  const soltar = seco ? () => {} : travar();
+  const soltar = seco ? () => {} : travar('cakto', { avisar: m => log.warn(m) });
   if (!soltar) { log.warn('ja existe um publicador da Cakto rodando — saindo'); return { publicados: 0, falhas: 0, recusados: 0, travado: true }; }
   try { return await rodar(limite, seco); } finally { soltar(); }
 }
