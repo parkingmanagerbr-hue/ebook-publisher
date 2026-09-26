@@ -102,6 +102,29 @@ function corpoDeAjuste(produto, opcoes = {}) {
   return out;
 }
 
+/** Chave de comparacao de titulo (a mesma do resto do sistema). Pura. */
+function chaveDeTitulo(titulo) {
+  return String(titulo == null ? '' : titulo).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Tira da fila o livro cujo TITULO ja esta publicado na Cakto por outro livro.
+ *
+ * 26/09/2026: 66 de 1.123 produtos lidos tinham titulo repetido (ate 4 copias
+ * do mesmo nome). `filaDaRodada` ja evita repetir DENTRO do lote, mas nao sabe
+ * do que foi publicado em lotes anteriores — e produto duplicado em
+ * marketplace nao se desfaz sozinho. `publicados` e a lista de titulos que ja
+ * tem produto na Cakto. Pura.
+ */
+function semTitulosJaPublicados(livros, publicados) {
+  const vistos = new Set((publicados || []).map(chaveDeTitulo).filter(Boolean));
+  return (livros || []).filter(l => {
+    if (!l) return false;
+    const k = chaveDeTitulo(l.title || l.titulo);
+    return !k || !vistos.has(k);
+  });
+}
+
 /**
  * O produto que a API devolveu e mesmo o que pedimos? Guarda contra gravar
  * ajuste no produto errado — ja aconteceu na Kiwify. Pura.
@@ -136,5 +159,6 @@ function resumoDaPublicacao(titulo, shortcode, ajustes) {
 module.exports = {
   corpoDeCriacao, corpoDeAjuste, nomeDeProduto, descricaoDeProduto, shortcodeDaOferta,
   linkDeCheckout, mesmoProdutoCakto, motivoDefinitivo, resumoDaPublicacao,
+  semTitulosJaPublicados, chaveDeTitulo,
   PRODUTOR, COMISSAO_AFILIADO,
 };

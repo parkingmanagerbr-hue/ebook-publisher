@@ -17,7 +17,7 @@
 const fs = require('fs');
 const { publicarNaCakto, cabecalhos } = require('../src/agents/publisherCaktoApi');
 const { ehErroDaLoja } = require('../src/agents/higieneCakto');
-const { resumoDaPublicacao } = require('../src/agents/caktoApiRegras');
+const { resumoDaPublicacao, semTitulosJaPublicados } = require('../src/agents/caktoApiRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 
 let log;
@@ -28,9 +28,39 @@ const arg = (n, p) => { const a = process.argv.find(x => x.startsWith('--' + n +
 const temFlag = n => process.argv.includes('--' + n);
 const umaLinha = (s, n = 60) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, n);
 
+/**
+ * Trava de um publicador por vez. Dois processos leem a MESMA fila (quem nao
+ * tem cakto_product_id) e publicariam o mesmo livro duas vezes — em 26/09/2026
+ * duas rodadas se sobrepuseram por 2 minutos e so nao duplicaram por sorte.
+ * Devolve a funcao que solta a trava, ou null se ja ha um rodando.
+ */
+function travar() {
+  const caminho = process.env.CAKTO_LOCK || '/tmp/publicar_cakto_api.lock';
+  let fd;
+  try { fd = fs.openSync(caminho, 'wx'); }
+  catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    // Trava orfa (processo morreu com o container): so vale a de hoje.
+    const idade = Date.now() - fs.statSync(caminho).mtimeMs;
+    if (idade < 2 * 60 * 60 * 1000) return null;
+    log.warn('trava antiga de ' + Math.round(idade / 60000) + ' min — assumindo que o dono morreu');
+    fs.unlinkSync(caminho);
+    fd = fs.openSync(caminho, 'wx');
+  }
+  fs.writeSync(fd, String(process.pid));
+  fs.closeSync(fd);
+  return () => { try { fs.unlinkSync(caminho); } catch (_) {} };
+}
+
 async function principal() {
   const limite = Number(arg('limite', '6'));
   const seco = temFlag('dry-run');
+  const soltar = seco ? () => {} : travar();
+  if (!soltar) { log.warn('ja existe um publicador da Cakto rodando — saindo'); return { publicados: 0, falhas: 0, recusados: 0, travado: true }; }
+  try { return await rodar(limite, seco); } finally { soltar(); }
+}
+
+async function rodar(limite, seco) {
 
   const db = require('../src/core/database').getDb();
   db.prepare('CREATE TABLE IF NOT EXISTS cakto_recusado (ebook_id TEXT PRIMARY KEY, motivo TEXT, quando INTEGER)').run();
@@ -42,8 +72,19 @@ async function principal() {
   const candidatos = db.prepare(base + "AND LOWER(COALESCE(language,'')) LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all()
     .concat(db.prepare(base + "AND LOWER(COALESCE(language,'')) NOT LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all());
 
+  // Titulo que ja tem produto na Cakto nao volta para a fila: 66 de 1.123
+  // produtos lidos em 26/09/2026 tinham nome repetido (ate 4 copias), e
+  // duplicata em marketplace nao se desfaz sozinha.
+  const jaPublicados = db.prepare(
+    "SELECT title FROM ebooks WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' AND title IS NOT NULL"
+  ).all().map(r => r.title);
+  const semRepetidos = semTitulosJaPublicados(candidatos, jaPublicados);
+  if (semRepetidos.length !== candidatos.length) {
+    log.info('fora da fila por titulo ja publicado na Cakto: ' + (candidatos.length - semRepetidos.length));
+  }
+
   const rodada = Math.floor(Date.now() / 1800000);
-  const pendentes = filaDaRodada(candidatos, limite, { fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4), rodada });
+  const pendentes = filaDaRodada(semRepetidos, limite, { fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4), rodada });
   log.info('pendentes para a Cakto: ' + pendentes.length + ' (' + resumoDaFila(pendentes) + ')' + (seco ? ' (dry-run)' : ''));
   if (!pendentes.length) return { publicados: 0, falhas: 0, recusados: 0 };
 

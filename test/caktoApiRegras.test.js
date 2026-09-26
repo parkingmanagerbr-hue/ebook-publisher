@@ -10,6 +10,7 @@ const assert = require('node:assert');
 const {
   corpoDeCriacao, corpoDeAjuste, nomeDeProduto, descricaoDeProduto, shortcodeDaOferta,
   linkDeCheckout, mesmoProdutoCakto, motivoDefinitivo, resumoDaPublicacao, PRODUTOR, COMISSAO_AFILIADO,
+  semTitulosJaPublicados, chaveDeTitulo,
 } = require('../src/agents/caktoApiRegras');
 
 const novo = extra => Object.assign({
@@ -155,3 +156,28 @@ test('paymentMethods ausente nao vira lista vazia gravada', () => {
   const a = corpoDeAjuste(novo({ paymentMethods: undefined }), { entrega: 'https://x/e/t' });
   assert.ok(!('paymentMethods' in a));
 });
+
+test('titulo que ja tem produto na Cakto nao volta para a fila', () => {
+  const fila = [
+    { id: 'a', title: 'Yoga para Iniciantes: Corpo e Mente' },
+    { id: 'b', title: 'Livro Novo em Folha' },
+    { id: 'c', titulo: 'yoga  para   INICIANTES: Corpo e Mente' },
+  ];
+  const saida = semTitulosJaPublicados(fila, ['Yoga para Iniciantes: Corpo e Mente']);
+  assert.deepStrictEqual(saida.map(x => x.id), ['b'], 'acento, caixa e espaco nao escapam da comparacao');
+});
+
+test('a guarda de repetido nao derruba livro sem titulo nem quebra com lista vazia', () => {
+  assert.deepStrictEqual(semTitulosJaPublicados([{ id: 'x', title: '' }], ['Qualquer']).map(l => l.id), ['x']);
+  assert.deepStrictEqual(semTitulosJaPublicados([{ id: 'y', title: 'A' }], []).map(l => l.id), ['y']);
+  assert.deepStrictEqual(semTitulosJaPublicados([{ id: 'z', title: 'A' }], null).map(l => l.id), ['z']);
+  assert.deepStrictEqual(semTitulosJaPublicados(null, ['A']), []);
+  assert.deepStrictEqual(semTitulosJaPublicados([null, { id: 'w', title: 'B' }], ['A']).map(l => l.id), ['w']);
+  assert.deepStrictEqual(semTitulosJaPublicados([{ id: 'v', title: 'C' }], [null, '', 'C']).map(l => l.id), []);
+});
+
+test('chave de titulo: mesma normalizacao do resto do sistema', () => {
+  assert.strictEqual(chaveDeTitulo('  Guia' + String.fromCharCode(10) + '  DEFINITIVO '), 'guia definitivo');
+  assert.strictEqual(chaveDeTitulo(null), '');
+});
+
