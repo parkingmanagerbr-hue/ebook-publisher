@@ -95,6 +95,18 @@ Não adianta repetir — o livro sai da fila (tabela `kiwify_recusado`). Já hou
 falso positivo: um livro sobre bem-estar escolar acusado pela palavra "casino",
 que não aparece em nenhum campo enviado.
 
+## Ritmo real medido (25–26/09/2026)
+
+O `429` não é um teto por dia de calendário. Sequência observada:
+
+- pela manhã, cada janela rendia **10 de 10**, com intervalos de 30–60 min;
+- depois de **273 produtos** na conta, quatro janelas seguidas renderam **zero**;
+- a recusa continuou **depois da virada do dia** (00:15), então não é cota diária
+  que zera à meia-noite — parece janela móvel ou limite por volume acumulado.
+
+O freio (parar após 5 recusas seguidas) evita queimar a fila: o lote para, nada
+é marcado como falha definitiva e a próxima rodada tenta de novo.
+
 ## Entrega do PDF (resolvido sem upload)
 
 O `GET /v1/products/{id}` **esconde** categoria, garantia e `approved_url`; use
