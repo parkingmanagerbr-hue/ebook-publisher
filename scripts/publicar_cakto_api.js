@@ -42,16 +42,22 @@ async function rodar(limite, seco) {
   const db = require('../src/core/database').getDb();
   db.prepare('CREATE TABLE IF NOT EXISTS cakto_recusado (ebook_id TEXT PRIMARY KEY, motivo TEXT, quando INTEGER)').run();
 
+  // O descarte de titulo repetido vai NA CONSULTA, nao depois do teto: com ele
+  // so no fim, o teto trazia os 800 mais recentes — todos duplicados — e a
+  // fila devolvia zero para sempre, com 125 livros ineditos parados atras
+  // deles (medido em 26/09/2026: 1.759 pendentes, 1.634 de titulo repetido).
   const base = "SELECT id, title, description, language, cover_path, pdf_path FROM ebooks " +
     "WHERE (cakto_product_id IS NULL OR cakto_product_id = '') AND pdf_path IS NOT NULL AND pdf_path <> '' " +
-    "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' ";
+    "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' " +
+    "AND LOWER(TRIM(title)) NOT IN (SELECT LOWER(TRIM(title)) FROM ebooks " +
+    "  WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' AND title IS NOT NULL) ";
   const teto = Math.max(4, limite * 4);
   const candidatos = db.prepare(base + "AND LOWER(COALESCE(language,'')) LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all()
     .concat(db.prepare(base + "AND LOWER(COALESCE(language,'')) NOT LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all());
 
-  // Titulo que ja tem produto na Cakto nao volta para a fila: 66 de 1.123
-  // produtos lidos em 26/09/2026 tinham nome repetido (ate 4 copias), e
-  // duplicata em marketplace nao se desfaz sozinha.
+  // Segunda linha de defesa: o SQL compara por LOWER/TRIM, que nao normaliza
+  // acento composto (NFKC) nem espaco duplo no meio do titulo. A regra pura
+  // pega o que escapa.
   const jaPublicados = db.prepare(
     "SELECT title FROM ebooks WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' AND title IS NOT NULL"
   ).all().map(r => r.title);
