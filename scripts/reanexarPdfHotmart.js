@@ -2,7 +2,7 @@
 /**
  * reanexarPdfHotmart.js — anexa o PDF a produto Hotmart que foi a venda sem ele.
  *
- * Roda LOCAL, no Chrome de automacao ja logado (porta 9223): a sessao Hotmart
+ * Roda LOCAL, no Chrome de automacao ja logado (a porta e descoberta): a sessao Hotmart
  * fica presa a origem do login. Confere antes e depois pela API de conteudo —
  * nunca sobe arquivo em produto que ja tem, e so declara sucesso com a API.
  *
@@ -11,6 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer-core');
+const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
 const { uploadPDF } = require('../src/agents/publisherHotmart');
 const { consultarConteudo, aguardarConteudo } = require('../src/agents/hotmartConteudo');
 
@@ -20,7 +21,11 @@ async function main() {
   const pares = process.argv.slice(2).filter(a => /^\d+=/.test(a)).map(a => a.split('='));
   if (!pares.length) throw new Error('informe PRODUTO=arquivo.pdf');
 
-  const browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9223', defaultViewport: null });
+  // A porta nao pode ficar escrita aqui: o dono reabre o Chrome e ela muda.
+  // Com 9223 fixa, este passe falhava em TODA rodada da tarefa agendada desde
+  // 22/09/2026 ("Failed to fetch browser webSocket URL"), e os PDFs regerados
+  // nunca voltavam para os produtos que estavam sem arquivo.
+  const browser = await puppeteer.connect({ browserURL: await urlCdpObrigatoria(), defaultViewport: null });
   try {
     for (const [pid, arquivo] of pares) {
       const abs = path.resolve(arquivo);
