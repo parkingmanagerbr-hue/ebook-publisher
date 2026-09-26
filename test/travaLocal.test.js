@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { travar, caminhoDaTrava, VALIDADE_MS } = require('../src/core/travaLocal');
+const { travar, caminhoDaTrava, donoDaTrava, descreverDono, VALIDADE_MS } = require('../src/core/travaLocal');
 
 const pastaNova = () => fs.mkdtempSync(path.join(os.tmpdir(), 'trava-'));
 
@@ -130,9 +130,56 @@ test('o disco de verdade: arquivo que nao existe nao tem data e apagar nao lanca
   const some = path.join(pastaNova(), 'nunca-existiu.lock');
   assert.strictEqual(DISCO.quando(some), null);
   assert.doesNotThrow(() => DISCO.remover(some));
-  assert.strictEqual(DISCO.criar(some), true);
+  assert.strictEqual(DISCO.criar(some), true, 'criar sem dono informado nao quebra');
+  assert.deepStrictEqual(DISCO.dono(some), {}, 'sem dono, fica um registro vazio (nunca invalido)');
   assert.ok(DISCO.quando(some) > 0);
-  assert.strictEqual(DISCO.criar(some), false, 'segunda vez encontra ocupado');
+  assert.strictEqual(DISCO.criar(some, { pid: 1 }), false, 'segunda vez encontra ocupado');
   DISCO.remover(some);
   assert.strictEqual(DISCO.quando(some), null);
+});
+
+test('a trava diz QUEM a segura (senao "ja existe publicacao" nao se investiga)', () => {
+  const pasta = pastaNova();
+  const soltar = travar('hotmart', { pasta, oQue: 'lote-manual' });
+  const dono = donoDaTrava('hotmart', { pasta });
+  assert.strictEqual(dono.pid, process.pid);
+  assert.strictEqual(dono.o_que, 'lote-manual');
+  assert.match(dono.desde, /^\d{4}-\d{2}-\d{2}T/);
+  soltar();
+  assert.strictEqual(donoDaTrava('hotmart', { pasta }), null, 'solta, nao ha dono');
+});
+
+test('o aviso de trava assumida nomeia o dono, em uma linha', () => {
+  const pasta = pastaNova();
+  travar('hotmart', { pasta, oQue: 'tarefa-agendada' });
+  const avisos = [];
+  travar('hotmart', { pasta, agora: Date.now() + VALIDADE_MS + 1000, avisar: m => avisos.push(m) });
+  assert.match(avisos[0], /por tarefa-agendada \(pid \d+, desde /);
+  assert.ok(!/[\r\n]/.test(avisos[0]));
+});
+
+test('arquivo de trava corrompido nao quebra o aviso nem a tomada', () => {
+  const pasta = pastaNova();
+  travar('hotmart', { pasta });
+  fs.writeFileSync(caminhoDaTrava('hotmart', pasta), 'isto nao e json');
+  assert.strictEqual(donoDaTrava('hotmart', { pasta }), null);
+  const avisos = [];
+  assert.ok(travar('hotmart', { pasta, agora: Date.now() + VALIDADE_MS + 1000, avisar: m => avisos.push(m) }));
+  assert.match(avisos[0], /dono desconhecido/);
+});
+
+test('o nome do processo vem sanitizado e cortado no log', () => {
+  assert.match(descreverDono({ pid: 7, desde: 'agora', o_que: 'a'.repeat(80) }), /^a{40} \(pid 7, desde agora\)$/);
+  assert.strictEqual(descreverDono({ pid: null, desde: null }), '? (pid ?, desde ?)');
+  assert.strictEqual(descreverDono('texto solto'), 'dono desconhecido');
+});
+
+test('processo sem nome conhecido ainda registra um dono', () => {
+  const pasta = pastaNova();
+  const antes = process.argv[1];
+  process.argv[1] = '';
+  try {
+    travar('hotmart', { pasta });
+    assert.strictEqual(donoDaTrava('hotmart', { pasta }).o_que, 'desconhecido');
+  } finally { process.argv[1] = antes; }
 });

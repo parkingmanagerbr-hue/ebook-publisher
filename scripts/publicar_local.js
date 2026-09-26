@@ -276,7 +276,7 @@ if (require.main === module) {
   // rodaram juntos no mesmo Chrome: 27 dos 110 produtos do dia sairam com
   // titulo repetido, alguns em triplicata. A trava fica AQUI porque quem
   // esquece de travar e sempre a chamada nova.
-  const soltar = travar('hotmart', { avisar: m => console.log(m) });
+  const soltar = travar('hotmart', { oQue: 'publicar_local --limite=' + (arg('limite', '?')), avisar: m => console.log(m) });
   if (!soltar) {
     console.log('ja existe uma publicacao da Hotmart em andamento — saindo sem publicar');
     process.exit(0);
