@@ -60,9 +60,33 @@ function shortcodeDaOferta(produto) {
   return (padrao && padrao.id) || null;
 }
 
-/** Link de checkout a partir do shortcode. Pura. */
-function linkDeCheckout(shortcode) {
-  return shortcode ? 'https://pay.cakto.com.br/' + shortcode : null;
+/**
+ * Id do checkout da oferta padrao. Pura.
+ *
+ * A oferta traz `checkout: <numero>` — e esse numero faz parte do link.
+ */
+function idDoCheckout(produto) {
+  const ofertas = (produto && produto.offers) || [];
+  const padrao = ofertas.find(o => o && o.default) || ofertas[0];
+  const id = padrao && padrao.checkout;
+  return (id === 0 || id) ? String(id) : null;
+}
+
+/**
+ * Link de checkout. Pura.
+ *
+ * 27/09/2026, medido no painel e conferido no navegador: o link que a Cakto
+ * gera e `pay.cakto.com.br/<shortcode>_<idDoCheckout>`. Gravamos por semanas
+ * so o `<shortcode>` — e TODOS os 10.648 produtos respondiam
+ * "404 — Produto nao disponivel, inativo ou bloqueado". Era por isso que a
+ * loja com o maior catalogo nunca tinha vendido nada: nao havia checkout.
+ *
+ * Sem o id do checkout NAO se monta link: link pela metade e link quebrado, e
+ * melhor nao ter pagina de vendas do que mandar o comprador para um 404.
+ */
+function linkDeCheckout(shortcode, checkoutId) {
+  if (!shortcode || !checkoutId) return null;
+  return 'https://pay.cakto.com.br/' + shortcode + '_' + checkoutId;
 }
 
 /**
@@ -76,7 +100,7 @@ function linkDeCheckout(shortcode) {
 function corpoDeAjuste(produto, opcoes = {}) {
   const p = produto || {};
   const out = {};
-  const checkout = opcoes.checkout || linkDeCheckout(shortcodeDaOferta(p));
+  const checkout = opcoes.checkout || linkDeCheckout(shortcodeDaOferta(p), idDoCheckout(p));
 
   if (!p.producerName) out.producerName = PRODUTOR;
   if (!p.supportEmail) out.supportEmail = SUPORTE;
@@ -188,7 +212,7 @@ function resumoDaPublicacao(titulo, shortcode, ajustes) {
 
 module.exports = {
   corpoDeCriacao, corpoDeAjuste, nomeDeProduto, descricaoDeProduto, shortcodeDaOferta,
-  linkDeCheckout, mesmoProdutoCakto, motivoDefinitivo, resumoDaPublicacao,
+  linkDeCheckout, idDoCheckout, mesmoProdutoCakto, motivoDefinitivo, resumoDaPublicacao,
   semTitulosJaPublicados, chaveDeTitulo, nomeDistintoCakto,
   PRODUTOR, COMISSAO_AFILIADO,
 };

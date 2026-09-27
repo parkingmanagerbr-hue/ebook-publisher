@@ -22,7 +22,15 @@ const DESCRICAO_AFILIADO = 'E-book digital com entrega imediata por link. Comiss
 /** Pagina de vendas errada: vazia ou apontando para outra plataforma. Pura. */
 function paginaDeVendasRuim(url) {
   const u = String(url || '').trim();
-  return !u || /^https?:\/\/(www\.)?hotmart\.com\/?$/i.test(u);
+  if (!u) return true;
+  if (/^https?:\/\/(www\.)?hotmart\.com\/?$/i.test(u)) return true;
+  // Checkout da Cakto SEM o id do checkout no fim (<shortcode>_<id>) devolve
+  // "404 — Produto nao disponivel": era o estado dos 10.648 produtos ate
+  // 27/09/2026, e por isso a loja nunca vendeu. Vitrine propria nao entra
+  // aqui: so o link de pagamento pela metade.
+  const pagamento = /^https?:\/\/pay\.cakto\.com\.br\/([^/?#]+)/i.exec(u);
+  if (pagamento && !pagamento[1].includes('_')) return true;
+  return false;
 }
 
 /**
@@ -37,6 +45,10 @@ function alvoHigiene(produto, opcoes = {}) {
   const limpos = metodosDePagamentoValidos(p.paymentMethods, { moeda: p.currency, tipo: p.type });
   if (Array.isArray(p.paymentMethods) && limpos.length !== p.paymentMethods.length) out.paymentMethods = limpos;
   if (!p.producerName) out.producerName = PRODUTOR;
+  // O checkout certo leva o id do checkout no fim (<shortcode>_<id>). Ate
+  // 27/09/2026 gravavamos so o shortcode e os 10.648 produtos respondiam
+  // "404 — Produto nao disponivel": a loja inteira estava sem pagina de
+  // compra, e era por isso que nunca havia vendido nada.
   if (opcoes.checkout && paginaDeVendasRuim(p.salesPage)) out.salesPage = opcoes.checkout;
   if (!p.affiliate) {
     Object.assign(out, { affiliate: true, affiliateRequest: false, affiliateMarketplace: true });

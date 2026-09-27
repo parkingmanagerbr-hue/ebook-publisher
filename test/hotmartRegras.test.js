@@ -163,3 +163,27 @@ test('o detalhe explica o que aconteceu, em uma linha', () => {
   assert.strictEqual(detalheDoResultado({ error: 'wizard\nnot rendered' }), 'wizard not rendered', 'sem quebra de linha no log');
   assert.strictEqual(detalheDoResultado(null), 'sem url');
 });
+
+test('queda de sessao no meio do lote nao e culpa do livro', () => {
+  const { ehQuedaDeSessao } = require('../src/agents/hotmartRegras');
+  // Mensagem real do lote 47 (27/09/2026): a Hotmart deslogou e os 18 livros
+  // falharam, cada um gastando uma das tres tentativas.
+  assert.strictEqual(
+    ehQuedaDeSessao('eBook card not found after 90s -- wizard not rendered. URL: https://sso.hotmart.com/login?service=ht'),
+    true,
+  );
+  assert.strictEqual(ehQuedaDeSessao('catalogo HTTP 401 na pagina 1'), true);
+  assert.strictEqual(ehQuedaDeSessao('Sessao expirada'), true, 'caixa nao importa');
+  assert.strictEqual(ehQuedaDeSessao('https://sso.hotmart.com/logout'), true);
+});
+
+test('falha de verdade do livro continua contando tentativa', () => {
+  const { ehQuedaDeSessao } = require('../src/agents/hotmartRegras');
+  assert.strictEqual(ehQuedaDeSessao('preco recusado pela loja'), false);
+  assert.strictEqual(ehQuedaDeSessao('PDF nao veio do VPS'), false);
+  assert.strictEqual(ehQuedaDeSessao('HTTP 500 no cadastro'), false, '401 e sessao; 500 e a loja');
+  assert.strictEqual(ehQuedaDeSessao('app.hotmart.com/products/add/4'), false, 'a URL do painel nao e a de login');
+  assert.strictEqual(ehQuedaDeSessao(''), false);
+  assert.strictEqual(ehQuedaDeSessao(null), false);
+  assert.strictEqual(ehQuedaDeSessao(undefined), false);
+});

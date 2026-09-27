@@ -95,7 +95,10 @@ async function main() {
       const produto = await api('GET', 'product/' + oferta.product + '/', null, H);
       await dormir(PAUSA_MS);
 
-      const checkout = 'https://pay.cakto.com.br/' + e.cakto_product_id;
+      // O link so fica completo com o id do checkout da oferta padrao; sem
+      // ele, pay.cakto.com.br/<shortcode> devolve 404 (medido em 27/09/2026).
+      const { linkDeCheckout, idDoCheckout } = require('../src/agents/caktoApiRegras');
+      const checkout = linkDeCheckout(e.cakto_product_id, idDoCheckout(produto));
       const mudancas = alvoHigiene(produto, { checkout });
       const capaEmDisco = !!(e.cover_path && fs.existsSync(e.cover_path));
       const subirCapa = precisaSubirCapa(produto, capaEmDisco);

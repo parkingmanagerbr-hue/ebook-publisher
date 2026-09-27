@@ -18,7 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { rotuloDoResultado, detalheDoResultado } = require('../src/agents/hotmartRegras');
+const { rotuloDoResultado, detalheDoResultado, ehQuedaDeSessao } = require('../src/agents/hotmartRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { comTentativas, valeTentarDeNovo, esperaDaTentativa } = require('../src/core/tentativas');
 const { travar } = require('../src/core/travaLocal');
@@ -243,6 +243,7 @@ async function main() {
 
   let ok = 0;
   const t0 = Date.now();
+  let sessaoCaiu = false;
   fs.mkdirSync(TMP, { recursive: true });
 
   try {
@@ -287,7 +288,14 @@ async function main() {
       else if (!(r && r.hotmartProductId)) {
         // Queda de rede NAO conta tentativa: o livro nao tem culpa de o ssh ter
         // caido, e tres quedas o tirariam da fila para sempre (25/09/2026).
-        if (ultimoErro && valeTentarDeNovo(ultimoErro)) {
+        const motivoBruto = String((r && r.error) || (ultimoErro && ultimoErro.message) || '');
+        if (ehQuedaDeSessao(motivoBruto)) {
+          // A Hotmart deslogou no meio: o livro nao tem culpa e nenhum dos
+          // seguintes vai passar. Em 27/09/2026 isso custou 18 falhas e uma
+          // tentativa de cada livro, numa hora de lote.
+          console.log('  a sessao da Hotmart caiu — o livro continua na fila (nao conta tentativa)');
+          sessaoCaiu = true;
+        } else if (ultimoErro && valeTentarDeNovo(ultimoErro)) {
           console.log('  falha de rede — o livro continua na fila (nao conta tentativa)');
         } else {
           const motivo = (r && r.error) || (ultimoErro && ultimoErro.message) || 'sem url';
@@ -297,6 +305,10 @@ async function main() {
       const min = ((Date.now() - t0) / 60000).toFixed(1);
       console.log(`  [${i + 1}/${itens.length}] ${sucesso ? 'OK  ' : 'FALHA'} ${String(e.title).slice(0, 40)}` +
         (sucesso ? ' -> ' + r.url : ' :: ' + ((r && r.error) || 'sem url')) + `  (${min} min)`);
+      if (sessaoCaiu) {
+        console.log(`  SESSAO CAIU — parando: os ${itens.length - i - 1} restantes ficam na fila (o agente de sessao resolve na proxima rodada)`);
+        break;
+      }
     }
   } finally {
     // NAO fechar o navegador: e do usuario.

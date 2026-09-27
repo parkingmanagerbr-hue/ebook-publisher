@@ -133,7 +133,24 @@ function detalheDoResultado(r) {
   return umaLinha((r && r.error) || 'sem url', 80);
 }
 
+/**
+ * A rodada caiu porque a SESSAO morreu no meio (e nao por culpa do livro)?
+ *
+ * 27/09/2026: a Hotmart deslogou durante o lote 47 e os 18 livros falharam com
+ * "eBook card not found ... URL: https://sso.hotmart.com/login". Cada falha
+ * gastou uma das TRES tentativas do livro — tres quedas de sessao tirariam da
+ * fila, para sempre, livros que nunca tiveram defeito. E insistir nos 17
+ * seguintes so gasta uma hora: deslogado, nenhum vai passar. Pura.
+ */
+function ehQuedaDeSessao(texto) {
+  const t = String(texto == null ? '' : texto);
+  const paraLogin = new RegExp('sso[.]hotmart[.]com/(login|logout)');
+  const semSessao = new RegExp('(nao autenticado|nao autorizado|sessao expirada|HTTP 401)', 'i');
+  return paraLogin.test(t) || semSessao.test(t);
+}
+
 module.exports = {
+  ehQuedaDeSessao,
   norm, rotuloDoResultado, detalheDoResultado, getCategoryPT, digitosDoPreco, idProdutoDaUrl, TECH_KW, HEALTH_KW, FINANCE_KW, BUSINESS_KW,
   nomeComparavel, mesmoProduto, motivoProdutoErrado, umaLinha, ehAvisoDeTermos, ehBotaoDeAviso,
 };

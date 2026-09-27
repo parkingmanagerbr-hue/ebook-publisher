@@ -15,7 +15,7 @@ const {
 
 const novo = extra => Object.assign({
   name: 'Guia de Mobiliario', status: 'active', type: 'unique', currency: 'BRL',
-  paymentMethods: ['pix', 'credit_card'], offers: [{ id: 'abc1234', default: true }],
+  paymentMethods: ['pix', 'credit_card'], offers: [{ id: 'abc1234', default: true, checkout: 555 }],
 }, extra);
 
 test('criacao manda so nome e descricao (e o que a API exige)', () => {
@@ -46,8 +46,8 @@ test('o checkout sai da oferta padrao, nao da primeira qualquer', () => {
   assert.strictEqual(shortcodeDaOferta(p), 'principal');
   assert.strictEqual(shortcodeDaOferta({ offers: [] }), null);
   assert.strictEqual(shortcodeDaOferta(null), null);
-  assert.strictEqual(linkDeCheckout('principal'), 'https://pay.cakto.com.br/principal');
-  assert.strictEqual(linkDeCheckout(null), null);
+  assert.strictEqual(linkDeCheckout('principal', '999'), 'https://pay.cakto.com.br/principal_999');
+  assert.strictEqual(linkDeCheckout(null, '999'), null);
 });
 
 test('SEM entrega o produto NAO fica ativo (vender sem ter o que entregar e pior que nao vender)', () => {
@@ -72,7 +72,7 @@ test('produto que ja tem link de entrega continua ativo mesmo sem link novo', ()
 test('nada muda quando ja esta tudo certo', () => {
   const pronto = novo({
     status: 'active', emailAccessLink: 'https://x/entrega/t', producerName: PRODUTOR,
-    supportEmail: 'suporte@exemplo.com', salesPage: 'https://pay.cakto.com.br/abc1234',
+    supportEmail: 'suporte@exemplo.com', salesPage: 'https://pay.cakto.com.br/abc1234_555',
     affiliate: true, affiliateCommission: '50.00',
   });
   assert.deepStrictEqual(corpoDeAjuste(pronto, {}), {});
@@ -219,4 +219,26 @@ test('nome composto respeita o limite de 120 da Cakto', () => {
   const { nomeDistintoCakto } = require('../src/agents/caktoApiRegras');
   const nome = nomeDistintoCakto({ title: 'T'.repeat(80), subtitle: 'S'.repeat(80) }, ['t'.repeat(80)]);
   assert.strictEqual(nome.length, 120);
+});
+
+test('o link do checkout leva o id do checkout — sem ele, 404 na cara do comprador', () => {
+  const { idDoCheckout } = require('../src/agents/caktoApiRegras');
+  // Medido em 27/09/2026: pay.cakto.com.br/<shortcode> devolvia
+  // "Produto nao disponivel" nos 10.648 produtos. O link certo tem o sufixo.
+  assert.strictEqual(linkDeCheckout('368vztm', '1147168'), 'https://pay.cakto.com.br/368vztm_1147168');
+  assert.strictEqual(linkDeCheckout('368vztm', 1147168), 'https://pay.cakto.com.br/368vztm_1147168', 'numero tambem serve');
+  assert.strictEqual(linkDeCheckout('368vztm'), null, 'sem o id NAO se monta link pela metade');
+  assert.strictEqual(linkDeCheckout('368vztm', ''), null);
+  assert.strictEqual(idDoCheckout({ offers: [{ id: 'a', checkout: 1147168, default: true }] }), '1147168');
+  assert.strictEqual(idDoCheckout({ offers: [{ id: 'a', checkout: 0 }] }), '0', 'zero e id valido, nao ausencia');
+  assert.strictEqual(idDoCheckout({ offers: [{ id: 'a' }] }), null);
+  assert.strictEqual(idDoCheckout({ offers: [] }), null);
+  assert.strictEqual(idDoCheckout(null), null);
+});
+
+test('sem id de checkout, o ajuste NAO grava pagina de vendas quebrada', () => {
+  const semId = corpoDeAjuste(novo({ salesPage: null, offers: [{ id: 'abc1234', default: true }] }), { entrega: 'https://x/e/t' });
+  assert.ok(!('salesPage' in semId), 'melhor sem pagina de vendas do que mandando para um 404');
+  const comId = corpoDeAjuste(novo({ salesPage: null }), { entrega: 'https://x/e/t' });
+  assert.strictEqual(comId.salesPage, 'https://pay.cakto.com.br/abc1234_555');
 });

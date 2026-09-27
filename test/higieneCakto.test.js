@@ -8,7 +8,7 @@ const assert = require('node:assert');
 const { alvoHigiene, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, DESCRICAO_AFILIADO } = require('../src/agents/higieneCakto');
 const { PRODUTOR, COMISSAO_AFILIADO } = require('../scripts/entregaCakto');
 
-const CHECKOUT = 'https://pay.cakto.com.br/abc123';
+const CHECKOUT = 'https://pay.cakto.com.br/abc123_1147168';   // com o id do checkout: sem ele e 404
 
 test('produto cru recebe nome de vendedor, pagina e afiliacao', () => {
   const m = alvoHigiene({}, { checkout: CHECKOUT });
@@ -113,4 +113,15 @@ test('500 da loja e reconhecido como incidente dela, nao erro nosso', () => {
   assert.strictEqual(ehErroDaLoja(404, '{"detail":"Nao encontrado."}'), false);
   assert.strictEqual(ehErroDaLoja(null, null), false);
   assert.strictEqual(ehErroDaLoja('500', ''), true, 'status como texto tambem conta');
+});
+
+test('checkout da Cakto SEM o id no fim e pagina de vendas quebrada', () => {
+  // 27/09/2026: pay.cakto.com.br/<shortcode> devolvia "404 — Produto nao
+  // disponivel" nos 10.648 produtos. O link certo e <shortcode>_<idCheckout>.
+  assert.strictEqual(paginaDeVendasRuim('https://pay.cakto.com.br/abc123'), true);
+  assert.strictEqual(paginaDeVendasRuim('https://pay.cakto.com.br/abc123_1147168'), false);
+  assert.strictEqual(paginaDeVendasRuim('https://pay.cakto.com.br/abc123?utm=x'), true, 'query nao completa o link');
+  assert.strictEqual(paginaDeVendasRuim('https://veloxisit.com.br/livros/x/'), false, 'vitrine propria continua valendo');
+  const alvo = alvoHigiene({ salesPage: 'https://pay.cakto.com.br/abc123' }, { checkout: 'https://pay.cakto.com.br/abc123_999' });
+  assert.strictEqual(alvo.salesPage, 'https://pay.cakto.com.br/abc123_999', 'o passe troca o link quebrado pelo certo');
 });
