@@ -149,8 +149,83 @@ function ehQuedaDeSessao(texto) {
   return paraLogin.test(t) || semSessao.test(t);
 }
 
+/**
+ * Este `hot-select` do wizard e o de CATEGORIA?
+ *
+ * 27/09/2026: a Hotmart acrescentou "Em qual pais voce quer vender?" na etapa
+ * de informacoes. O robo escolhia "qualquer hot-select que nao seja o de
+ * idioma" e passou a abrir o dropdown de PAIS achando que era categoria — o
+ * painel ficava aberto como modal, o "Continuar" nao respondia e o lote inteiro
+ * falhava com "No product ID after creation". Foram 0 de 18 em dois lotes.
+ *
+ * A licao e a mesma de antes (quando o campo novo era o idioma): identificar
+ * pelo que o campo DIZ SER, nunca por exclusao — campo novo aparece sem aviso.
+ * Pura.
+ */
+function ehSeletorDeCategoria(atributos) {
+  const a = atributos || {};
+  const texto = [a.placeholder, a.ariaLabel, a.nome, a.name, a.label].filter(Boolean).join(' ').toLowerCase();
+  if (!texto) return false;
+  const categoria = new RegExp('categor');
+  return categoria.test(texto);
+}
+
+/**
+ * Campo do wizard que o robo NAO deve confundir com categoria. Serve de
+ * diagnostico no log: saber qual campo apareceu no lugar. Pura.
+ */
+function campoDoWizard(atributos) {
+  const a = atributos || {};
+  const texto = [a.placeholder, a.ariaLabel, a.nome, a.name, a.label].filter(Boolean).join(' ').toLowerCase();
+  if (new RegExp('categor').test(texto)) return 'categoria';
+  if (new RegExp('idioma|language').test(texto)) return 'idioma';
+  if (new RegExp('pais|país|country|vender').test(texto)) return 'pais';
+  return 'desconhecido';
+}
+
+/**
+ * Que botao apertar num modal do wizard. Devolve o texto do botao, ou null
+ * quando o modal nao e conhecido (ai nao se clica no escuro).
+ *
+ * 27/09/2026: o robo batia num modal "Seus dados nao foram salvos — Voce
+ * perdera o que ja fez ate aqui. Quer trocar o formato mesmo assim?" e
+ * respondia apertando Escape, que nao fecha. O wizard ficava preso, o
+ * "Continuar" nao respondia e o lote inteiro morria com "No product ID after
+ * creation" (0 de 18, duas vezes). A resposta certa e "Nao, voltar": manter o
+ * formato eBook e seguir o cadastro.
+ *
+ * Confirmar a troca ("Sim, trocar") JOGA FORA o cadastro em andamento — por
+ * isso a regra nunca escolhe o botao de confirmar. Pura.
+ */
+function botaoDoModal(texto) {
+  const t = String(texto == null ? '' : texto).toLowerCase();
+  if (!t.trim()) return null;
+  const perdaDeDados = new RegExp('(nao foram salvos|não foram salvos|perdera|perderá|trocar o formato)');
+  if (perdaDeDados.test(t)) {
+    // O rotulo muda de lugar; o que importa e recusar a troca.
+    const recusa = new RegExp('(nao, voltar|não, voltar|voltar|cancelar)');
+    return recusa.test(t) ? 'Não, voltar' : null;
+  }
+  return null;
+}
+
+/**
+ * A rodada parou por um problema do AMBIENTE, e nao do livro?
+ *
+ * 27/09/2026: depois de um login novo, o aviso de cookies voltou e cobriu a
+ * faixa do rodape onde fica o "Continuar". Nenhum livro passava, e cada um
+ * gastava uma das tres tentativas — em tres rodadas, livros bons sairiam da
+ * fila para sempre por causa de um banner. Pura.
+ */
+function ehBloqueioDeAmbiente(texto) {
+  const t = String(texto == null ? '' : texto);
+  const coberto = new RegExp('(COBERTO|coberto por|aviso de cookies)', 'i');
+  const semId = new RegExp('No product ID after creation', 'i');
+  return coberto.test(t) || semId.test(t);
+}
+
 module.exports = {
-  ehQuedaDeSessao,
+  ehQuedaDeSessao, ehSeletorDeCategoria, campoDoWizard, botaoDoModal, ehBloqueioDeAmbiente,
   norm, rotuloDoResultado, detalheDoResultado, getCategoryPT, digitosDoPreco, idProdutoDaUrl, TECH_KW, HEALTH_KW, FINANCE_KW, BUSINESS_KW,
   nomeComparavel, mesmoProduto, motivoProdutoErrado, umaLinha, ehAvisoDeTermos, ehBotaoDeAviso,
 };

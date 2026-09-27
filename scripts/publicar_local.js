@@ -18,7 +18,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { rotuloDoResultado, detalheDoResultado, ehQuedaDeSessao } = require('../src/agents/hotmartRegras');
+const { rotuloDoResultado, detalheDoResultado, ehQuedaDeSessao, ehBloqueioDeAmbiente } = require('../src/agents/hotmartRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { comTentativas, valeTentarDeNovo, esperaDaTentativa } = require('../src/core/tentativas');
 const { travar } = require('../src/core/travaLocal');
@@ -289,7 +289,11 @@ async function main() {
         // Queda de rede NAO conta tentativa: o livro nao tem culpa de o ssh ter
         // caido, e tres quedas o tirariam da fila para sempre (25/09/2026).
         const motivoBruto = String((r && r.error) || (ultimoErro && ultimoErro.message) || '');
-        if (ehQuedaDeSessao(motivoBruto)) {
+        if (ehBloqueioDeAmbiente(motivoBruto)) {
+          // Nao e defeito do livro: e a tela da loja barrando todo mundo.
+          console.log('  bloqueio da loja (nao do livro) — continua na fila (nao conta tentativa)');
+          sessaoCaiu = true;
+        } else if (ehQuedaDeSessao(motivoBruto)) {
           // A Hotmart deslogou no meio: o livro nao tem culpa e nenhum dos
           // seguintes vai passar. Em 27/09/2026 isso custou 18 falhas e uma
           // tentativa de cada livro, numa hora de lote.
@@ -306,7 +310,7 @@ async function main() {
       console.log(`  [${i + 1}/${itens.length}] ${sucesso ? 'OK  ' : 'FALHA'} ${String(e.title).slice(0, 40)}` +
         (sucesso ? ' -> ' + r.url : ' :: ' + ((r && r.error) || 'sem url')) + `  (${min} min)`);
       if (sessaoCaiu) {
-        console.log(`  SESSAO CAIU — parando: os ${itens.length - i - 1} restantes ficam na fila (o agente de sessao resolve na proxima rodada)`);
+        console.log(`  PARANDO: os ${itens.length - i - 1} restantes ficam na fila (nenhum passaria agora)`);
         break;
       }
     }

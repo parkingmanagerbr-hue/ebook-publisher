@@ -187,3 +187,54 @@ test('falha de verdade do livro continua contando tentativa', () => {
   assert.strictEqual(ehQuedaDeSessao(null), false);
   assert.strictEqual(ehQuedaDeSessao(undefined), false);
 });
+
+test('o seletor de categoria e escolhido pelo que DIZ SER, nunca por exclusao', () => {
+  const { ehSeletorDeCategoria, campoDoWizard } = require('../src/agents/hotmartRegras');
+  // 27/09/2026: a Hotmart acrescentou "Em qual pais voce quer vender?" e o
+  // robo, que pegava "qualquer hot-select que nao seja idioma", abriu o
+  // dropdown de PAIS. O painel virou modal e dois lotes falharam (0 de 18).
+  assert.strictEqual(ehSeletorDeCategoria({ placeholder: 'Categoria do produto' }), true);
+  assert.strictEqual(ehSeletorDeCategoria({ placeholder: 'Em qual país você quer vender?' }), false);
+  assert.strictEqual(ehSeletorDeCategoria({ placeholder: 'Qual o idioma do seu produto?' }), false);
+  assert.strictEqual(ehSeletorDeCategoria({ ariaLabel: 'Categorias' }), true, 'aria-label tambem conta');
+  assert.strictEqual(ehSeletorDeCategoria({ nome: 'category' }), true);
+  assert.strictEqual(ehSeletorDeCategoria({}), false, 'campo sem identificacao nunca e assumido como categoria');
+  assert.strictEqual(ehSeletorDeCategoria(null), false);
+});
+
+test('o campo do wizard e nomeado no log (para saber o que apareceu no lugar)', () => {
+  const { campoDoWizard } = require('../src/agents/hotmartRegras');
+  assert.strictEqual(campoDoWizard({ placeholder: 'Em qual país você quer vender?' }), 'pais');
+  assert.strictEqual(campoDoWizard({ placeholder: 'Qual o idioma do seu produto?' }), 'idioma');
+  assert.strictEqual(campoDoWizard({ placeholder: 'Categoria do produto' }), 'categoria');
+  assert.strictEqual(campoDoWizard({ placeholder: 'Campo que a Hotmart inventar amanha' }), 'desconhecido');
+  assert.strictEqual(campoDoWizard(null), 'desconhecido');
+});
+
+test('modal conhecido tem resposta certa; desconhecido nao vira clique no escuro', () => {
+  const { botaoDoModal } = require('../src/agents/hotmartRegras');
+  const real = 'Seus dados não foram salvosVocê perderá o que já fez até aqui. Quer trocar o formato mesmo assim?Não, voltarSim, trocar';
+  assert.strictEqual(botaoDoModal(real), 'Não, voltar', 'confirmar a troca jogaria fora o cadastro');
+  assert.strictEqual(botaoDoModal('Tem certeza que deseja excluir?Excluir Cancelar'), null, 'modal desconhecido: nao clica');
+  assert.strictEqual(botaoDoModal(''), null);
+  assert.strictEqual(botaoDoModal(null), null);
+  assert.ok(!/sim, trocar/i.test(String(botaoDoModal(real))), 'nunca o botao que descarta o trabalho');
+});
+
+test('bloqueio de ambiente nao gasta as tentativas do livro', () => {
+  const { ehBloqueioDeAmbiente } = require('../src/agents/hotmartRegras');
+  // 27/09/2026: o aviso de cookies cobriu o "Continuar" e nenhum livro passava.
+  assert.strictEqual(ehBloqueioDeAmbiente('Continuar COBERTO por "DIV " — clique nao sai'), true);
+  assert.strictEqual(ehBloqueioDeAmbiente('No product ID after creation (got: null)'), true);
+  assert.strictEqual(ehBloqueioDeAmbiente('preco recusado pela loja'), false);
+  assert.strictEqual(ehBloqueioDeAmbiente('PDF nao veio do VPS'), false);
+  assert.strictEqual(ehBloqueioDeAmbiente(''), false);
+  assert.strictEqual(ehBloqueioDeAmbiente(null), false);
+});
+
+test('modal de perda de dados SEM botao de recusa nao recebe clique inventado', () => {
+  const { botaoDoModal } = require('../src/agents/hotmartRegras');
+  // Fala em perder o trabalho, mas so oferece confirmar: melhor nao clicar.
+  assert.strictEqual(botaoDoModal('Seus dados não foram salvos. Sim, trocar'), null);
+  assert.strictEqual(botaoDoModal('Quer trocar o formato mesmo assim? Cancelar'), 'Não, voltar', 'Cancelar tambem recusa');
+});

@@ -33,7 +33,7 @@ try {
 // Categoria, digitos do preco e id do produto na URL: regras puras, testadas
 // em test/hotmartRegras.test.js.
 const { getCategoryPT, digitosDoPreco, idProdutoDaUrl, mesmoProduto, motivoProdutoErrado, umaLinha,
-  ehAvisoDeTermos, ehBotaoDeAviso } = require('./hotmartRegras');
+  ehAvisoDeTermos, ehBotaoDeAviso, botaoDoModal } = require('./hotmartRegras');
 const { descricaoHotmart } = require('./hotmartDescricao');
 
 function getCASTicket(tgt, serviceUrl) {
@@ -466,20 +466,19 @@ async function createProduct(page, session, ebook) {
     // dropdown errado — o log registrava
     // 'Category trigger clicked: hot-select(ph=Qual o idioma...)'. Agora
     // escolhe pelo placeholder e DESCARTA explicitamente o de idioma.
-    function ehIdioma(el) {
-      const t = ((el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
-      return /idioma|language/.test(t);
-    }
     function ehCategoria(el) {
       const t = ((el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
       return /categor/.test(t);
     }
     function findHotSelect(root) {
       const els = Array.from(root.querySelectorAll ? root.querySelectorAll('hot-select') : []);
-      // 1) o que se identifica como categoria
+      // SO o que se identifica como categoria. Escolher "qualquer um que nao
+      // seja idioma" era por exclusao — e em 27/09/2026 a Hotmart acrescentou
+      // "Em qual pais voce quer vender?": o robo abriu o dropdown de PAIS, o
+      // painel ficou aberto como modal, o "Continuar" parou de responder e dois
+      // lotes inteiros falharam (0 de 18) com "No product ID after creation".
+      // Campo novo aparece sem aviso; identificar pelo que o campo DIZ SER.
       for (const el of els) { const r = el.getBoundingClientRect(); if (r.width > 50 && ehCategoria(el)) return el; }
-      // 2) qualquer um que NAO seja o de idioma
-      for (const el of els) { const r = el.getBoundingClientRect(); if (r.width > 50 && !ehIdioma(el)) return el; }
       const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
       for (const el of all) {
         if (el.shadowRoot) { const r = findHotSelect(el.shadowRoot); if (r) return r; }
@@ -751,8 +750,38 @@ async function createProduct(page, session, ebook) {
   // Click each found Continuar in order (panel's then main's)
   for (const btn of continList) {
     if (btn.x > 0 && btn.y > 0) {
-      await page.mouse.click(btn.x, btn.y);
-      log.info('Continuar click: ' + btn.text + ' @(' + Math.round(btn.x) + ',' + Math.round(btn.y) + ')');
+      // CONFERIR QUEM ESTA NO PONTO antes de clicar. Em 27/09/2026 o aviso de
+      // cookies voltou depois de um login novo e cobria justamente a faixa do
+      // rodape: o clique caia no banner, o wizard nao avancava e o lote inteiro
+      // morria com "No product ID after creation" (0 de 18, tres vezes). Clique
+      // as cegas por coordenada acerta o que estiver por cima.
+      const ponto = await page.evaluate(({ x, y, texto }) => {
+        const alvo = document.elementFromPoint(x, y);
+        if (!alvo) return { ok: false, quem: '(nada no ponto)' };
+        const botao = alvo.closest && alvo.closest('button');
+        const casa = !!botao && (botao.textContent || '').trim() === texto;
+        if (casa) return { ok: true, quem: 'botao' };
+        // Rolar o botao para o meio da tela costuma tira-lo de baixo do aviso.
+        const certo = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === texto);
+        if (certo) certo.scrollIntoView({ behavior: 'instant', block: 'center' });
+        const r = certo && certo.getBoundingClientRect();
+        const depois = r && document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const agoraCasa = !!(depois && depois.closest && depois.closest('button') && (depois.closest('button').textContent || '').trim() === texto);
+        return {
+          ok: agoraCasa,
+          quem: ((alvo.tagName || '') + ' ' + (alvo.textContent || '').replace(/[ ]+/g, ' ').trim().slice(0, 40)),
+          x: r ? r.left + r.width / 2 : null, y: r ? r.top + r.height / 2 : null,
+        };
+      }, { x: btn.x, y: btn.y, texto: btn.text }).catch(() => ({ ok: true, quem: '(nao deu para conferir)' }));
+
+      if (!ponto.ok) {
+        log.warn('Continuar COBERTO por "' + ponto.quem + '" — clique nao sai (aviso de cookies? modal?)');
+        continue;
+      }
+      const alvoX = ponto.x || btn.x;
+      const alvoY = ponto.y || btn.y;
+      await page.mouse.click(alvoX, alvoY);
+      log.info('Continuar click: ' + btn.text + ' @(' + Math.round(alvoX) + ',' + Math.round(alvoY) + ')');
       await sleep(800);
     }
   }
@@ -810,7 +839,19 @@ async function createProduct(page, session, ebook) {
         return null;
       }
 
-      const modal = document.querySelector('hot-modal.confirmation-modal, hot-modal[class*=confirm], hot-modal[open]');
+      // O componente hot-modal fica no DOM mesmo FECHADO, com o texto dentro.
+      // Procurar por classe encontrava esse modal latente, e o robo entrava num
+      // laco tentando fecha-lo — "modais abertos: 0" na tela (27/09/2026). So
+      // vale modal que esta VISIVEL de fato.
+      const visivel = el => {
+        if (!el) return false;
+        if (el.hasAttribute('open')) return true;
+        const r = el.getBoundingClientRect();
+        if (!(r.width > 0 && r.height > 0)) return false;
+        const st = getComputedStyle(el);
+        return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+      };
+      const modal = [...document.querySelectorAll('hot-modal.confirmation-modal, hot-modal[class*=confirm], hot-modal[open]')].find(visivel);
       if (!modal) return null;
       // Accept any confirmation modal — the content filter was too restrictive
       // (Hotmart shows different modal texts for different scenarios)
@@ -842,7 +883,51 @@ async function createProduct(page, session, ebook) {
     }
     // No "Sair/leave" button found in modal shadow DOM — this is likely a category dropdown
     // or file panel (not an "unsaved data" confirmation). Press Escape to close it.
-    log.warn('[' + label + '] modal-no-shadow-btn (likely category/file panel) — pressing Escape');
+    // O QUE o modal diz importa: sem isto, "pressing Escape" repetido nao
+    // explica nada e o lote inteiro falha em silencio (27/09/2026).
+    const textoModal = await page.evaluate(() => {
+      const m = document.querySelector('hot-modal[open], hot-modal.confirmation-modal, hot-modal[class*=confirm]');
+      if (!m) return '(sumiu)';
+      const brancos = new RegExp('[' + String.fromCharCode(32, 9, 10, 13) + ']+', 'g');
+      const ler = raiz => raiz ? (raiz.innerText || raiz.textContent || '').replace(brancos, ' ').trim() : '';
+      return (ler(m) + ' || ' + ler(m.shadowRoot)).slice(0, 300);
+    }).catch(() => '(nao deu para ler)');
+    // Modal conhecido tem resposta certa; Escape nao fecha o de "trocar o
+    // formato" e o wizard fica preso (27/09/2026, dois lotes perdidos).
+    const resposta = botaoDoModal(textoModal);
+    if (resposta) {
+      const clicou = await page.evaluate(alvo => {
+        const norma = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const cand = [];
+        const varrer = raiz => {
+          for (const b of raiz.querySelectorAll('button, hot-button')) cand.push(b);
+          for (const e of raiz.querySelectorAll('*')) if (e.shadowRoot) varrer(e.shadowRoot);
+        };
+        varrer(document);
+        const b = cand.find(x => norma(x.innerText) === norma(alvo));
+        if (!b) return false;
+        b.click();
+        return true;
+      }, resposta).catch(() => false);
+      log.warn('[' + label + '] modal "' + textoModal.slice(0, 60) + '" — respondendo "' + resposta + '"' + (clicou ? '' : ' (botao nao encontrado)'));
+      // Modal que INSISTE depois da resposta certa: registrar o estado uma vez,
+      // senao o log vira uma parede de linhas iguais sem explicar nada.
+      if (/wait-loop-t3$/.test(label)) {
+        const estado = await page.evaluate(() => {
+          const vis = e => !!(e.offsetParent || e.getClientRects().length);
+          const bts = [];
+          const varrer = raiz => {
+            for (const b of raiz.querySelectorAll('button, hot-button')) if (vis(b)) bts.push((b.innerText || '').replace(/[ ]+/g, ' ').trim().slice(0, 28));
+            for (const e of raiz.querySelectorAll('*')) if (e.shadowRoot) varrer(e.shadowRoot);
+          };
+          varrer(document);
+          return { url: location.href, modais: document.querySelectorAll('hot-modal[open]').length, botoes: bts.filter(Boolean).slice(0, 18) };
+        }).catch(() => null);
+        log.warn('[' + label + '] estado: ' + JSON.stringify(estado).slice(0, 400));
+      }
+      if (clicou) return 'respondeu:' + resposta;
+    }
+    log.warn('[' + label + '] modal sem botao de saida — texto: ' + textoModal + ' — pressing Escape');
     await page.keyboard.press('Escape');
     await new Promise(r => setTimeout(r, 600));
     return 'escape-modal';
@@ -955,7 +1040,32 @@ async function createProduct(page, session, ebook) {
 
     // If still on /info after 10s, try clicking Continuar again
     if (i === 9 && u.includes('/4/info')) {
-      log.warn('Still on /info after 10s — retrying Continuar...');
+      // Qual campo o wizard esta cobrando? Sem isso, "Still on /info" nao
+      // explica nada e o lote inteiro falha em silencio (27/09/2026).
+      const cobranca = await page.evaluate(() => {
+        const vis = e => !!(e.offsetParent || e.getClientRects().length);
+        const alvos = [];
+        for (const el of document.querySelectorAll('*')) {
+          if (el.children.length || !vis(el)) continue;
+          const t = (el.innerText || '').trim();
+          if (!/obrigat|invalid|inv[aá]lid|preencha/i.test(t)) continue;
+          let n = el.parentElement, ctx = '', niveis = 0;
+          while (n && niveis < 5) {
+            const campo = n.querySelector('input, textarea, hot-select, select');
+            const rot = n.querySelector('label, legend');
+            if (campo || rot) { ctx = [rot && rot.innerText, campo && (campo.getAttribute('name') || campo.id)].filter(Boolean).join('/').replace(/[ ]+/g, ' ').slice(0, 60); break; }
+            n = n.parentElement; niveis++;
+          }
+          alvos.push(ctx || t.slice(0, 40));
+        }
+        const n = document.querySelector('input[name=name]');
+        const d = document.querySelector('textarea[name=description]');
+        alvos.push('[valor nome=' + JSON.stringify(n ? n.value : null) + ' desc=' + ((d && d.value) || '').length + ' chars]');
+        return alvos.slice(0, 7);
+      }).catch(() => []);
+      const foto = (process.env.HOTMART_DEBUG_DIR || '') + 'wizard_preso.png';
+      if (process.env.HOTMART_DEBUG_DIR) await page.screenshot({ path: foto, fullPage: true }).catch(() => {});
+      log.warn('Still on /info after 10s — o wizard cobra: ' + (cobranca.length ? cobranca.join(' ; ') : '(nada marcado)') + ' — retrying Continuar...');
       const retryPos = await page.evaluate(()=>{
         const b = Array.from(document.querySelectorAll('button')).find(b => {
           const t = (b.textContent||'').trim().toLowerCase();
