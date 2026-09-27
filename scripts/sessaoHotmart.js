@@ -83,7 +83,10 @@ async function principal() {
     if (soOlhar) return { estado: d.estado, token: false };
 
     // Painel de pe: renovar o token do servidor (e o que o catalogo usa).
-    const saida = execFileSync(process.execPath, [path.join(__dirname, 'renovar_token_local.js')], { encoding: 'utf8', timeout: 180000 });
+    // 7 min, nao 3: em 27/09/2026 a renovacao levou mais de 180 s logo apos o
+    // login (o painel ainda estava montando) e o agente morreu com ETIMEDOUT
+    // depois de ja ter constatado que a sessao estava de pe.
+    const saida = execFileSync(process.execPath, [path.join(__dirname, 'renovar_token_local.js')], { encoding: 'utf8', timeout: Number(process.env.RENOVAR_TOKEN_TIMEOUT_MS || 420000) });
     const linha = String(saida).trim().split('\n').pop();
     log.info('token: ' + linha.replace(/[\r\n\t]+/g, ' ').slice(0, 120));
     return { estado: d.estado, token: /instalado/.test(linha) };
