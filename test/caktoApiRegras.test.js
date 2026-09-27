@@ -181,3 +181,42 @@ test('chave de titulo: mesma normalizacao do resto do sistema', () => {
   assert.strictEqual(chaveDeTitulo(null), '');
 });
 
+
+test('titulo repetido entra com o SUBTITULO real do livro, nao com numero', () => {
+  const { nomeDistintoCakto } = require('../src/agents/caktoApiRegras');
+  const usados = ['Pele Perfeita'];
+  assert.strictEqual(
+    nomeDistintoCakto({ title: 'Pele Perfeita', subtitle: 'Rotina de Cuidado para uma Pele Saudável' }, usados),
+    'Pele Perfeita: Rotina de Cuidado para uma Pele Saudável',
+  );
+  assert.strictEqual(nomeDistintoCakto({ title: 'Titulo Inedito', subtitle: 'qualquer coisa' }, usados), 'Titulo Inedito',
+    'titulo que nao esta na loja entra como esta');
+});
+
+test('sem subtitulo que ajude, o livro FICA de fora (nunca "Titulo 2")', () => {
+  const { nomeDistintoCakto } = require('../src/agents/caktoApiRegras');
+  const usados = ['Pele Perfeita'];
+  assert.strictEqual(nomeDistintoCakto({ title: 'Pele Perfeita' }, usados), null, 'sem subtitulo, nao publica');
+  assert.strictEqual(nomeDistintoCakto({ title: 'Pele Perfeita', subtitle: 'ab' }, usados), null, 'subtitulo curto nao diferencia');
+  assert.strictEqual(nomeDistintoCakto({ title: 'Pele Perfeita', subtitle: 'pele  PERFEITA ' }, usados), null,
+    'subtitulo que repete o titulo nao diferencia');
+  assert.strictEqual(nomeDistintoCakto({ title: 'Pele Perfeita', subtitle: 'Rotina de Cuidado' },
+    ['Pele Perfeita', 'Pele Perfeita: Rotina de Cuidado']), null, 'o composto tambem ja esta na loja');
+});
+
+test('nome distinto: entrada torta nao quebra e nao inventa produto', () => {
+  const { nomeDistintoCakto } = require('../src/agents/caktoApiRegras');
+  assert.strictEqual(nomeDistintoCakto(null, []), null);
+  assert.strictEqual(nomeDistintoCakto({}, []), null, 'livro sem titulo nunca vira produto');
+  assert.strictEqual(nomeDistintoCakto({ title: '   ' }, []), null);
+  assert.strictEqual(nomeDistintoCakto({ titulo: 'Em portugues', subtitulo: 'Subtitulo em portugues' }, ['em portugues']),
+    'Em portugues: Subtitulo em portugues', 'aceita os dois nomes de campo');
+  assert.strictEqual(nomeDistintoCakto({ title: 'A' }, null), 'A', 'sem lista de usados, o titulo serve');
+  assert.strictEqual(nomeDistintoCakto({ title: 'A' }, new Set(['a'])), null, 'aceita Set de nomes ja usados');
+});
+
+test('nome composto respeita o limite de 120 da Cakto', () => {
+  const { nomeDistintoCakto } = require('../src/agents/caktoApiRegras');
+  const nome = nomeDistintoCakto({ title: 'T'.repeat(80), subtitle: 'S'.repeat(80) }, ['t'.repeat(80)]);
+  assert.strictEqual(nome.length, 120);
+});

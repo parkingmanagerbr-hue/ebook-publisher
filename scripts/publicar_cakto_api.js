@@ -17,7 +17,7 @@
 const fs = require('fs');
 const { publicarNaCakto, cabecalhos } = require('../src/agents/publisherCaktoApi');
 const { ehErroDaLoja } = require('../src/agents/higieneCakto');
-const { resumoDaPublicacao, semTitulosJaPublicados } = require('../src/agents/caktoApiRegras');
+const { resumoDaPublicacao, nomeDistintoCakto, chaveDeTitulo } = require('../src/agents/caktoApiRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { travar } = require('../src/core/travaLocal');
 
@@ -41,33 +41,43 @@ async function rodar(limite, seco) {
 
   const db = require('../src/core/database').getDb();
   db.prepare('CREATE TABLE IF NOT EXISTS cakto_recusado (ebook_id TEXT PRIMARY KEY, motivo TEXT, quando INTEGER)').run();
+  // Guarda o nome de fato usado na loja: o titulo do livro pode ter entrado
+  // composto com o subtitulo, e a comparacao da proxima rodada precisa ser
+  // exata (senao republica o mesmo nome).
+  const colunas = db.prepare('PRAGMA table_info(ebooks)').all().map(c => c.name);
+  if (!colunas.includes('cakto_nome')) db.prepare('ALTER TABLE ebooks ADD COLUMN cakto_nome TEXT').run();
 
-  // O descarte de titulo repetido vai NA CONSULTA, nao depois do teto: com ele
-  // so no fim, o teto trazia os 800 mais recentes — todos duplicados — e a
-  // fila devolvia zero para sempre, com 125 livros ineditos parados atras
-  // deles (medido em 26/09/2026: 1.759 pendentes, 1.634 de titulo repetido).
-  const base = "SELECT id, title, description, language, cover_path, pdf_path FROM ebooks " +
+  // Titulo repetido NAO sai mais da fila: entra com o subtitulo proprio do
+  // livro (ver nomeDistintoCakto). Em 27/09/2026, 1.679 dos 1.681 pendentes
+  // tinham titulo ja publicado — descartar todos deixava o catalogo parado.
+  const base = "SELECT id, title, subtitle, description, language, cover_path, pdf_path FROM ebooks " +
     "WHERE (cakto_product_id IS NULL OR cakto_product_id = '') AND pdf_path IS NOT NULL AND pdf_path <> '' " +
-    "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' " +
-    "AND LOWER(TRIM(title)) NOT IN (SELECT LOWER(TRIM(title)) FROM ebooks " +
-    "  WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' AND title IS NOT NULL) ";
+    "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' ";
   const teto = Math.max(4, limite * 4);
   const candidatos = db.prepare(base + "AND LOWER(COALESCE(language,'')) LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all()
     .concat(db.prepare(base + "AND LOWER(COALESCE(language,'')) NOT LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all());
 
-  // Segunda linha de defesa: o SQL compara por LOWER/TRIM, que nao normaliza
-  // acento composto (NFKC) nem espaco duplo no meio do titulo. A regra pura
-  // pega o que escapa.
-  const jaPublicados = db.prepare(
-    "SELECT title FROM ebooks WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' AND title IS NOT NULL"
-  ).all().map(r => r.title);
-  const semRepetidos = semTitulosJaPublicados(candidatos, jaPublicados);
-  if (semRepetidos.length !== candidatos.length) {
-    log.info('fora da fila por titulo ja publicado na Cakto: ' + (candidatos.length - semRepetidos.length));
+  // Nomes que JA estao na loja. `cakto_nome` guarda o nome de fato usado (pode
+  // ser o composto com subtitulo); sem ele, cai no titulo.
+  const usados = new Set(db.prepare(
+    "SELECT COALESCE(NULLIF(cakto_nome, ''), title) AS n FROM ebooks " +
+    "WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' AND COALESCE(NULLIF(cakto_nome, ''), title) IS NOT NULL"
+  ).all().map(r => chaveDeTitulo(r.n)));
+
+  // Cada candidato recebe o nome com que pode entrar; quem nao tem nome
+  // distinto possivel sai da fila (sem inventar "Titulo 2").
+  let semNome = 0;
+  const comNome = [];
+  for (const c of candidatos) {
+    const nome = nomeDistintoCakto(c, usados);
+    if (!nome) { semNome++; continue; }
+    usados.add(chaveDeTitulo(nome));   // nao repetir dentro do proprio lote
+    comNome.push({ ...c, nomeNaLoja: nome });
   }
+  if (semNome) log.info('fora da fila por nao ter nome distinto possivel: ' + semNome);
 
   const rodada = Math.floor(Date.now() / 1800000);
-  const pendentes = filaDaRodada(semRepetidos, limite, { fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4), rodada });
+  const pendentes = filaDaRodada(comNome, limite, { fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4), rodada });
   log.info('pendentes para a Cakto: ' + pendentes.length + ' (' + resumoDaFila(pendentes) + ')' + (seco ? ' (dry-run)' : ''));
   if (!pendentes.length) return { publicados: 0, falhas: 0, recusados: 0 };
 
@@ -75,7 +85,7 @@ async function rodar(limite, seco) {
   try { urlEntrega = require('../src/core/entrega').urlEntrega; } catch (_) { /* sem segredo: publica pausado */ }
 
   const H = await cabecalhos();
-  const grava = db.prepare('UPDATE ebooks SET cakto_product_id = ? WHERE id = ?');
+  const grava = db.prepare('UPDATE ebooks SET cakto_product_id = ?, cakto_nome = ? WHERE id = ?');
   const recusa = db.prepare('INSERT OR REPLACE INTO cakto_recusado (ebook_id, motivo, quando) VALUES (?,?,?)');
 
   let publicados = 0, falhas = 0, recusados = 0;
@@ -83,15 +93,15 @@ async function rodar(limite, seco) {
     let entrega = '';
     try { entrega = urlEntrega ? urlEntrega(e.id) : ''; } catch (err) { entrega = ''; }
     if (!entrega) log.warn('sem link de entrega: "' + umaLinha(e.title) + '" — nasce pausado');
-    if (seco) { log.info('[dry-run] publicaria "' + umaLinha(e.title) + '" entrega=' + (entrega ? 'ok' : 'FALTA')); continue; }
+    if (seco) { log.info('[dry-run] publicaria "' + umaLinha(e.nomeNaLoja) + '" entrega=' + (entrega ? 'ok' : 'FALTA')); continue; }
     try {
       const capa = e.cover_path && fs.existsSync(e.cover_path) ? e.cover_path : null;
-      const r = await publicarNaCakto({ title: e.title, description: e.description, entrega, capa }, { H });
+      const r = await publicarNaCakto({ title: e.nomeNaLoja, description: e.description, entrega, capa }, { H });
       // O que o resto do sistema chama de cakto_product_id e o shortcode da
       // oferta (e o que /api/offers/{shortcode}/ aceita).
-      if (r.shortcode) grava.run(r.shortcode, e.id);
+      if (r.shortcode) grava.run(r.shortcode, e.nomeNaLoja, e.id);
       publicados++;
-      log.info('publicado ' + resumoDaPublicacao(e.title, r.shortcode, r.ajustes) + ' -> ' + r.checkout);
+      log.info('publicado ' + resumoDaPublicacao(e.nomeNaLoja, r.shortcode, r.ajustes) + ' -> ' + r.checkout);
     } catch (err) {
       falhas++;
       const msg = umaLinha(err && err.message, 160);

@@ -126,6 +126,36 @@ function semTitulosJaPublicados(livros, publicados) {
 }
 
 /**
+ * Nome com que este livro pode entrar na loja, dado o que JA esta lá.
+ *
+ * 27/09/2026: 1.679 dos 1.681 livros pendentes tinham titulo identico a um
+ * produto ja publicado — o gerador repete titulos. Descartar todos deixava o
+ * catalogo parado; publicar nome repetido deixa o comprador sem saber qual
+ * escolher. A saida nao inventa nada: o livro TEM subtitulo proprio no banco
+ * (400 de 400 na amostra), e "Titulo: Subtitulo" e um nome legitimo e distinto.
+ *
+ * Devolve o nome a usar, ou null quando nem o composto serve — nunca acrescenta
+ * numero, que nao informa nada a quem le a vitrine. Pura.
+ */
+function nomeDistintoCakto(livro, nomesUsados) {
+  const usados = nomesUsados instanceof Set
+    ? nomesUsados
+    : new Set((nomesUsados || []).map(chaveDeTitulo).filter(Boolean));
+  const l = livro || {};
+  const titulo = nomeDeProduto(l.title || l.titulo);
+  if (!titulo) return null;
+  if (!usados.has(chaveDeTitulo(titulo))) return titulo;
+
+  const sub = String(l.subtitle || l.subtitulo || '').replace(/\s+/g, ' ').trim();
+  if (sub.length < 4) return null;
+  // Subtitulo que so repete o titulo nao diferencia nada.
+  if (chaveDeTitulo(sub) === chaveDeTitulo(titulo)) return null;
+  const composto = nomeDeProduto(titulo + ': ' + sub);
+  if (usados.has(chaveDeTitulo(composto))) return null;
+  return composto;
+}
+
+/**
  * O produto que a API devolveu e mesmo o que pedimos? Guarda contra gravar
  * ajuste no produto errado — ja aconteceu na Kiwify. Pura.
  */
@@ -159,6 +189,6 @@ function resumoDaPublicacao(titulo, shortcode, ajustes) {
 module.exports = {
   corpoDeCriacao, corpoDeAjuste, nomeDeProduto, descricaoDeProduto, shortcodeDaOferta,
   linkDeCheckout, mesmoProdutoCakto, motivoDefinitivo, resumoDaPublicacao,
-  semTitulosJaPublicados, chaveDeTitulo,
+  semTitulosJaPublicados, chaveDeTitulo, nomeDistintoCakto,
   PRODUTOR, COMISSAO_AFILIADO,
 };
