@@ -46,6 +46,19 @@ function botaoDeSessaoSalva(botoes) {
   return null;
 }
 
+/**
+ * A URL e a da tela de entrada da Hotmart? Vale por si: em 27/09/2026 o agente
+ * leu a pagina antes de os campos montarem e concluiu "tela desconhecida" —
+ * era o formulario de login, com e-mail e senha. A URL ja dizia.
+ */
+function ehTelaDeEntrada(url) {
+  // Montado com RegExp para o limite nao depender de barra invertida em texto:
+  // um `\b` escrito aqui ja virou backspace invisivel numa edicao e o padrao
+  // parou de casar, calado (26/09/2026 e antes).
+  const entrada = new RegExp('^https://sso[.]hotmart[.]com/(login|logout)([/?]|$)');
+  return entrada.test(String(url || ''));
+}
+
 /** A tela e a do painel (e nao a de entrada)? */
 function ehPainel(url, campos) {
   const u = String(url || '');
@@ -62,6 +75,9 @@ function diagnosticarTela(tela) {
   const t = tela || {};
   if (pedeSegredo(t.campos)) {
     return { estado: 'precisa-humano', motivo: 'a tela pede senha ou codigo — so o dono digita isso', botao: null };
+  }
+  if (ehTelaDeEntrada(t.url)) {
+    return { estado: 'precisa-humano', motivo: 'a tela de entrada da Hotmart esta aberta — so o dono digita e-mail e senha', botao: null };
   }
   if (ehPainel(t.url, t.campos)) {
     return { estado: 'logado', motivo: 'o painel abriu sem pedir nada', botao: null };
@@ -80,4 +96,4 @@ function resumoDaSessao(diagnostico, url) {
   return 'sessao Hotmart: ' + (d.estado || '?') + ' — ' + String(d.motivo || '').replace(/[\r\n\t]+/g, ' ').slice(0, 90) + ' | ' + limpa;
 }
 
-module.exports = { diagnosticarTela, pedeSegredo, botaoDeSessaoSalva, ehPainel, resumoDaSessao };
+module.exports = { diagnosticarTela, pedeSegredo, botaoDeSessaoSalva, ehPainel, ehTelaDeEntrada, resumoDaSessao };

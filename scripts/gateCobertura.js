@@ -61,6 +61,7 @@ const MODULOS_NO_GATE = [
   'src/core/navegadorLocal.js',
   'src/core/tentativas.js',
   'src/core/travaLocal.js',
+  'src/core/prazo.js',
   'src/core/cdpLocal.js',
   'src/core/aiClient.js',
   'src/core/database.js',

@@ -103,3 +103,19 @@ test('campo sem tipo nem nome nao e confundido com campo de segredo', () => {
   assert.strictEqual(pedeSegredo([{ tipo: 'text', visivel: true }]), false, 'campo de texto comum passa');
   assert.strictEqual(pedeSegredo([{ tipo: 'PASSWORD', visivel: true }]), true, 'caixa alta tambem conta');
 });
+
+test('a URL de entrada do SSO basta: nao se espera os campos montarem', () => {
+  // 27/09/2026: o agente leu a pagina antes de o formulario montar e concluiu
+  // "tela desconhecida" — era o login, com e-mail e senha. A URL ja dizia.
+  const { ehTelaDeEntrada } = require('../src/agents/sessaoHotmart');
+  assert.strictEqual(ehTelaDeEntrada('https://sso.hotmart.com/login?service=abc'), true);
+  assert.strictEqual(ehTelaDeEntrada('https://sso.hotmart.com/logout'), true);
+  assert.strictEqual(ehTelaDeEntrada('https://sso.hotmart.com/login/'), true);
+  assert.strictEqual(ehTelaDeEntrada('https://sso.hotmart.com/loginfalso/pega-senha'), false, 'prefixo parecido nao conta');
+  assert.strictEqual(ehTelaDeEntrada('https://ssoXhotmart.com/login'), false, 'o ponto do dominio e literal');
+  assert.strictEqual(ehTelaDeEntrada('https://app.hotmart.com/products'), false);
+  assert.strictEqual(ehTelaDeEntrada(null), false);
+  const d = diagnosticarTela({ url: 'https://sso.hotmart.com/login?service=abc', campos: [], botoes: [] });
+  assert.strictEqual(d.estado, 'precisa-humano');
+  assert.match(d.motivo, /e-mail e senha/);
+});

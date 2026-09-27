@@ -22,6 +22,10 @@ const { rotuloDoResultado, detalheDoResultado } = require('../src/agents/hotmart
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { comTentativas, valeTentarDeNovo, esperaDaTentativa } = require('../src/core/tentativas');
 const { travar } = require('../src/core/travaLocal');
+const { comPrazo, prazoPorItem } = require('../src/core/prazo');
+
+// Livro que da certo leva 2,5 a 3,5 min; o mais lento medido, 5.
+const PRAZO_LIVRO_MS = prazoPorItem(Number(process.env.HOTMART_MIN_POR_LIVRO || 3));
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
@@ -194,6 +198,19 @@ function gravarResultado(ebookId, url, produtoId) {
   rodarNoContainer(js);
 }
 
+/**
+ * Fecha as abas de cadastro de produto que sobraram de um livro travado.
+ * Nao espera: quem chamou ja desistiu do livro.
+ */
+function fecharAbasDeCadastro(browser) {
+  Promise.resolve()
+    .then(() => browser.pages())
+    .then(abas => Promise.all(abas
+      .filter(a => /\/products\/add\//.test(a.url()))
+      .map(a => a.close().catch(() => {}))))
+    .catch(() => {});
+}
+
 async function main() {
   const limite = parseInt(arg('limite', '5'), 10);
   // A tarefa agendada e encerrada em 25 min (18:00 de 16/09/2026: 6 livros nao
@@ -240,11 +257,21 @@ async function main() {
         // A capa deixou de ser opcional: sem ela, nao publica.
         if (!await baixar(e.cover_path, capaLocal)) throw new Error('capa viral nao veio do VPS — nao publico sem capa');
 
-        r = await publishToHotmart({
+        // PRAZO POR LIVRO: em 26/09/2026 um livro travou na tela de preco e
+        // prendeu o lote por DOZE HORAS (14:16 -> 02:20, 1 de 18 publicados).
+        // Travamento de navegador nao levanta excecao: a promessa nunca
+        // resolve. O orcamento de lote nao pega, porque so impede COMECAR.
+        r = await comPrazo(() => publishToHotmart({
           title: e.title, subtitle: e.subtitle, topic: e.topic, description: e.description,
           pdfPath: pdfLocal, coverPath: capaLocal,
           price: e.price, language: e.language,
-        }, { browser });   // <- navegador do usuario: sessao nativa
+        }, { browser }), PRAZO_LIVRO_MS, {
+          oQue: 'livro "' + String(e.title).slice(0, 40) + '"',
+          // A tarefa travada nao para de existir: fechar a aba do cadastro
+          // evita que ela fique consumindo o navegador do dono nos proximos
+          // livros. Falhar aqui nao muda o motivo do erro.
+          aoEstourar: () => { fecharAbasDeCadastro(browser); },
+        });
 
         if (r && (r.url || r.hotmartProductId)) {
           gravarResultado(e.id, r.url || '', r.hotmartProductId || '');
