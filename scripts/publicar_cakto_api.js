@@ -53,7 +53,11 @@ async function rodar(limite, seco) {
   const base = "SELECT id, title, subtitle, description, language, cover_path, pdf_path FROM ebooks " +
     "WHERE (cakto_product_id IS NULL OR cakto_product_id = '') AND pdf_path IS NOT NULL AND pdf_path <> '' " +
     "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' ";
-  const teto = Math.max(4, limite * 4);
+  // Teto generoso de proposito: o descarte por nome repetido acontece DEPOIS
+  // da consulta, e com teto curto os poucos livros publicaveis ficam
+  // escondidos atras de centenas de duplicados — a fila devolvia zero com 11
+  // livros prontos (27/09/2026). A consulta e local e a fila cabe inteira.
+  const teto = Math.max(1000, limite * 4);
   const candidatos = db.prepare(base + "AND LOWER(COALESCE(language,'')) LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all()
     .concat(db.prepare(base + "AND LOWER(COALESCE(language,'')) NOT LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all());
 
