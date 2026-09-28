@@ -110,4 +110,22 @@ function resumoDaCorrecao(produtoId, mudancas, subiuCapa) {
   return id + ': ' + [...(subiuCapa ? ['capa'] : []), ...campos].join(', ');
 }
 
-module.exports = { alvoHigiene, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, metodosDePagamentoValidos, ehErroDaLoja, DESCRICAO_AFILIADO };
+/**
+ * A LOJA caiu, ou foi so ESTE produto?
+ *
+ * 24/09/2026 o 500 era geral e parar a rodada na primeira falha era o certo.
+ * Em 28/09/2026 o mesmo codigo travou o passe inteiro porque UM produto
+ * respondia 500 — e a loja estava de pe (PUT em outro produto, inteiro,
+ * devolveu 200). Resultado: 10.648 produtos com o checkout quebrado ficaram
+ * esperando por causa de um.
+ *
+ * Regra: erro de servidor so vira "loja fora do ar" depois de TOLERANCIA
+ * falhas seguidas; antes disso e defeito daquele produto, que se registra e
+ * se pula. Pura.
+ */
+const TOLERANCIA_5XX = 3;
+function lojaForaDoAr(seguidas, tolerancia = TOLERANCIA_5XX) {
+  return Number(seguidas) >= tolerancia;
+}
+
+module.exports = { alvoHigiene, lojaForaDoAr, TOLERANCIA_5XX, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, metodosDePagamentoValidos, ehErroDaLoja, DESCRICAO_AFILIADO };

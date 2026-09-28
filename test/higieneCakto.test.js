@@ -125,3 +125,16 @@ test('checkout da Cakto SEM o id no fim e pagina de vendas quebrada', () => {
   const alvo = alvoHigiene({ salesPage: 'https://pay.cakto.com.br/abc123' }, { checkout: 'https://pay.cakto.com.br/abc123_999' });
   assert.strictEqual(alvo.salesPage, 'https://pay.cakto.com.br/abc123_999', 'o passe troca o link quebrado pelo certo');
 });
+
+test('UM produto com erro 500 nao e a loja fora do ar', () => {
+  const { lojaForaDoAr, TOLERANCIA_5XX } = require('../src/agents/higieneCakto');
+  // 28/09/2026: um unico produto respondia 500 e o passe parava, deixando
+  // 10.648 produtos com o checkout quebrado esperando por causa de um.
+  assert.strictEqual(lojaForaDoAr(1), false, 'o primeiro 500 e defeito do produto');
+  assert.strictEqual(lojaForaDoAr(2), false);
+  assert.strictEqual(lojaForaDoAr(TOLERANCIA_5XX), true, 'seguidos, ai sim e a loja');
+  assert.strictEqual(lojaForaDoAr(10), true);
+  assert.strictEqual(lojaForaDoAr(0), false);
+  assert.strictEqual(lojaForaDoAr(null), false);
+  assert.strictEqual(lojaForaDoAr(1, 1), true, 'a tolerancia e ajustavel');
+});

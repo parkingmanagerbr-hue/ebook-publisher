@@ -16,7 +16,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { alvoHigiene, precisaSubirCapa, resumoDaCorrecao, ehErroDaLoja } = require('../src/agents/higieneCakto');
+const { alvoHigiene, precisaSubirCapa, resumoDaCorrecao, ehErroDaLoja, lojaForaDoAr } = require('../src/agents/higieneCakto');
 
 let log;
 try { log = require('../src/core/logger').createLogger('higieneCakto'); }
@@ -86,7 +86,7 @@ async function main() {
 
   const H = await cabecalhos();
   const marca = db.prepare('INSERT OR REPLACE INTO cakto_higiene (ebook_id, resultado, quando) VALUES (?,?,?)');
-  let corrigidos = 0, semMudanca = 0, falhas = 0, foraDoAr = false;
+  let corrigidos = 0, semMudanca = 0, falhas = 0, foraDoAr = false, cincoSeguidos = 0;
 
   for (const e of livros) {
     try {
@@ -111,13 +111,18 @@ async function main() {
       if (seco) { log.info('[dry-run] ' + resumoDaCorrecao(e.cakto_product_id, mudancas, subirCapa)); continue; }
 
       if (Object.keys(mudancas).length) {
-        // A rota nao aceita PATCH em JSON (405): PUT com o produto inteiro.
-        await api('PUT', 'product/' + oferta.product + '/', { ...produto, ...mudancas }, H);
+        // PUT com SO OS CAMPOS A MUDAR. Medido em 28/09/2026: reenviar o
+        // objeto inteiro (63 campos) devolve 500 em produto recente, enquanto
+        // o parcial devolve 200 — e conferido campo a campo, ele e MERGE:
+        // nada fora do que foi enviado muda. Era o objeto inteiro que travava
+        // a correcao do checkout de 10.648 produtos.
+        await api('PUT', 'product/' + oferta.product + '/', mudancas, H);
         await dormir(PAUSA_MS);
       }
       if (subirCapa) { await enviarCapa(oferta.product, e.cover_path, H); await dormir(PAUSA_MS); }
 
       corrigidos++;
+      cincoSeguidos = 0;
       marca.run(e.id, 'ok', Date.now());
       log.info(resumoDaCorrecao(e.cakto_product_id, mudancas, subirCapa) + ' | "' + umaLinha(e.title, 50) + '"');
     } catch (err) {
@@ -127,9 +132,17 @@ async function main() {
       if (err && err.cloudflare) { log.warn('Cloudflare barrou — parando esta rodada'); break; }
       // 500 da loja: nao adianta seguir nem voltar daqui a 20 min martelando.
       if (ehErroDaLoja(err && err.status, msg)) {
-        log.warn('a Cakto esta respondendo erro de servidor — parando a rodada (tenta na proxima)');
-        foraDoAr = true;
-        break;
+        // UM produto com 500 nao e a loja fora do ar: em 28/09/2026 isso
+        // travou o passe inteiro (10.648 produtos esperando por causa de um).
+        cincoSeguidos++;
+        if (lojaForaDoAr(cincoSeguidos)) {
+          log.warn('a Cakto respondeu erro de servidor ' + cincoSeguidos + ' vezes seguidas — parando a rodada');
+          foraDoAr = true;
+          break;
+        }
+        log.warn('erro de servidor neste produto (' + cincoSeguidos + ' seguido(s)) — pulando e seguindo');
+        marca.run(e.id, 'erro', Date.now());
+        continue;
       }
       await dormir(PAUSA_MS);
     }

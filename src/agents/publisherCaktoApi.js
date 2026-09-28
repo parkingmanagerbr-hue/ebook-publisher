@@ -118,8 +118,9 @@ async function publicarNaCakto(livro, { H, pausar = dormir } = {}) {
   const checkout = linkDeCheckout(shortcode, idDoCheckout(atual));
   const ajustes = corpoDeAjuste(atual, { entrega: livro.entrega, checkout });
   if (Object.keys(ajustes).length) {
-    // A rota nao aceita PATCH em JSON (405): PUT com o produto inteiro.
-    await api('PUT', 'product/' + id + '/', { ...atual, ...ajustes }, cab);
+    // SO os campos a mudar: o objeto inteiro devolve 500 (medido em
+    // 28/09/2026) e o parcial e merge — nada mais e alterado.
+    await api('PUT', 'product/' + id + '/', ajustes, cab);
     await pausar(PAUSA_MS);
   }
   if (livro.capa && fs.existsSync(livro.capa)) {
