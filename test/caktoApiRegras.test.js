@@ -25,9 +25,12 @@ test('criacao manda so nome e descricao (e o que a API exige)', () => {
   assert.match(c.description, /passo a passo/);
 });
 
-test('nome de produto: uma linha, no maximo 120', () => {
+test('nome de produto: uma linha, no maximo 255 (o que a loja declara)', () => {
   assert.strictEqual(nomeDeProduto('Guia\nDefinitivo\tde Financas'), 'Guia Definitivo de Financas');
-  assert.strictEqual(nomeDeProduto('x'.repeat(200)).length, 120);
+  // O limite vem de OPTIONS /api/products/ ("max_length": 255). Com o 120 que
+  // eu havia chutado, 935 livros foram descartados por "nome nao distinto".
+  assert.strictEqual(nomeDeProduto('x'.repeat(400)).length, 255);
+  assert.strictEqual(nomeDeProduto('x'.repeat(200)).length, 200, 'nome de 200 nao e cortado');
   assert.strictEqual(nomeDeProduto(null), '');
   assert.strictEqual(nomeDeProduto('  espacos  '), 'espacos');
 });
@@ -104,7 +107,7 @@ test('nunca grava ajuste no produto errado', () => {
   assert.strictEqual(mesmoProdutoCakto('', 'Guia'), false);
   assert.strictEqual(mesmoProdutoCakto('Guia', ''), false);
   assert.strictEqual(mesmoProdutoCakto(null, null), false);
-  assert.strictEqual(mesmoProdutoCakto('x'.repeat(120), 'x'.repeat(200)), true, 'compara depois do corte de 120');
+  assert.strictEqual(mesmoProdutoCakto('x'.repeat(255), 'x'.repeat(400)), true, 'compara depois do corte do limite');
 });
 
 test('recusa definitiva nao volta para a fila; erro passageiro volta', () => {
@@ -215,10 +218,25 @@ test('nome distinto: entrada torta nao quebra e nao inventa produto', () => {
   assert.strictEqual(nomeDistintoCakto({ title: 'A' }, new Set(['a'])), null, 'aceita Set de nomes ja usados');
 });
 
-test('nome composto respeita o limite de 120 da Cakto', () => {
+test('nome composto respeita o limite declarado pela Cakto', () => {
+  const { nomeDistintoCakto, MAX_NOME } = require('../src/agents/caktoApiRegras');
+  assert.strictEqual(MAX_NOME, 255);
+  const curto = nomeDistintoCakto({ title: 'T'.repeat(80), subtitle: 'S'.repeat(80) }, ['t'.repeat(80)]);
+  assert.strictEqual(curto.length, 162, 'cabe inteiro: titulo + ": " + subtitulo');
+  const longo = nomeDistintoCakto({ title: 'T'.repeat(200), subtitle: 'S'.repeat(200) }, ['t'.repeat(200)]);
+  assert.strictEqual(longo.length, MAX_NOME);
+});
+
+test('subtitulos que so diferem depois do caractere 120 geram nomes distintos', () => {
   const { nomeDistintoCakto } = require('../src/agents/caktoApiRegras');
-  const nome = nomeDistintoCakto({ title: 'T'.repeat(80), subtitle: 'S'.repeat(80) }, ['t'.repeat(80)]);
-  assert.strictEqual(nome.length, 120);
+  const comum = 'Estratégias práticas e comprovadas para transformar a inteligência artificial em renda de verdade ao longo do ano, com ';
+  const a = { title: 'Ganhe Dinheiro com IA em 2026', subtitle: comum + 'foco em automação' };
+  const b = { title: 'Ganhe Dinheiro com IA em 2026', subtitle: comum + 'foco em consultoria' };
+  const usados = ['Ganhe Dinheiro com IA em 2026'];
+  const nomeA = nomeDistintoCakto(a, usados);
+  const nomeB = nomeDistintoCakto(b, [...usados, nomeA]);
+  assert.ok(nomeA && nomeB, 'os dois entram');
+  assert.notStrictEqual(nomeA, nomeB, 'com o limite certo, a diferenca sobrevive ao corte');
 });
 
 test('o link do checkout leva o id do checkout — sem ele, 404 na cara do comprador', () => {

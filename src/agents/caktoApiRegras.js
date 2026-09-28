@@ -25,11 +25,17 @@ function umaLinha(s, n = 60) {
 }
 
 /**
- * Nome do produto como a Cakto aceita: uma linha, no maximo 120 caracteres.
- * Titulo vazio nao vira produto — quem chama deve recusar antes. Pura.
+ * Nome do produto como a Cakto aceita: uma linha, no maximo 255 caracteres.
+ *
+ * O limite foi MEDIDO em `OPTIONS /api/products/`, que declara
+ * `"name": { ..., "max_length": 255 }`. Antes estava 120, chutado — e o corte
+ * curto igualava nomes compostos que so diferiam depois do caractere 120,
+ * fazendo 935 livros serem descartados como "sem nome distinto possivel"
+ * (27/09/2026). Limite de loja se le na loja, nao se supoe. Pura.
  */
+const MAX_NOME = 255;
 function nomeDeProduto(titulo) {
-  return umaLinha(titulo, 120);
+  return umaLinha(titulo, MAX_NOME);
 }
 
 /**
@@ -214,5 +220,5 @@ module.exports = {
   corpoDeCriacao, corpoDeAjuste, nomeDeProduto, descricaoDeProduto, shortcodeDaOferta,
   linkDeCheckout, idDoCheckout, mesmoProdutoCakto, motivoDefinitivo, resumoDaPublicacao,
   semTitulosJaPublicados, chaveDeTitulo, nomeDistintoCakto,
-  PRODUTOR, COMISSAO_AFILIADO,
+  PRODUTOR, COMISSAO_AFILIADO, MAX_NOME,
 };
