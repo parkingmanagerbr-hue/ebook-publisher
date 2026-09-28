@@ -21,7 +21,7 @@
  * derruba a sessao salva (medido na auditoria de 15/09/2026).
  */
 const fs = require('fs');
-const { corpoDeCriacao, corpoDeAjuste, shortcodeDaOferta, linkDeCheckout, mesmoProdutoCakto, motivoDefinitivo, nomeDeProduto } = require('./caktoApiRegras');
+const { corpoDeCriacao, corpoDeAjuste, shortcodeDaOferta, idDoCheckout, linkDeCheckout, mesmoProdutoCakto, motivoDefinitivo, nomeDeProduto } = require('./caktoApiRegras');
 const { ehErroDaLoja } = require('./higieneCakto');
 
 let log;
@@ -99,18 +99,34 @@ async function publicarNaCakto(livro, { H, pausar = dormir } = {}) {
   }
   await pausar(PAUSA_MS);
 
-  const shortcode = shortcodeDaOferta(produto);
-  const ajustes = corpoDeAjuste(produto, { entrega: livro.entrega, checkout: linkDeCheckout(shortcode) });
+  let atual = produto;
+  let shortcode = shortcodeDaOferta(atual);
+  // O id do checkout da oferta as vezes ainda nao existe logo depois da
+  // criacao (27/09/2026: um produto saiu com checkout=null e ficou sem pagina
+  // de venda). Sem ele nao ha link — vale reler uma vez antes de desistir.
+  if (!idDoCheckout(atual)) {
+    await pausar(PAUSA_MS);
+    const relido = await api('GET', 'product/' + id + '/', null, cab).catch(() => null);
+    if (relido && idDoCheckout(relido)) {
+      atual = relido;
+      shortcode = shortcodeDaOferta(atual);
+      log.info('id do checkout so apareceu na releitura: ' + umaLinha(id, 40));
+    } else {
+      log.warn('produto sem id de checkout ainda: ' + umaLinha(id, 40) + ' — a higiene grava a pagina de vendas depois');
+    }
+  }
+  const checkout = linkDeCheckout(shortcode, idDoCheckout(atual));
+  const ajustes = corpoDeAjuste(atual, { entrega: livro.entrega, checkout });
   if (Object.keys(ajustes).length) {
     // A rota nao aceita PATCH em JSON (405): PUT com o produto inteiro.
-    await api('PUT', 'product/' + id + '/', { ...produto, ...ajustes }, cab);
+    await api('PUT', 'product/' + id + '/', { ...atual, ...ajustes }, cab);
     await pausar(PAUSA_MS);
   }
   if (livro.capa && fs.existsSync(livro.capa)) {
     await enviarCapa(id, livro.capa, cab);
     await pausar(PAUSA_MS);
   }
-  return { id, shortcode, checkout: linkDeCheckout(shortcode), ajustes };
+  return { id, shortcode, checkout, ajustes };
 }
 
 module.exports = { publicarNaCakto, cabecalhos, api, enviarCapa, ehErroDaLoja, API };
