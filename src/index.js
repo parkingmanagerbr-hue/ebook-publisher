@@ -21,6 +21,7 @@ const { publishToAmazon } = require('./agents/publisherAmazon');
 const { runLearningCycle } = require('./agents/learningAgent');
 const { generateAudiobook, isAvailable: audiobookAvailable } = require('./agents/audiobookAgent');
 const db = require('./core/database');
+const { decidirTitulo, resumoDoTitulo } = require('./core/tituloUnico');
 
 // Web Ebook Agents (Gamma, Piktochart, ebookmaker.ai, Visme)
 let webEbookAgents = null;
@@ -121,6 +122,20 @@ async function runPipeline(topicOverride = null, language = null) {
       logger.info(`\n📝 ETAPA 1: Gerando conteúdo do e-book [idioma=${lang}]...`);
       ebook = await generateFullEbook(topic.topic, lang);
       logger.info(`✅ Conteúdo gerado: "${ebook.title}" (${ebook.wordCount} palavras) [${lang}]`);
+
+      // TITULO REPETIDO PARA AQUI, antes da capa e do PDF (as etapas caras).
+      // Medido em 27/09/2026: 924 e-books pendentes tinham 20 titulos
+      // distintos — 663 copias do mesmo — e 84 dos 1.865 gerados nos 7 dias
+      // anteriores ainda repetiam. Produto duplicado em marketplace nao se
+      // desfaz sozinho.
+      const jaUsados = db.getDb().prepare('SELECT title FROM ebooks WHERE title IS NOT NULL').all().map(r => r.title);
+      const decisao = decidirTitulo(ebook, jaUsados);
+      logger.info(resumoDoTitulo(decisao, ebook.title));
+      if (decisao.acao === 'descartar') {
+        logger.warn('ciclo encerrado sem gastar capa nem PDF: ' + decisao.motivo);
+        return { success: false, skipped: true, reason: 'titulo-repetido' };
+      }
+      ebook.title = decisao.titulo;
 
       // ===== 3. GERAR CAPA =====
       logger.info('\n🎨 ETAPA 2: Gerando capa...');

@@ -80,8 +80,18 @@ async function rodar(limite, seco) {
   }
   if (semNome) log.info('fora da fila por nao ter nome distinto possivel: ' + semNome);
 
+  // ARQUIVO DE VERDADE, nao so o caminho no banco: 923 dos 924 pendentes
+  // tinham pdf_path preenchido e o arquivo SUMIDO do disco (27/09/2026).
+  // Publicar assim cria produto que ja nasce pausado por falta de entrega —
+  // trabalho a toa e catalogo sujo.
+  const antesDoArquivo = comNome.length;
+  const comArquivo = comNome.filter(l => { try { return fs.statSync(l.pdf_path).size > 1000; } catch (_) { return false; } });
+  if (comArquivo.length !== antesDoArquivo) {
+    log.info('fora da fila por PDF ausente ou vazio: ' + (antesDoArquivo - comArquivo.length));
+  }
+
   const rodada = Math.floor(Date.now() / 1800000);
-  const pendentes = filaDaRodada(comNome, limite, { fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4), rodada });
+  const pendentes = filaDaRodada(comArquivo, limite, { fatiaEstrangeira: Number(process.env.FATIA_ESTRANGEIRA || 0.4), rodada });
   log.info('pendentes para a Cakto: ' + pendentes.length + ' (' + resumoDaFila(pendentes) + ')' + (seco ? ' (dry-run)' : ''));
   if (!pendentes.length) return { publicados: 0, falhas: 0, recusados: 0 };
 
