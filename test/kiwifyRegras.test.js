@@ -172,3 +172,23 @@ test('limite de ritmo: reconhece o 429 e espera cada vez mais', () => {
   assert.strictEqual(esperaPorTentativa(0), 5000);
   assert.strictEqual(esperaPorTentativa('nao numero'), 5000);
 });
+
+test('depois do limite da conta, a Kiwify espera antes de gastar o Chrome de novo', () => {
+  const { valeTentarKiwify, ESPERA_APOS_LIMITE_MS } = require('../src/agents/kiwifyRegras');
+  const agora = Date.UTC(2026, 8, 28, 12, 0, 0);
+  // O 429 da Kiwify e teto de CONTA (273 produtos), nao ritmo: continuou tres
+  // dias depois. Insistir a cada 30 min tira o Chrome da Hotmart, que publica.
+  assert.strictEqual(valeTentarKiwify(null, agora), true, 'sem falha anterior, tenta');
+  assert.strictEqual(valeTentarKiwify(agora - 60000, agora), false, 'acabou de falhar: espera');
+  assert.strictEqual(valeTentarKiwify(agora - ESPERA_APOS_LIMITE_MS, agora), true, 'passada a espera, tenta');
+  assert.strictEqual(valeTentarKiwify(agora - ESPERA_APOS_LIMITE_MS + 1000, agora), false);
+});
+
+test('data invalida ou no futuro nao trava a Kiwify para sempre', () => {
+  const { valeTentarKiwify } = require('../src/agents/kiwifyRegras');
+  const agora = Date.UTC(2026, 8, 28, 12, 0, 0);
+  assert.strictEqual(valeTentarKiwify('nao-e-data', agora), true);
+  assert.strictEqual(valeTentarKiwify(agora + 99999999, agora), true, 'relogio para tras nao vira bloqueio eterno');
+  assert.strictEqual(valeTentarKiwify(undefined, agora), true);
+  assert.strictEqual(valeTentarKiwify(agora - 1000, agora, 0), true, 'espera zero desliga a trava');
+});

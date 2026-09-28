@@ -18,7 +18,7 @@ const http = require('http');
 const puppeteer = require('puppeteer-core');
 const { publicarNaKiwify, credenciais } = require('../src/agents/publisherKiwify');
 const { portasCandidatas, escolherPorta } = require('../src/core/navegadorLocal');
-const { ehLimiteDeTaxa } = require('../src/agents/kiwifyRegras');
+const { ehLimiteDeTaxa, valeTentarKiwify } = require('../src/agents/kiwifyRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 
 let log;
@@ -122,9 +122,25 @@ function responde(porta) {
   });
 }
 
+/** Onde fica anotada a ultima recusa por limite da conta. */
+const MARCA_LIMITE = path.join(os.tmpdir(), 'kiwify-limite.txt');
+function ultimaRecusa() {
+  try { return Number(fs.readFileSync(MARCA_LIMITE, 'utf8').trim()) || null; } catch (_) { return null; }
+}
+function anotarRecusa() {
+  try { fs.writeFileSync(MARCA_LIMITE, String(Date.now())); } catch (_) { /* sem marca, tenta de novo */ }
+}
+
 async function principal() {
   const limite = Number(arg('limite', '3'));
   const seco = temFlag('dry-run');
+  // O 429 da Kiwify e teto de CONTA (273 produtos desde 25/09/2026), nao
+  // ritmo: continuou tres dias depois. Tentar a cada 30 min so tira o Chrome
+  // da Hotmart, que publica de verdade.
+  if (!seco && !valeTentarKiwify(ultimaRecusa())) {
+    log.info('Kiwify no limite da conta (ultima recusa ha pouco) — pulando esta rodada');
+    return { publicados: 0, falhas: 0, recusados: 0, pulado: true };
+  }
   // Rodizio de idioma: parte das vagas vai para o catalogo estrangeiro, que
   // ficava parado atras de 6.568 livros em portugues.
   const candidatos = buscarPendentes(limite);
@@ -177,7 +193,8 @@ async function principal() {
       if (ehLimiteDeTaxa(null, msg)) {
         seguidasPorRitmo++;
         if (seguidasPorRitmo >= DESISTIR_APOS) {
-          log.warn('a Kiwify segue estrangulando o ritmo (' + seguidasPorRitmo + ' seguidas) — parando o lote para nao queimar a fila');
+          log.warn('a Kiwify segue recusando por limite (' + seguidasPorRitmo + ' seguidas) — parando o lote e esperando algumas horas');
+          anotarRecusa();
           break;
         }
       }
@@ -186,6 +203,9 @@ async function principal() {
   }
   await pagina.close().catch(() => {});
   browser.disconnect();
+  // Lote inteiro recusado por limite e sem nada publicado: anota, para a
+  // proxima rodada nao gastar o Chrome de novo (ele e da Hotmart tambem).
+  if (!publicados && seguidasPorRitmo > 0) anotarRecusa();
   return { publicados, falhas, recusados };
 }
 

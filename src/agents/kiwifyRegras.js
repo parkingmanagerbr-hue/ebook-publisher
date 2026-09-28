@@ -164,7 +164,31 @@ function corpoDeAtualizacao(base, livro, categoria) {
   };
 }
 
+/**
+ * Vale tentar a Kiwify agora, ou o limite ainda esta de pe?
+ *
+ * O 429 da Kiwify NAO e ritmo: desde 25/09/2026, com 273 produtos na conta,
+ * toda criacao volta "Rate limit exceeded" — inclusive depois da virada do dia
+ * e tres dias depois (medido em 28/09). E teto de conta, nao de velocidade.
+ *
+ * Insistir a cada 30 minutos custa o recurso escasso: o Chrome do dono, que a
+ * Hotmart usa para publicar de verdade. Depois de bater no limite, espera-se
+ * ESPERA_APOS_LIMITE antes de tentar de novo.
+ *
+ * `ultimaFalha` e o instante da ultima recusa por limite (ou nulo). Pura.
+ */
+const ESPERA_APOS_LIMITE_MS = 6 * 60 * 60 * 1000;
+function valeTentarKiwify(ultimaFalha, agora = Date.now(), espera = ESPERA_APOS_LIMITE_MS) {
+  if (ultimaFalha == null) return true;
+  const quando = Number(ultimaFalha);
+  if (!Number.isFinite(quando)) return true;
+  // Relogio para tras (ou data no futuro) nao pode travar a loja para sempre.
+  if (quando > agora) return true;
+  return (agora - quando) >= espera;
+}
+
 module.exports = {
+  valeTentarKiwify, ESPERA_APOS_LIMITE_MS,
   CATEGORIAS, categoriaKiwify, precoCentavos, moedaPorIdioma, descricaoKiwify,
   descritorFatura, corpoDeCriacao, corpoDeAtualizacao, mesmoProdutoKiwify, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa,
 };
