@@ -187,7 +187,7 @@ test('e-book reprovado lista cada problema: limites exatos de 200, 100 e 300 car
 
 // ── validatePDF ─────────────────────────────────────────────────────────────
 
-function gerarPdf(nome, paginas, { imagemPng, texto: txt = 'Conteudo do capitulo com texto suficiente para contar como pagina real. '.repeat(4) } = {}) {
+function gerarPdf(nome, paginas, { imagemPng, texto: txt = 'Conteudo do capitulo com texto suficiente para contar como pagina real. '.repeat(20) } = {}) {
   return new Promise((resolve, reject) => {
     const p = path.join(DIR, nome);
     // Sem compressao: PDF minusculo comprimido pelo pdfkit quebra o pdf.js antigo do
@@ -220,10 +220,16 @@ test('PDF ausente, leve, com poucas paginas e paginas quase vazias e reprovado',
   const p = await gerarPdf('fraco.pdf', 4, { texto: 'x' });
   const r = await qa.validatePDF(p, { expectedChapters: 5 });
   assert.strictEqual(r.ok, false);
-  assert.match(r.issues[0], /PDF muito pequeno: \d+KB \(esperado ≥ 200KB para 5 capítulos\)/);
+  assert.ok(r.issues.some(i => /corrompido ou vazio/.test(i)), JSON.stringify(r.issues));
+  assert.ok(r.issues.some(i => /Texto insuficiente/.test(i)), JSON.stringify(r.issues));
   assert.ok(r.issues.includes('PDF com apenas 4 páginas (esperado ≥ 9)'), JSON.stringify(r.issues));
   assert.ok(r.issues.some(i => /Texto muito escasso/.test(i)));
-  assert.match((await qa.validatePDF(p)).issues[0], /esperado ≥ 100KB para 0 capítulos/, 'sem opcoes o piso e 100 KB');
+  // Sem numero de capitulos nao ha piso de texto por capitulo: sobra a guarda
+  // de arquivo (corrompido) e as de pagina/densidade.
+  const semOpcoes = await qa.validatePDF(p);
+  assert.strictEqual(semOpcoes.ok, false);
+  assert.ok(semOpcoes.issues.some(i => /corrompido ou vazio/.test(i)), JSON.stringify(semOpcoes.issues));
+  assert.ok(!semOpcoes.issues.some(i => /Texto insuficiente/.test(i)), 'sem capitulos, nao se cobra texto por capitulo');
 });
 
 test('arquivo que nao e PDF: magic bytes e parse falham, sobra a verificacao basica', async () => {
@@ -253,3 +259,32 @@ test('PDF que e diretorio: erro de leitura vira problema, sem lancar', async () 
 });
 
 function t_statSeguro(p) { assert.ok(fs.statSync(p).isDirectory()); }
+
+test('PDF LEVE mas cheio de texto passa — bytes nao medem conteudo', async () => {
+  // 29/09/2026: a regra antiga exigia 40KB por capitulo (280KB para sete) e
+  // reprovava 100% dos PDFs regerados — arquivos de 38 paginas e 9.000
+  // palavras que o QA de e-book acabara de aprovar. A regeracao dos 5.852
+  // livros sem arquivo ficou parada por causa disso.
+  const texto = 'Paragrafo de conteudo real do capitulo, com frases completas e informacao util para quem comprou o livro. '.repeat(10);
+  const p = await gerarPdf('leve-mas-cheio.pdf', 12, { texto });
+  const kb = fs.statSync(p).size / 1024;
+  const r = await qa.validatePDF(p, { expectedChapters: 7 });
+  assert.ok(kb < 280, 'o arquivo e leve de proposito: ' + kb.toFixed(0) + 'KB');
+  assert.deepStrictEqual(r.issues, [], 'conteudo bom nao pode ser reprovado por peso');
+  assert.strictEqual(r.ok, true);
+});
+
+test('arquivo truncado ou so capa continua reprovado', async () => {
+  const p = path.join(DIR, 'truncado.pdf');
+  fs.writeFileSync(p, '%PDF-1.4\n' + 'x'.repeat(500));
+  const r = await qa.validatePDF(p, { expectedChapters: 7 });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.issues.some(i => /corrompido ou vazio/.test(i)), JSON.stringify(r.issues));
+});
+
+test('PDF com paginas de sobra mas texto raso e reprovado pelo texto', async () => {
+  const p = await gerarPdf('paginas-vazias.pdf', 20, { texto: 'pouco texto aqui' });
+  const r = await qa.validatePDF(p, { expectedChapters: 7 });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.issues.some(i => /Texto insuficiente/.test(i)), JSON.stringify(r.issues));
+});

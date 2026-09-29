@@ -258,6 +258,12 @@ async function lerPdf(buffer) {
   }
 }
 
+// Abaixo disto o arquivo nao e um livro: e PDF truncado ou so a capa.
+const PDF_MIN_KB_ARQUIVO = 20;
+// Um capitulo de e-book real passa folgado disto (os medidos tem ~9.000
+// palavras em 7 capitulos, ou seja ~7.000 caracteres por capitulo).
+const PDF_MIN_CHARS_POR_CAPITULO = 1500;
+
 async function validatePDF(pdfPath, { expectedChapters = 0 } = {}) {
   const issues = [];
 
@@ -265,11 +271,14 @@ async function validatePDF(pdfPath, { expectedChapters = 0 } = {}) {
     return { ok: false, issues: ['PDF não encontrado no disco'] };
   }
 
-  // Tamanho mínimo — um PDF real tem pelo menos 50KB por capítulo
+  // BYTES NAO MEDEM CONTEUDO. A regra antiga exigia 40KB por capitulo (280KB
+  // para sete) e reprovava 100% dos PDFs regerados em 29/09/2026 — arquivos de
+  // 38 paginas, 9.000 palavras e 1.522 chars/pagina, que o QA de e-book tinha
+  // acabado de APROVAR. PDF de texto puro e leve; peso so denuncia arquivo
+  // vazio ou truncado. Quem julga conteudo, mais abaixo, e pagina e texto.
   const sizeKb = fs.statSync(pdfPath).size / 1024;
-  const minSizeKb = Math.max(100, expectedChapters * 40);
-  if (sizeKb < minSizeKb) {
-    issues.push(`PDF muito pequeno: ${sizeKb.toFixed(0)}KB (esperado ≥ ${minSizeKb}KB para ${expectedChapters} capítulos)`);
+  if (sizeKb < PDF_MIN_KB_ARQUIVO) {
+    issues.push(`PDF corrompido ou vazio: ${sizeKb.toFixed(0)}KB (abaixo de ${PDF_MIN_KB_ARQUIVO}KB nao ha livro nenhum)`);
   }
 
   // Magic bytes: todo PDF começa com "%PDF"
@@ -299,6 +308,12 @@ async function validatePDF(pdfPath, { expectedChapters = 0 } = {}) {
       issues.push(`Texto muito escasso: média de ${charsPerPage} chars/página — possível páginas em branco`);
     }
 
+    // O que substitui o antigo piso de bytes: texto DE VERDADE por capitulo.
+    const minChars = expectedChapters * PDF_MIN_CHARS_POR_CAPITULO;
+    if (expectedChapters > 0 && data.text.length < minChars) {
+      issues.push(`Texto insuficiente: ${data.text.length} caracteres (esperado ≥ ${minChars} para ${expectedChapters} capítulos)`);
+    }
+
     logger.info(`✅ QA PDF: ${data.numpages} páginas, ${(sizeKb).toFixed(0)}KB, ~${charsPerPage} chars/pág`);
     return { ok: issues.length === 0, issues, numpages: data.numpages, sizeKb, charsPerPage };
   } catch (e) {
@@ -311,4 +326,5 @@ async function validatePDF(pdfPath, { expectedChapters = 0 } = {}) {
   }
 }
 
-module.exports = { checkImage, ensureQualityCover, ensureQualityIllustration, validateEbook, validatePDF };
+module.exports = {
+  PDF_MIN_KB_ARQUIVO, PDF_MIN_CHARS_POR_CAPITULO, checkImage, ensureQualityCover, ensureQualityIllustration, validateEbook, validatePDF };
