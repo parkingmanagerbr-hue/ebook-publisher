@@ -238,3 +238,22 @@ test('modal de perda de dados SEM botao de recusa nao recebe clique inventado', 
   assert.strictEqual(botaoDoModal('Seus dados não foram salvos. Sim, trocar'), null);
   assert.strictEqual(botaoDoModal('Quer trocar o formato mesmo assim? Cancelar'), 'Não, voltar', 'Cancelar tambem recusa');
 });
+
+test('botao fora da tela NAO e "coberto" — alarme falso ensina a ignorar o alarme', () => {
+  const { motivoDoCliqueBloqueado } = require('../src/agents/hotmartRegras');
+  // 29/09/2026: o log dizia 'Continuar COBERTO por "(nada no ponto)"' em lotes
+  // que publicavam 18/18. O botao so estava fora da area visivel.
+  assert.strictEqual(motivoDoCliqueBloqueado(null), null, 'nada por cima: nao ha bloqueio');
+  assert.strictEqual(motivoDoCliqueBloqueado(''), null);
+  assert.strictEqual(motivoDoCliqueBloqueado('   '), null);
+  assert.strictEqual(motivoDoCliqueBloqueado('DIV Este site utiliza cookies'), 'coberto por "DIV Este site utiliza cookies"');
+  assert.strictEqual(motivoDoCliqueBloqueado('(fora da area visivel mesmo apos rolar)'), '(fora da area visivel mesmo apos rolar)');
+  assert.strictEqual(motivoDoCliqueBloqueado('(o botao sumiu da pagina)'), '(o botao sumiu da pagina)');
+});
+
+test('o motivo do bloqueio cabe em uma linha de log', () => {
+  const { motivoDoCliqueBloqueado } = require('../src/agents/hotmartRegras');
+  const m = motivoDoCliqueBloqueado('DIV texto\ncom quebra\tque forjaria linha');
+  assert.ok(!/[\r\n]/.test(m), m);
+  assert.ok(motivoDoCliqueBloqueado('D'.repeat(200)).length < 80);
+});

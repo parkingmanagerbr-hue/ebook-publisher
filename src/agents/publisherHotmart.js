@@ -33,7 +33,7 @@ try {
 // Categoria, digitos do preco e id do produto na URL: regras puras, testadas
 // em test/hotmartRegras.test.js.
 const { getCategoryPT, digitosDoPreco, idProdutoDaUrl, mesmoProduto, motivoProdutoErrado, umaLinha,
-  ehAvisoDeTermos, ehBotaoDeAviso, botaoDoModal } = require('./hotmartRegras');
+  ehAvisoDeTermos, ehBotaoDeAviso, botaoDoModal, motivoDoCliqueBloqueado } = require('./hotmartRegras');
 const { descricaoHotmart } = require('./hotmartDescricao');
 
 function getCASTicket(tgt, serviceUrl) {
@@ -756,26 +756,33 @@ async function createProduct(page, session, ebook) {
       // morria com "No product ID after creation" (0 de 18, tres vezes). Clique
       // as cegas por coordenada acerta o que estiver por cima.
       const ponto = await page.evaluate(({ x, y, texto }) => {
-        const alvo = document.elementFromPoint(x, y);
-        if (!alvo) return { ok: false, quem: '(nada no ponto)' };
-        const botao = alvo.closest && alvo.closest('button');
-        const casa = !!botao && (botao.textContent || '').trim() === texto;
-        if (casa) return { ok: true, quem: 'botao' };
-        // Rolar o botao para o meio da tela costuma tira-lo de baixo do aviso.
-        const certo = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === texto);
-        if (certo) certo.scrollIntoView({ behavior: 'instant', block: 'center' });
-        const r = certo && certo.getBoundingClientRect();
-        const depois = r && document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-        const agoraCasa = !!(depois && depois.closest && depois.closest('button') && (depois.closest('button').textContent || '').trim() === texto);
-        return {
-          ok: agoraCasa,
-          quem: ((alvo.tagName || '') + ' ' + (alvo.textContent || '').replace(/[ ]+/g, ' ').trim().slice(0, 40)),
-          x: r ? r.left + r.width / 2 : null, y: r ? r.top + r.height / 2 : null,
+        const quemEsta = (px, py) => {
+          const alvo = document.elementFromPoint(px, py);
+          if (!alvo) return { casa: false, quem: null };            // fora da area visivel
+          const botao = alvo.closest && alvo.closest('button');
+          if (botao && (botao.textContent || '').trim() === texto) return { casa: true, quem: 'botao' };
+          return { casa: false, quem: (alvo.tagName || '') + ' ' + (alvo.textContent || '').replace(/[ ]+/g, ' ').trim().slice(0, 40) };
         };
+
+        const antes = quemEsta(x, y);
+        if (antes.casa) return { ok: true, quem: 'botao' };
+
+        // ROLAR SEMPRE antes de julgar. Botao fora da tela devolve null no
+        // elementFromPoint, e a versao anterior chamava isso de "coberto" —
+        // alarme falso em lote que publicava 18/18 (29/09/2026). Alarme falso
+        // ensina a ignorar o alarme, e um dia ele e de verdade.
+        const certo = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === texto);
+        if (!certo) return { ok: false, quem: '(o botao sumiu da pagina)' };
+        certo.scrollIntoView({ behavior: 'instant', block: 'center' });
+        const r = certo.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const depois = quemEsta(cx, cy);
+        return { ok: depois.casa, quem: depois.quem || '(fora da area visivel mesmo apos rolar)', x: cx, y: cy };
       }, { x: btn.x, y: btn.y, texto: btn.text }).catch(() => ({ ok: true, quem: '(nao deu para conferir)' }));
 
       if (!ponto.ok) {
-        log.warn('Continuar COBERTO por "' + ponto.quem + '" — clique nao sai (aviso de cookies? modal?)');
+        log.warn('Continuar bloqueado: ' + (motivoDoCliqueBloqueado(ponto.quem) || 'motivo desconhecido') + ' — clique nao sai');
         continue;
       }
       const alvoX = ponto.x || btn.x;

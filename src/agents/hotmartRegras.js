@@ -224,8 +224,29 @@ function ehBloqueioDeAmbiente(texto) {
   return coberto.test(t) || semId.test(t);
 }
 
+/**
+ * O clique no botao foi mesmo bloqueado, ou so estava fora da tela?
+ *
+ * 29/09/2026: a guarda que confere quem esta sob o ponto registrava
+ * "Continuar COBERTO por (nada no ponto)" em lotes que publicavam 18/18 — o
+ * botao estava apenas fora da area visivel, e `elementFromPoint` devolve nulo
+ * nesse caso. Alarme falso e pior que alarme nenhum: ensina a ignorar o aviso
+ * que um dia sera verdadeiro (foi um aviso desses que escondeu o banner de
+ * cookies cobrindo o botao, dois dias antes).
+ *
+ * `quem` e o que estava no ponto DEPOIS de rolar: nulo quando nao ha nada
+ * (fora da tela), ou a descricao do elemento que esta por cima. Pura.
+ */
+function motivoDoCliqueBloqueado(quem) {
+  const t = String(quem == null ? '' : quem).trim();
+  if (!t) return null;                                   // nada por cima: nao ha bloqueio
+  if (/^\(/.test(t)) return t;                           // observacao ja formatada
+  const brancos = new RegExp('[' + String.fromCharCode(13,10,9) + ']+', 'g');
+  return 'coberto por "' + t.replace(brancos, ' ').slice(0, 60) + '"';
+}
+
 module.exports = {
-  ehQuedaDeSessao, ehSeletorDeCategoria, campoDoWizard, botaoDoModal, ehBloqueioDeAmbiente,
+  ehQuedaDeSessao, motivoDoCliqueBloqueado, ehSeletorDeCategoria, campoDoWizard, botaoDoModal, ehBloqueioDeAmbiente,
   norm, rotuloDoResultado, detalheDoResultado, getCategoryPT, digitosDoPreco, idProdutoDaUrl, TECH_KW, HEALTH_KW, FINANCE_KW, BUSINESS_KW,
   nomeComparavel, mesmoProduto, motivoProdutoErrado, umaLinha, ehAvisoDeTermos, ehBotaoDeAviso,
 };
