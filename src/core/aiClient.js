@@ -29,6 +29,41 @@ const axios = require('axios');
 // um teste sobrescreveria o estado real das chaves.
 const STATE_FILE = process.env.AI_STATE_FILE || path.join(__dirname, '../../data/ai_state.json');
 
+/**
+ * Todas as chaves de um provedor que existem no ambiente, em ordem.
+ *
+ * A lista era escrita a mao e parava em `_5`: em 29/09/2026 havia 12 chaves
+ * GEMINI_API_KEY_* no container e o cliente usava SEIS — metade da cota do
+ * provedor principal parada, justamente com a fila de 5.852 PDFs esperando
+ * geracao. Chave nova no `.env` passa a valer sem mexer no codigo.
+ *
+ * Aceita `PREFIXO_API_KEY` e `PREFIXO_API_KEY_<n>`, ordena pelo numero, tira
+ * repetida e vazia. Pura.
+ */
+function chavesDoAmbiente(prefixo, env = process.env) {
+  const base = String(prefixo || '').toUpperCase();
+  if (!base) return [];
+  const exata = new RegExp('^' + base + '_API_KEY$');
+  const numerada = new RegExp('^' + base + '_API_KEY_([0-9]+)$');
+  const achadas = [];
+  for (const nome of Object.keys(env || {})) {
+    const valor = String(env[nome] == null ? '' : env[nome]).trim();
+    if (!valor) continue;
+    if (exata.test(nome)) { achadas.push({ ordem: 1, valor }); continue; }
+    const m = numerada.exec(nome);
+    if (m) achadas.push({ ordem: Number(m[1]) || 9999, valor });
+  }
+  achadas.sort((a, b) => a.ordem - b.ordem);
+  const vistas = new Set();
+  const out = [];
+  for (const a of achadas) {
+    if (vistas.has(a.valor)) continue;
+    vistas.add(a.valor);
+    out.push(a.valor);
+  }
+  return out;
+}
+
 // Suporte a múltiplas chaves por provider (rotação automática)
 const PROVIDER_KEYS = {
   gemini: [
@@ -39,21 +74,10 @@ const PROVIDER_KEYS = {
     // aqui assim mesmo: no dia em que o faturamento for ligado, passa a valer
     // sem deploy nenhum.
     process.env.GEMINI_PAID_KEY,
-    process.env.GEMINI_API_KEY,
-    process.env.GEMINI_API_KEY_2,
-    process.env.GEMINI_API_KEY_3,
-    process.env.GEMINI_API_KEY_4,
-    process.env.GEMINI_API_KEY_5,
+    ...chavesDoAmbiente('GEMINI'),
   ].filter(Boolean),
 
-  cerebras:    [
-    process.env.CEREBRAS_API_KEY,
-    process.env.CEREBRAS_API_KEY_2,
-    process.env.CEREBRAS_API_KEY_3,
-    process.env.CEREBRAS_API_KEY_4,
-    process.env.CEREBRAS_API_KEY_5,
-    process.env.CEREBRAS_API_KEY_6,
-  ].filter(Boolean),
+  cerebras:    chavesDoAmbiente('CEREBRAS'),
   sambanova:   [
     process.env.SAMBANOVA_API_KEY,
     process.env.SAMBANOVA_API_KEY_2,
@@ -98,6 +122,7 @@ const LIMITS = {
 // Ordem de fallback — mais rápidos/melhores primeiro
 // Providers pagos (com quota) -- fallback infinito Ollama tratado separadamente
 const PAID_PROVIDERS = ['gemini', 'sambanova', 'cerebras', 'groq', 'deepseek', 'huggingface', 'pollinations'];
+
 const PROVIDERS = PAID_PROVIDERS;
 
 // ── Cross-system Gemini quota coordinator (Redis DB 0) ────────────────────────
@@ -1034,6 +1059,7 @@ function resetDegraded(provider = null) {
 }
 
 module.exports = {
+  chavesDoAmbiente,
   tetoDiarioGemini, getErrorTTL, callHuggingFace, MODELOS_HF, mesclarDegradados, generate, getStatus, resetDegraded, PROVIDERS, LIMITS,
   // exportados para teste: e onde moraram os defeitos que pararam a geracao
   acaoParaErroGroq, isDegraded, getNextKey, loadState, proximaTentativaIa, saveState, markDegraded,

@@ -127,3 +127,36 @@ test('teto diario do Gemini nasce do numero de chaves (23/09/2026)', () => {
   assert.strictEqual(tetoDiarioGemini(6, 1500, 0), 5400, 'fatia zero cai no padrao de 60%');
   assert.ok(tetoDiarioGemini(6) > 1747, 'o dia que barrou a geracao (1.747 chamadas) caberia hoje');
 });
+
+test('todas as chaves do ambiente entram na rotacao, nao so as cinco escritas a mao', () => {
+  const { chavesDoAmbiente } = require('../src/core/aiClient');
+  // 29/09/2026: havia 12 chaves GEMINI_API_KEY_* no container e o cliente lia
+  // SEIS — metade da cota do provedor principal parada, com 5.852 PDFs na fila.
+  const env = {
+    GEMINI_API_KEY: 'a', GEMINI_API_KEY_2: 'b', GEMINI_API_KEY_7: 'g', GEMINI_API_KEY_12: 'l',
+    GEMINI_MODEL: 'nao-e-chave', GEMINI_API_KEY_3: '   ', OUTRA_COISA: 'z',
+  };
+  assert.deepStrictEqual(chavesDoAmbiente('GEMINI', env), ['a', 'b', 'g', 'l'], 'ordem numerica, sem vazias nem MODEL');
+});
+
+test('chave repetida entra uma vez so, e prefixo vazio nao varre o ambiente', () => {
+  const { chavesDoAmbiente } = require('../src/core/aiClient');
+  assert.deepStrictEqual(chavesDoAmbiente('X', { X_API_KEY: 'k', X_API_KEY_2: 'k', X_API_KEY_3: 'j' }), ['k', 'j']);
+  assert.deepStrictEqual(chavesDoAmbiente('', { X_API_KEY: 'k' }), []);
+  assert.deepStrictEqual(chavesDoAmbiente(null, { X_API_KEY: 'k' }), []);
+  assert.deepStrictEqual(chavesDoAmbiente('X', {}), []);
+  assert.deepStrictEqual(chavesDoAmbiente('X', null), []);
+  assert.deepStrictEqual(chavesDoAmbiente('x', { X_API_KEY: 'k' }), ['k'], 'minuscula tambem acha');
+});
+
+test('a chave sem numero vem antes das numeradas', () => {
+  const { chavesDoAmbiente } = require('../src/core/aiClient');
+  assert.deepStrictEqual(chavesDoAmbiente('G', { G_API_KEY_9: 'nono', G_API_KEY: 'primeira', G_API_KEY_2: 'segunda' }),
+    ['primeira', 'segunda', 'nono']);
+});
+
+test('valor nulo no ambiente nao vira chave', () => {
+  const { chavesDoAmbiente } = require('../src/core/aiClient');
+  assert.deepStrictEqual(chavesDoAmbiente('G', { G_API_KEY: null, G_API_KEY_2: undefined, G_API_KEY_3: 'boa' }), ['boa']);
+  assert.deepStrictEqual(chavesDoAmbiente('G', { G_API_KEY_99: 'so-numerada' }), ['so-numerada']);
+});
