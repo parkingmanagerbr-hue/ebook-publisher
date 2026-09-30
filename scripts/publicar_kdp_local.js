@@ -55,7 +55,11 @@ function buscarPendentes(limite) {
     db.pragma('busy_timeout = 5000');
     const base = "SELECT id, title, subtitle, topic, description, language, price, pdf_path, cover_path FROM ebooks " +
       "WHERE (amazon_url IS NULL OR amazon_url = '') AND (amazon_product_id IS NULL OR amazon_product_id = '') " +
-      "AND pdf_path IS NOT NULL AND cover_path IS NOT NULL AND cover_path <> '' AND title IS NOT NULL AND title <> '' ";
+      "AND pdf_path IS NOT NULL AND cover_path IS NOT NULL AND cover_path <> '' AND title IS NOT NULL AND title <> '' " +
+      // Combo (livro + plano de acao) NAO vai para a Amazon: o PDF dele traz um
+      // link externo de acesso, e o KDP recusa livro que manda o leitor para
+      // fora da loja. Sem a coluna ainda, nao ha combo para excluir.
+      (db.prepare('PRAGMA table_info(ebooks)').all().some(c => c.name === 'combo_de') ? "AND (combo_de IS NULL OR combo_de = '') " : '');
     const teto = ${(Number(limite) || 1) * 8};
     const linhas = db.prepare(base + "AND LOWER(COALESCE(language,'')) LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all()
       .concat(db.prepare(base + "AND LOWER(COALESCE(language,'')) NOT LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all());

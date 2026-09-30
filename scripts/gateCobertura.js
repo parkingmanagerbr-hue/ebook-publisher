@@ -68,6 +68,7 @@ const MODULOS_NO_GATE = [
   'src/core/diarioDeTestes.js',
   'src/ferramentas/especificacao.js',
   'src/ferramentas/pagina.js',
+  'src/ferramentas/combo.js',
   'src/core/cdpLocal.js',
   'src/core/aiClient.js',
   'src/core/database.js',

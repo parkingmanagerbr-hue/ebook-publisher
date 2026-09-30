@@ -85,11 +85,12 @@ function buscarPendentes(limite) {
     const db = new D('/app/data/metrics.db');
     db.pragma('busy_timeout = 5000');
     db.prepare('CREATE TABLE IF NOT EXISTS hotmart_publicar_falha (ebook_id TEXT PRIMARY KEY, tentativas INTEGER, erro TEXT, quando INTEGER)').run();
+    if (!db.prepare('PRAGMA table_info(ebooks)').all().some(c => c.name === 'combo_de')) db.prepare('ALTER TABLE ebooks ADD COLUMN combo_de TEXT').run();
     // Dois grupos de idioma, consultados separado: com "pt primeiro" numa
     // consulta so, os 1.156 livros em portugues elegiveis enchiam o lote e os
     // 362 estrangeiros prontos nunca chegavam nele (medido em 23/09/2026).
     const CONDICOES =
-      "SELECT e.id, e.title, e.subtitle, e.topic, e.description, e.pdf_path, e.cover_path, e.price, e.language " +
+      "SELECT e.id, e.title, e.subtitle, e.topic, e.description, e.pdf_path, e.cover_path, e.price, e.language, e.combo_de " +
       "FROM ebooks e WHERE (e.hotmart_url IS NULL OR e.hotmart_url = '') " +
       "AND (e.hotmart_product_id IS NULL OR e.hotmart_product_id = '') " +
       // Nao republicar titulo que ja tem produto no ar: auditoria de 02/09/2026
@@ -266,6 +267,8 @@ async function main() {
           title: e.title, subtitle: e.subtitle, topic: e.topic, description: e.description,
           pdfPath: pdfLocal, coverPath: capaLocal,
           price: e.price, language: e.language,
+          // Combo: R$ 19,90 (decisao do dono). Livro comum: preco padrao da loja.
+          precoLoja: e.combo_de ? String(Number(e.price).toFixed(2)).replace('.', ',') : undefined,
         }, { browser }), PRAZO_LIVRO_MS, {
           oQue: 'livro "' + String(e.title).slice(0, 40) + '"',
           // A tarefa travada nao para de existir: fechar a aba do cadastro

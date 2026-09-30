@@ -1395,7 +1395,9 @@ async function createProduct(page, session, ebook) {
     await page.keyboard.press('End');
     await sleep(100);
     // Type only digits — currency mask handles formatting
-    const priceDigits = digitosDoPreco(DEFAULT_PRICE); // "4,99" → "499"; "5" → "500"
+    // Combo (livro + plano de acao) tem preco proprio, decidido pelo dono em
+    // 30/09/2026; o resto do catalogo segue no preco padrao da loja.
+    const priceDigits = digitosDoPreco(ebook.precoLoja || DEFAULT_PRICE); // "4,99" → "499"; "19,90" → "1990"
     await page.keyboard.type(priceDigits, {delay:150});
     await sleep(600);
     // Read back what was entered

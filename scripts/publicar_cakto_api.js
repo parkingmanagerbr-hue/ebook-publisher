@@ -52,7 +52,11 @@ async function rodar(limite, seco) {
   // tinham titulo ja publicado — descartar todos deixava o catalogo parado.
   const base = "SELECT id, title, subtitle, description, language, cover_path, pdf_path FROM ebooks " +
     "WHERE (cakto_product_id IS NULL OR cakto_product_id = '') AND pdf_path IS NOT NULL AND pdf_path <> '' " +
-    "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' ";
+    "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' " +
+    // Combo (livro + plano de acao, R$ 19,90) fica FORA da Cakto por enquanto:
+    // a criacao pela API nasce a R$ 5 e o preco do combo ainda nao e gravado
+    // la. Publicar assim venderia o combo pelo preco do livro (30/09/2026).
+    (db.prepare('PRAGMA table_info(ebooks)').all().some(c => c.name === 'combo_de') ? "AND (combo_de IS NULL OR combo_de = '') " : '');
   // Teto generoso de proposito: o descarte por nome repetido acontece DEPOIS
   // da consulta, e com teto curto os poucos livros publicaveis ficam
   // escondidos atras de centenas de duplicados — a fila devolvia zero com 11
