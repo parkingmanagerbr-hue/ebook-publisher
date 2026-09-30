@@ -100,7 +100,9 @@ function buscarPendentes(limite) {
       // PORTAO: so publica com PDF e CAPA VIRAL em disco.
       "AND e.pdf_path IS NOT NULL AND e.cover_path IS NOT NULL AND e.cover_path <> '' " +
       // Livro que falha sempre saia da fila depois de ${MAX_TENTATIVAS} tentativas.
-      "AND e.id NOT IN (SELECT ebook_id FROM hotmart_publicar_falha WHERE tentativas >= ${MAX_TENTATIVAS}) ";
+      "AND e.id NOT IN (SELECT ebook_id FROM hotmart_publicar_falha WHERE tentativas >= ${MAX_TENTATIVAS}) " +
+      // --so-combos: rodada controlada, so combo (livro + plano de acao).
+      ${JSON.stringify(process.argv.includes('--so-combos') ? "AND e.combo_de IS NOT NULL AND e.combo_de <> '' " : '')};
     const teto = ${limite} * 6;
     const rows = db.prepare(CONDICOES + "AND LOWER(COALESCE(e.language, '')) LIKE 'pt%' ORDER BY e.rowid DESC LIMIT ?").all(teto)
       .concat(db.prepare(CONDICOES + "AND LOWER(COALESCE(e.language, '')) NOT LIKE 'pt%' ORDER BY e.rowid DESC LIMIT ?").all(teto));
