@@ -327,4 +327,4 @@ async function validatePDF(pdfPath, { expectedChapters = 0 } = {}) {
 }
 
 module.exports = {
-  PDF_MIN_KB_ARQUIVO, PDF_MIN_CHARS_POR_CAPITULO, checkImage, ensureQualityCover, ensureQualityIllustration, validateEbook, validatePDF };
+  PDF_MIN_KB_ARQUIVO, PDF_MIN_CHARS_POR_CAPITULO, lerPdf, checkImage, ensureQualityCover, ensureQualityIllustration, validateEbook, validatePDF };
