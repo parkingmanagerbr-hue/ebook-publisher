@@ -60,7 +60,37 @@ const DISCO = {
   remover(arquivo) {
     try { fs.unlinkSync(arquivo); } catch (_) { /* outro ja tirou */ }
   },
+  /**
+   * O processo ainda existe? Sinal 0 nao mata nada: so pergunta.
+   * ESRCH e a UNICA resposta que prova a morte. EPERM (existe, e de outro
+   * usuario) e qualquer erro estranho contam como vivo — "nao consegui
+   * verificar" tem de bloquear, nunca liberar.
+   */
+  vivo(pid) {
+    try { process.kill(pid, 0); return true; }
+    catch (e) { return !(e && e.code === 'ESRCH'); }
+  },
 };
+
+/**
+ * O dono da trava morreu comprovadamente? Pura (quem pergunta ao sistema e
+ * `vivo`, injetado).
+ *
+ * 30/09/2026: o Windows travou as 00:34 e reiniciou; o publicador morreu no
+ * meio do lote e a trava ficou com um pid que nao existia mais. So a idade a
+ * liberaria — duas horas de publicacao parada depois de a maquina voltar.
+ *
+ * Pid reaproveitado depois do reinicio pode fazer um morto parecer vivo; isso
+ * so atrasa (cai na validade por idade). O contrario — vivo parecer morto —
+ * duplicaria produto, e por isso qualquer duvida conta como vivo.
+ */
+function donoMorreu(dono, vivo) {
+  if (!dono || typeof dono !== 'object') return false;
+  const pid = Number(dono.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return false;
+  try { return vivo(pid) === false; } catch (_) { return false; }
+}
 
 /** Quem esta com a trava, em uma linha, para o log. Pura. */
 function descreverDono(dono) {
@@ -100,8 +130,11 @@ function travar(nome, opcoes = {}) {
     const nascida = disco.quando(arquivo);
     // Sumiu entre a recusa e a leitura: o dono soltou agorinha, a trava esta livre.
     const idade = nascida == null ? Infinity : agora - nascida;
-    if (idade < validade) return null;
-    if (nascida != null) avisar('trava de "' + nome + '" abandonada ha ' + Math.round(idade / 60000) + ' min por ' + descreverDono(disco.dono && disco.dono(arquivo)) + ' — assumindo');
+    const dono = nascida == null ? null : (disco.dono && disco.dono(arquivo));
+    const morto = nascida != null && disco.vivo && donoMorreu(dono, disco.vivo);
+    if (idade < validade && !morto) return null;
+    if (morto) avisar('trava de "' + nome + '" era de um processo que ja morreu: ' + descreverDono(dono) + ' — assumindo');
+    else if (nascida != null) avisar('trava de "' + nome + '" abandonada ha ' + Math.round(idade / 60000) + ' min por ' + descreverDono(dono) + ' — assumindo');
     disco.remover(arquivo);
     // Outro processo pode ter assumido no mesmo instante: quem perder, espera.
     if (!disco.criar(arquivo, eu)) return null;
@@ -115,4 +148,4 @@ function travar(nome, opcoes = {}) {
   };
 }
 
-module.exports = { travar, caminhoDaTrava, donoDaTrava, descreverDono, VALIDADE_MS, DISCO };
+module.exports = { travar, caminhoDaTrava, donoDaTrava, descreverDono, donoMorreu, VALIDADE_MS, DISCO };

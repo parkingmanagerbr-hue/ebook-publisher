@@ -183,3 +183,54 @@ test('processo sem nome conhecido ainda registra um dono', () => {
     assert.strictEqual(donoDaTrava('hotmart', { pasta }).o_que, 'desconhecido');
   } finally { process.argv[1] = antes; }
 });
+
+test('trava NOVA de processo MORTO e livre — nao espera as duas horas', () => {
+  // 30/09/2026: o Windows travou as 00:34, o publicador morreu no meio do lote
+  // e a trava ficou com um pid inexistente. So a idade a liberaria.
+  const avisos = [];
+  let criadas = 0;
+  const disco = {
+    criar: () => (criadas++ === 0 ? false : true),
+    quando: () => 1000,                                     // nascida agora mesmo
+    dono: () => ({ pid: 424242, desde: 'x', o_que: 'publicar_local --limite=18' }),
+    vivo: pid => pid !== 424242,                            // esse morreu
+    remover: () => {},
+  };
+  const soltar = travar('hotmart', { disco, agora: 2000, avisar: m => avisos.push(m) });
+  assert.ok(soltar, 'assumiu a trava do morto');
+  assert.match(avisos[0], /ja morreu/);
+  assert.match(avisos[0], /424242/);
+});
+
+test('trava NOVA de processo VIVO continua valendo (senao duplica produto)', () => {
+  const disco = {
+    criar: () => false,
+    quando: () => 1000,
+    dono: () => ({ pid: 777 }),
+    vivo: () => true,
+    remover: () => { throw new Error('nao pode remover trava de processo vivo'); },
+  };
+  assert.strictEqual(travar('hotmart', { disco, agora: 2000, avisar: () => {} }), null);
+});
+
+test('duvida sobre o dono BLOQUEIA: sem pid, pid estranho ou verificacao que falha', () => {
+  const { donoMorreu } = require('../src/core/travaLocal');
+  const morto = () => false;
+  assert.strictEqual(donoMorreu({ pid: 424242 }, morto), true);
+  assert.strictEqual(donoMorreu(null, morto), false, 'sem dono gravado nao da para saber');
+  assert.strictEqual(donoMorreu('texto', morto), false);
+  assert.strictEqual(donoMorreu({}, morto), false, 'sem pid');
+  assert.strictEqual(donoMorreu({ pid: 'abc' }, morto), false);
+  assert.strictEqual(donoMorreu({ pid: 0 }, morto), false);
+  assert.strictEqual(donoMorreu({ pid: -5 }, morto), false);
+  assert.strictEqual(donoMorreu({ pid: process.pid }, morto), false, 'eu mesmo nunca estou morto');
+  assert.strictEqual(donoMorreu({ pid: 424242 }, () => { throw new Error('sem permissao'); }), false,
+    'verificacao que falha conta como vivo');
+  assert.strictEqual(donoMorreu({ pid: 424242 }, () => undefined), false, 'resposta ambigua conta como vivo');
+});
+
+test('o disco de verdade sabe quem esta vivo', () => {
+  const { DISCO } = require('../src/core/travaLocal');
+  assert.strictEqual(DISCO.vivo(process.pid), true);
+  assert.strictEqual(DISCO.vivo(2147483646), false, 'pid que nao existe');
+});
