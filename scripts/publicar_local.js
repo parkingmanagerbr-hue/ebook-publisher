@@ -328,6 +328,13 @@ async function main() {
 }
 
 if (require.main === module) {
+  // Prazo do PROCESSO, acima do orcamento do lote: pega o travamento FORA dos
+  // livros (conexao com o Chrome, leitura da fila), que o prazo por livro nao
+  // cobre. Sem --minutos, 90 min.
+  require('../src/core/prazoDoProcesso').armarPrazoDoProcesso({
+    ms: ((parseFloat(arg('minutos', '0')) || 70) + 20) * 60000, oQue: 'publicar_local',
+    log: { error: m => console.error(m) },
+  });
   // Um publicador da Hotmart por vez. Em 26/09/2026 a tarefa agendada
   // (--limite=6, de 30 em 30 min) e um lote lancado a mao (--limite=18)
   // rodaram juntos no mesmo Chrome: 27 dos 110 produtos do dia sairam com

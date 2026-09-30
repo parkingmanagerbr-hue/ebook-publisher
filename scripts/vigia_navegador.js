@@ -94,6 +94,9 @@ async function principal() {
 }
 
 if (require.main === module) {
+  // Prazo do PROCESSO: travamento no Chrome nao levanta excecao, so nunca
+  // termina — em 30/09/2026 isto ficou pendurado quase uma hora.
+  require('../src/core/prazoDoProcesso').armarPrazoDoProcesso({ ms: 6 * 60000, oQue: 'vigia_navegador', log });
   principal()
     .then(r => { log.info('resumo: ' + JSON.stringify(r)); console.log(JSON.stringify(r)); process.exit(0); })
     .catch(e => { log.error('ERRO: ' + umaLinha(e && e.message, 200)); console.error('ERRO: ' + e.message); process.exit(1); });

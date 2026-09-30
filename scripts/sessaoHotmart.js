@@ -97,6 +97,9 @@ async function principal() {
 }
 
 if (require.main === module) {
+  // Prazo do PROCESSO: travamento no Chrome nao levanta excecao, so nunca
+  // termina — em 30/09/2026 isto ficou pendurado quase uma hora.
+  require('../src/core/prazoDoProcesso').armarPrazoDoProcesso({ ms: 12 * 60000, oQue: 'sessaoHotmart', log });
   principal()
     .then(r => { log.info('resumo: ' + JSON.stringify(r)); console.log(JSON.stringify(r)); process.exit(r.estado === 'precisa-humano' ? 2 : 0); })
     .catch(e => { log.error('ERRO: ' + String(e && e.message).replace(/[\r\n\t]+/g, ' ').slice(0, 200)); process.exit(1); });
