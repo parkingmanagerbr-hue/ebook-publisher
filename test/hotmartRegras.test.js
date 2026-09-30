@@ -257,3 +257,31 @@ test('o motivo do bloqueio cabe em uma linha de log', () => {
   assert.ok(!/[\r\n]/.test(m), m);
   assert.ok(motivoDoCliqueBloqueado('D'.repeat(200)).length < 80);
 });
+
+test('o PRECO DO COMBO viaja ate o cadastro (subiu a R$ 4,99 em 30/09/2026)', () => {
+  const { camposDoCadastro, precoDoCadastro, digitosDoPreco } = require('../src/agents/hotmartRegras');
+  const combo = { title: 'Livro + Plano de Ação', topic: 't', description: 'd', coverPath: 'c', pdfPath: 'p', language: 'pt-BR', precoLoja: '19,90' };
+  const campos = camposDoCadastro(combo, { title: 'Livro + Plano de Ação', description: 'descrição tratada' });
+  assert.strictEqual(campos.precoLoja, '19,90', 'o preço não pode ficar para trás');
+  assert.strictEqual(campos.description, 'descrição tratada', 'o que o fluxo tratou vale');
+  assert.strictEqual(campos.pdfPath, 'p', 'o que o fluxo não mexeu vem do livro');
+  assert.strictEqual(digitosDoPreco(precoDoCadastro(campos, '4,99')), '1990');
+});
+
+test('livro comum segue no preço padrão da loja', () => {
+  const { camposDoCadastro, precoDoCadastro } = require('../src/agents/hotmartRegras');
+  assert.strictEqual(precoDoCadastro(camposDoCadastro({ title: 'Livro' }), '4,99'), '4,99');
+  assert.strictEqual(precoDoCadastro({ precoLoja: '   ' }, '4,99'), '4,99', 'preço em branco não vale');
+  assert.strictEqual(precoDoCadastro(null, '4,99'), '4,99');
+  assert.deepStrictEqual(Object.keys(camposDoCadastro(null)).sort(), ['coverPath', 'description', 'language', 'pdfPath', 'precoLoja', 'title', 'topic']);
+});
+
+test('campo local nulo cai no do livro; campo local presente vence', () => {
+  const { camposDoCadastro } = require('../src/agents/hotmartRegras');
+  const livro = { title: 'T', topic: 'tema', description: 'd', coverPath: 'c', pdfPath: 'p' };
+  const c = camposDoCadastro(livro, { topic: 'tema tratado', coverPath: 'capa.jpg', pdfPath: 'livro.pdf', title: null });
+  assert.strictEqual(c.topic, 'tema tratado');
+  assert.strictEqual(c.coverPath, 'capa.jpg');
+  assert.strictEqual(c.pdfPath, 'livro.pdf');
+  assert.strictEqual(c.title, 'T', 'nulo no local não apaga o título');
+});

@@ -21,7 +21,7 @@
  * derruba a sessao salva (medido na auditoria de 15/09/2026).
  */
 const fs = require('fs');
-const { corpoDeCriacao, corpoDeAjuste, shortcodeDaOferta, idDoCheckout, linkDeCheckout, mesmoProdutoCakto, motivoDefinitivo, nomeDeProduto } = require('./caktoApiRegras');
+const { corpoDeCriacao, corpoDeAjuste, corpoDaOferta, precoConfere, shortcodeDaOferta, idDoCheckout, linkDeCheckout, mesmoProdutoCakto, motivoDefinitivo, nomeDeProduto } = require('./caktoApiRegras');
 const { ehErroDaLoja } = require('./higieneCakto');
 
 let log;
@@ -101,6 +101,24 @@ async function publicarNaCakto(livro, { H, pausar = dormir } = {}) {
 
   let atual = produto;
   let shortcode = shortcodeDaOferta(atual);
+
+  // PRECO PROPRIO (combo a R$ 19,90): a criacao nasce a R$ 5. Grava na oferta e
+  // CONFERE relendo — se nao bateu, o produto vai para waiting_config e o livro
+  // falha: combo a venda pelo preco do livro e prejuizo calado.
+  if (livro.preco != null) {
+    const corpo = corpoDaOferta((atual.offers || []).find(o => o && o.default) || (atual.offers || [])[0], livro.preco);
+    let lida = null;
+    if (corpo && shortcode) {
+      await api('PUT', 'offers/' + shortcode + '/', corpo, cab).catch(e => log.warn('preco nao gravado: ' + umaLinha(e.message, 120)));
+      await pausar(PAUSA_MS);
+      lida = await api('GET', 'offers/' + shortcode + '/', null, cab).catch(() => null);
+    }
+    if (!precoConfere(lida, livro.preco)) {
+      await api('PUT', 'product/' + id + '/', { status: 'waiting_config' }, cab).catch(() => {});
+      throw new Error('CAKTO_PRECO_NAO_GRAVADO: pedi ' + livro.preco + ', a loja tem ' + (lida ? lida.price : '?') + ' — produto pausado');
+    }
+    log.info('preco gravado e conferido: R$ ' + Number(livro.preco).toFixed(2) + ' (' + umaLinha(shortcode, 12) + ')');
+  }
   // O id do checkout da oferta as vezes ainda nao existe logo depois da
   // criacao (27/09/2026: um produto saiu com checkout=null e ficou sem pagina
   // de venda). Sem ele nao ha link — vale reler uma vez antes de desistir.

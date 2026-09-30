@@ -245,7 +245,36 @@ function motivoDoCliqueBloqueado(quem) {
   return 'coberto por "' + t.replace(brancos, ' ').slice(0, 60) + '"';
 }
 
+/**
+ * O que o cadastro de produto recebe. Pura.
+ *
+ * 30/09/2026: o objeto era montado a mao, so com os campos do livro, e o preco
+ * do combo (R$ 19,90) ficava para tras — o produto subiu a R$ 4,99. Tudo que o
+ * cadastro precisa sai daqui, e o teste cobra que o preco viaja junto.
+ * `locais` sao os campos que o fluxo ja tratou (descricao traduzida etc.).
+ */
+function camposDoCadastro(ebook, locais) {
+  const e = ebook || {};
+  const l = locais || {};
+  return {
+    title: l.title != null ? l.title : e.title,
+    topic: l.topic != null ? l.topic : e.topic,
+    description: l.description != null ? l.description : e.description,
+    coverPath: l.coverPath != null ? l.coverPath : e.coverPath,
+    pdfPath: l.pdfPath != null ? l.pdfPath : e.pdfPath,
+    language: e.language,
+    precoLoja: e.precoLoja,
+  };
+}
+
+/** Preco a digitar: o do combo quando houver, senao o padrao da loja. Pura. */
+function precoDoCadastro(ebook, padrao) {
+  const p = ebook && ebook.precoLoja;
+  return p != null && String(p).trim() ? String(p).trim() : padrao;
+}
+
 module.exports = {
+  camposDoCadastro, precoDoCadastro,
   ehQuedaDeSessao, motivoDoCliqueBloqueado, ehSeletorDeCategoria, campoDoWizard, botaoDoModal, ehBloqueioDeAmbiente,
   norm, rotuloDoResultado, detalheDoResultado, getCategoryPT, digitosDoPreco, idProdutoDaUrl, TECH_KW, HEALTH_KW, FINANCE_KW, BUSINESS_KW,
   nomeComparavel, mesmoProduto, motivoProdutoErrado, umaLinha, ehAvisoDeTermos, ehBotaoDeAviso,

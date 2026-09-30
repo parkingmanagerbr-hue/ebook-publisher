@@ -216,7 +216,32 @@ function resumoDaPublicacao(titulo, shortcode, ajustes) {
     (campos.length ? ' ajustes=' + campos.join(',') : ' sem ajuste');
 }
 
+/**
+ * Corpo do PUT da oferta para gravar um preco proprio (combo a R$ 19,90).
+ * A rota exige `name` junto (OPTIONS de offers/<id>/, medido em 30/09/2026).
+ * Preco invalido nao vira corpo: melhor nao mexer do que gravar zero. Pura.
+ */
+function corpoDaOferta(oferta, preco) {
+  const v = Number(preco);
+  if (!Number.isFinite(v) || v <= 0) return null;
+  const nome = nomeDeProduto((oferta || {}).name);
+  if (!nome) return null;
+  return { name: nome, price: Math.round(v * 100) / 100 };
+}
+
+/**
+ * O preco que a loja devolveu e o pedido? Compara em centavos: 19.9 e 19.90
+ * sao o mesmo preco, 5 e 19.9 nao. Pura.
+ */
+function precoConfere(oferta, preco) {
+  const lido = Number((oferta || {}).price);
+  const pedido = Number(preco);
+  if (!Number.isFinite(lido) || !Number.isFinite(pedido)) return false;
+  return Math.round(lido * 100) === Math.round(pedido * 100);
+}
+
 module.exports = {
+  corpoDaOferta, precoConfere,
   corpoDeCriacao, corpoDeAjuste, nomeDeProduto, descricaoDeProduto, shortcodeDaOferta,
   linkDeCheckout, idDoCheckout, mesmoProdutoCakto, motivoDefinitivo, resumoDaPublicacao,
   semTitulosJaPublicados, chaveDeTitulo, nomeDistintoCakto,

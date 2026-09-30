@@ -260,3 +260,27 @@ test('sem id de checkout, o ajuste NAO grava pagina de vendas quebrada', () => {
   const comId = corpoDeAjuste(novo({ salesPage: null }), { entrega: 'https://x/e/t' });
   assert.strictEqual(comId.salesPage, 'https://pay.cakto.com.br/abc1234_555');
 });
+
+test('preco do combo: corpo da oferta leva o nome (a rota exige) e o preco em centavos', () => {
+  const { corpoDaOferta } = require('../src/agents/caktoApiRegras');
+  assert.deepStrictEqual(corpoDaOferta({ name: 'Livro + Plano de Ação' }, 19.9), { name: 'Livro + Plano de Ação', price: 19.9 });
+  assert.deepStrictEqual(corpoDaOferta({ name: 'X' }, '19.904'), { name: 'X', price: 19.9 }, 'arredonda ao centavo');
+  assert.strictEqual(corpoDaOferta({ name: 'X' }, 0), null, 'preco zero nunca vira corpo');
+  assert.strictEqual(corpoDaOferta({ name: 'X' }, -5), null);
+  assert.strictEqual(corpoDaOferta({ name: 'X' }, 'abc'), null);
+  assert.strictEqual(corpoDaOferta({ name: 'X' }, null), null);
+  assert.strictEqual(corpoDaOferta({}, 19.9), null, 'sem nome a rota recusa: nao manda');
+  assert.strictEqual(corpoDaOferta(null, 19.9), null);
+});
+
+test('preco conferido em centavos: 19.9 e 19.90 batem, 5 e 19.9 nao', () => {
+  const { precoConfere } = require('../src/agents/caktoApiRegras');
+  // Combo a venda pelo preco do livro (R$ 5) e o prejuizo calado que a
+  // conferencia existe para impedir (30/09/2026).
+  assert.strictEqual(precoConfere({ price: 19.9 }, 19.90), true);
+  assert.strictEqual(precoConfere({ price: '19.90' }, 19.9), true);
+  assert.strictEqual(precoConfere({ price: 5 }, 19.9), false);
+  assert.strictEqual(precoConfere(null, 19.9), false, 'sem leitura nao ha confirmacao');
+  assert.strictEqual(precoConfere({ price: 'x' }, 19.9), false);
+  assert.strictEqual(precoConfere({ price: 19.9 }, 'y'), false);
+});

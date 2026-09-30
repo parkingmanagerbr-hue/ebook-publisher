@@ -50,13 +50,14 @@ async function rodar(limite, seco) {
   // Titulo repetido NAO sai mais da fila: entra com o subtitulo proprio do
   // livro (ver nomeDistintoCakto). Em 27/09/2026, 1.679 dos 1.681 pendentes
   // tinham titulo ja publicado — descartar todos deixava o catalogo parado.
-  const base = "SELECT id, title, subtitle, description, language, cover_path, pdf_path FROM ebooks " +
+  // combo_de/price: o combo (livro + plano de acao) sobe com o preco proprio,
+  // gravado e conferido na oferta (publisherCaktoApi).
+  if (!db.prepare('PRAGMA table_info(ebooks)').all().some(c => c.name === 'combo_de')) db.prepare('ALTER TABLE ebooks ADD COLUMN combo_de TEXT').run();
+  const base = "SELECT id, title, subtitle, description, language, cover_path, pdf_path, price, combo_de FROM ebooks " +
     "WHERE (cakto_product_id IS NULL OR cakto_product_id = '') AND pdf_path IS NOT NULL AND pdf_path <> '' " +
     "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' " +
-    // Combo (livro + plano de acao, R$ 19,90) fica FORA da Cakto por enquanto:
-    // a criacao pela API nasce a R$ 5 e o preco do combo ainda nao e gravado
-    // la. Publicar assim venderia o combo pelo preco do livro (30/09/2026).
-    (db.prepare('PRAGMA table_info(ebooks)').all().some(c => c.name === 'combo_de') ? "AND (combo_de IS NULL OR combo_de = '') " : '');
+    // --so-combos: rodada controlada, so o combo (testar um antes do lote).
+    (process.argv.includes('--so-combos') ? "AND combo_de IS NOT NULL AND combo_de <> '' " : '');
   // Teto generoso de proposito: o descarte por nome repetido acontece DEPOIS
   // da consulta, e com teto curto os poucos livros publicaveis ficam
   // escondidos atras de centenas de duplicados — a fila devolvia zero com 11
@@ -114,7 +115,7 @@ async function rodar(limite, seco) {
     if (seco) { log.info('[dry-run] publicaria "' + umaLinha(e.nomeNaLoja) + '" entrega=' + (entrega ? 'ok' : 'FALTA')); continue; }
     try {
       const capa = e.cover_path && fs.existsSync(e.cover_path) ? e.cover_path : null;
-      const r = await publicarNaCakto({ title: e.nomeNaLoja, description: e.description, entrega, capa }, { H });
+      const r = await publicarNaCakto({ title: e.nomeNaLoja, description: e.description, entrega, capa, preco: e.combo_de ? e.price : undefined }, { H });
       // O que o resto do sistema chama de cakto_product_id e o shortcode da
       // oferta (e o que /api/offers/{shortcode}/ aceita).
       if (r.shortcode) grava.run(r.shortcode, e.nomeNaLoja, e.id);

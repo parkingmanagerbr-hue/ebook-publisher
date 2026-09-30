@@ -33,7 +33,7 @@ try {
 // Categoria, digitos do preco e id do produto na URL: regras puras, testadas
 // em test/hotmartRegras.test.js.
 const { getCategoryPT, digitosDoPreco, idProdutoDaUrl, mesmoProduto, motivoProdutoErrado, umaLinha,
-  ehAvisoDeTermos, ehBotaoDeAviso, botaoDoModal, motivoDoCliqueBloqueado } = require('./hotmartRegras');
+  ehAvisoDeTermos, ehBotaoDeAviso, botaoDoModal, motivoDoCliqueBloqueado, camposDoCadastro, precoDoCadastro } = require('./hotmartRegras');
 const { descricaoHotmart } = require('./hotmartDescricao');
 
 function getCASTicket(tgt, serviceUrl) {
@@ -1397,7 +1397,7 @@ async function createProduct(page, session, ebook) {
     // Type only digits — currency mask handles formatting
     // Combo (livro + plano de acao) tem preco proprio, decidido pelo dono em
     // 30/09/2026; o resto do catalogo segue no preco padrao da loja.
-    const priceDigits = digitosDoPreco(ebook.precoLoja || DEFAULT_PRICE); // "4,99" → "499"; "19,90" → "1990"
+    const priceDigits = digitosDoPreco(precoDoCadastro(ebook, DEFAULT_PRICE)); // "4,99" → "499"; "19,90" → "1990"
     await page.keyboard.type(priceDigits, {delay:150});
     await sleep(600);
     // Read back what was entered
@@ -2293,7 +2293,9 @@ async function publishToHotmart(ebook, opts) {
       // `language` PRECISA vir junto: o objeto era montado a mao e omitia o
       // idioma, entao selecionarIdioma recebia undefined e saia calado — o
       // produto nascia sempre Portugues/Brasil mesmo com o codigo no lugar.
-      const created = await createProduct(page,session,{title,topic,description,coverPath,pdfPath,language:ebook.language});
+      // precoLoja tem de viajar junto: em 30/09/2026 este objeto era montado
+      // so com os campos do livro e o combo de R$ 19,90 subiu a R$ 4,99.
+      const created = await createProduct(page, session, camposDoCadastro(ebook, { title, topic, description, coverPath, pdfPath }));
       numericId = created.numericId; category = created.category; wizardCoverUploaded = created.wizardCoverUploaded;
       if(!numericId || !/^\d+$/.test(String(numericId))) throw new Error('No product ID after creation (got: '+numericId+')');
       // CONFERE O NOME antes de mandar arquivo (22/09/2026): quando o cadastro
