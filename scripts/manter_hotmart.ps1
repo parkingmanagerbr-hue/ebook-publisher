@@ -48,7 +48,11 @@ try {
     Registrar ('pdfs: ' + (($saida.Trim() -split "`n")[-1]))
 
     # livros novos: o servidor nao publica na Hotmart (sessao presa a esta maquina)
-    $saida = & node scripts\publicar_local.js --limite=6 --minutos=14 2>&1 | Out-String
+    # 12 em 25 min (cabe na janela de 30 min da tarefa). Eram 6 em 14 min:
+    # metade do tempo ocioso, e a publicacao so andava enquanto havia uma
+    # sessao acompanhando. A trava de travaLocal impede que isto e um lote
+    # lancado a mao publiquem juntos (o que duplicava produto em 27/09/2026).
+    $saida = & node scripts\publicar_local.js --limite=12 --minutos=25 2>&1 | Out-String
     Registrar ('publicar hotmart: ' + (($saida.Trim() -split "`n")[-1]))
 
     # capa e idioma dos recem-publicados (o assistente nem sempre sobe a capa)
