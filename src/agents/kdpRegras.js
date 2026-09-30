@@ -46,12 +46,28 @@ const RUIDO = [
   /em andamento\.\.\./i, /n[ãa]o iniciada\.\.\./i, /saiba mais/i, /learn more/i,
   /agora voc[êe] pode definir datas/i, /alterar o t[íi]tulo do seu livro pode afetar/i,
   /como voc[êe] indicou que este livro cont[ée]m conte[úu]do adulto/i,
+  // Textos de AJUDA da tabela de precos: aparecem sempre, com ou sem erro.
+  // Em 30/09/2026 eles passavam como "causa" e escondiam o bloqueio real.
+  /^conclu[íi]da$/i, /^defina um pre[çc]o sugerido entre/i, /^use um formato de pre[çc]o/i,
+  /^o pre[çc]o sugerido deve ser em m[úu]ltiplos/i, /^o tamanho do arquivo do seu livro/i,
 ];
+
+/**
+ * Bloqueio que nao e do livro: o KDP recusa QUALQUER publicacao da conta.
+ * Vem primeiro na causa, porque corrigir o livro nao adianta nada. Pura.
+ */
+const BLOQUEIO_DE_CONTA = [/informa[çc][õo]es de conta incompletas/i, /account information (is )?incomplete/i];
+function ehBloqueioDeConta(texto) {
+  const t = String(texto == null ? '' : texto);
+  return BLOQUEIO_DE_CONTA.some(r => r.test(t));
+}
 function errosQueImportam(lista) {
-  return (lista || [])
+  const limpos = (lista || [])
     .map(t => String(t || '').replace(/\s+/g, ' ').trim())
     .filter(Boolean)
     .filter(t => !RUIDO.some(r => r.test(t)));
+  // Bloqueio de conta na frente: e ele que decide, e ele que o dono resolve.
+  return limpos.filter(ehBloqueioDeConta).concat(limpos.filter(t => !ehBloqueioDeConta(t)));
 }
 
 /**
@@ -89,7 +105,48 @@ function royaltyPara(precoUSD = 2.99) {
   return Number.isFinite(v) && v >= 2.99 && v <= 9.99 ? '70_PERCENT' : '35_PERCENT';
 }
 
+/**
+ * Este botao PUBLICA de verdade?
+ *
+ * 29/09/2026: a lista de rotulos do publicador tinha "Publicar e-book Kindle"
+ * e o botao real do KDP em portugues e "Publicar seu eBooks Kindle" — nao
+ * casava. Como "Salvar e continuar" tambem estava na lista, o robo clicava
+ * NESSE, salvava o rascunho e reportava buttonClicked=true. Resultado: livros
+ * completos ("Concluida" nas tres etapas) parados como Rascunho, e a Amazon —
+ * a unica loja de alcance mundial — sem catalogo.
+ *
+ * Salvar NAO e publicar: os rotulos de rascunho sao recusados de proposito,
+ * senao a falha volta a se disfarcar de sucesso. Pura.
+ */
+function ehBotaoDePublicar(texto) {
+  const t = String(texto == null ? '' : texto).toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  // Rascunho e etapa intermediaria nunca contam como publicacao.
+  if (/salvar como rascunho|save as draft|salvar e continuar|save and continue/.test(t)) return false;
+  return /publicar|publish/.test(t);
+}
+
+/**
+ * O robo pode fazer login sozinho no KDP?
+ *
+ * NAO, por padrao. 30/09/2026: a conta do KDP passou a ser outra (a nova,
+ * logada a mao no Chrome), mas o .env ainda guardava e-mail e senha da ANTIGA.
+ * O login automatico, ao ver uma tela de entrada com a conta nova, concluia
+ * "conta errada", clicava em "Trocar contas" e entrava na antiga digitando a
+ * senha — publicando o catalogo na conta que o dono mandou nao usar.
+ *
+ * Credencial e do dono: se a sessao cair, o robo para e pede gente, como faz
+ * na Hotmart. So liga com KDP_LOGIN_AUTOMATICO=1 escrito de proposito. Pura.
+ */
+function podeLogarSozinhoNoKdp(env) {
+  const e = env || {};
+  return String(e.KDP_LOGIN_AUTOMATICO == null ? '' : e.KDP_LOGIN_AUTOMATICO).trim() === '1';
+}
+
 module.exports = {
+  ehBloqueioDeConta,
+  podeLogarSozinhoNoKdp,
+  ehBotaoDePublicar,
   ehBotaoDeCategoria, melhorBotaoDeCategoria, errosQueImportam,
   mercadoDoCampo, precoDoMercado, royaltyPara,
 };

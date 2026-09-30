@@ -14,7 +14,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Decisoes puras do cadastro (qual botao abre as categorias, que erro importa):
 // a Amazon muda o rotulo dos botoes sem aviso, entao a regra fica testada.
-const { melhorBotaoDeCategoria, errosQueImportam, precoDoMercado, royaltyPara } = require('./kdpRegras');
+const { melhorBotaoDeCategoria, errosQueImportam, precoDoMercado, royaltyPara, podeLogarSozinhoNoKdp } = require('./kdpRegras');
 
 let log;
 try {
@@ -65,6 +65,7 @@ const SCREENSHOTS_DIR = process.env.SCREENSHOTS_DIR   || '/app/data/landing_scre
 const LOGS_DIR        = '/app/data/logs';
 const AUTHOR_NAME     = process.env.KDP_AUTHOR_NAME || process.env.AUTHOR_NAME || 'GENIA Publishing';
 const KDP_EMAIL       = process.env.KDP_EMAIL    || '';
+const KDP_PUBLISHER   = process.env.KDP_PUBLISHER || 'Veloxis Editorial';
 const KDP_PASSWORD    = process.env.KDP_PASSWORD || '';
 const DEFAULT_PRICE   = parseFloat(process.env.EBOOK_PRICE || '4.99');
 const OTP_FILE        = '/app/data/amazon_otp.txt';
@@ -237,6 +238,13 @@ async function screenshot(page, label) {
 
 // ── Signin helper ─────────────────────────────────────────────────────────────
 async function doSignin(page) {
+  // Login automatico DESLIGADO por padrao (ver kdpRegras.podeLogarSozinhoNoKdp):
+  // o .env guardava a conta antiga e o robo trocava de conta sozinho.
+  if (!podeLogarSozinhoNoKdp(process.env)) {
+    log.warn('KDP pede login — o robo nao entra sozinho (conta e senha sao do dono). Faca login no Chrome de automacao e rode de novo.');
+    await screenshot(page, 'signin_precisa_humano').catch(() => {});
+    return false;
+  }
   if (!KDP_EMAIL || !KDP_PASSWORD) {
     log.warn('Sem credenciais KDP (KDP_EMAIL/KDP_PASSWORD não configurados)');
     return false;
@@ -2028,6 +2036,22 @@ async function publishToAmazon(ebook) {
       await sleep(500);
     }
 
+    // Editora (campo opcional da etapa de conteudo). Decisao do dono em
+    // 30/09/2026: "Veloxis Editorial". So preenche se estiver vazio — nome ja
+    // escrito por uma pessoa no rascunho nao e trocado.
+    const editora = await page.evaluate((nome) => {
+      const el = document.querySelector('#data-publisher, input[name="data[publisher]"]');
+      if (!el) return 'campo ausente';
+      if (String(el.value || '').trim()) return 'ja preenchida: ' + String(el.value).slice(0, 40);
+      el.focus();
+      el.value = nome;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.blur();
+      return 'preenchida';
+    }, KDP_PUBLISHER).catch(() => 'erro ao preencher');
+    log.info('Editora: ' + editora + ' ("' + KDP_PUBLISHER + '")');
+
     const step2Url = page.url();
     const step2ok = await clickKdpButton(page, [
       'Salvar e continuar', 'Save and continue', 'Salvar e Continuar',
@@ -2244,11 +2268,16 @@ async function publishToAmazon(ebook) {
     // Publish!
     log.info('Publicando no KDP...');
     const step3Url = page.url();
+    // "Salvar e continuar" NAO publica. Ele estava nesta lista e era o que o
+    // robo clicava: o rascunho era salvo, buttonClicked vinha true e os livros
+    // ficavam parados como Rascunho com as tres etapas "Concluida"
+    // (29/09/2026). O rotulo real em portugues e "Publicar seu eBooks Kindle",
+    // que nem constava aqui.
     const published = await clickKdpButton(page, [
+      'Publicar seu eBooks Kindle', 'Publicar seu eBook Kindle',
       'Publicar e-book Kindle', 'Publish Your Kindle eBook',
       'Salvar e publicar', 'Save and publish',
       'Publicar', 'Publish',
-      'Salvar e continuar', 'Save and continue',
     ], 25000);
     if (published) await waitForUrlChange(page, step3Url, 15000);
     await sleep(6000);
@@ -2271,8 +2300,11 @@ async function publishToAmazon(ebook) {
       const diag = await page.evaluate(() => {
         const text = el => (el.textContent || '').trim();
         const sel = '.a-alert-content, .a-form-error, .a-color-error, [class*="error" i], [role="alert"], .a-alert-error';
+        // Sem teto de tamanho: o aviso de conta incompleta tem ~250 caracteres
+        // e o teto antigo de 200 o jogava fora, deixando so textos de ajuda
+        // curtos como "causa" (30/09/2026). Longo demais vira so o comeco.
         const errors = Array.from(document.querySelectorAll(sel))
-          .map(text).filter(t => t.length > 3 && t.length < 200);
+          .map(text).filter(t => t.length > 3).map(t => t.slice(0, 300));
         const flagged = Array.from(document.querySelectorAll('[aria-invalid="true"], .a-input-error input, .a-input-error textarea'))
           .map(el => {
             const lbl = el.closest('[class*="field" i], .a-row, fieldset');

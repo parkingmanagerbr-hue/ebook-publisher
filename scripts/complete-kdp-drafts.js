@@ -33,8 +33,14 @@ const SESSION_FILE  = '/app/data/sessions/amazon.json';
 const OTP_FILE      = '/app/data/amazon_otp.txt';
 const LOGS_DIR      = '/app/data/logs';
 const DB_PATH       = '/app/data/metrics.db';
-const KDP_EMAIL     = 'm_rovariz@hotmail.com';
-const KDP_PASSWORD  = 'Nu4qreq15!';
+const KDP_EMAIL     = process.env.KDP_EMAIL || '';
+// Nunca credencial no codigo: este repositorio e PUBLICO no GitHub e a senha
+// esteve aqui em texto puro (achado em 30/09/2026 — ver o commit).
+const KDP_PASSWORD  = process.env.KDP_PASSWORD || '';
+if (String(process.env.KDP_LOGIN_AUTOMATICO || '').trim() !== '1') {
+  console.error('complete-kdp-drafts: login automatico no KDP desligado (KDP_LOGIN_AUTOMATICO != 1) — a conta e do dono.');
+  process.exit(2);
+}
 const PRICE_USD     = '4.99';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));

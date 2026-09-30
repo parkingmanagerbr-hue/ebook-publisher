@@ -106,3 +106,63 @@ test('royalty: 70% so vale na faixa que a Amazon permite', () => {
   assert.strictEqual(royaltyPara('x'), '35_PERCENT');
   assert.strictEqual(royaltyPara(), '70_PERCENT', 'o padrao do projeto e 2,99');
 });
+
+test('SALVAR nao e PUBLICAR: o botao de rascunho nunca conta como publicacao', () => {
+  const { ehBotaoDePublicar } = require('../src/agents/kdpRegras');
+  // 29/09/2026: "Salvar e continuar" estava na lista de botoes de publicar. O
+  // robo clicava nele, o rascunho era salvo e o log dizia buttonClicked=true —
+  // livros completos parados como Rascunho e a Amazon sem catalogo.
+  assert.strictEqual(ehBotaoDePublicar('Salvar e continuar'), false);
+  assert.strictEqual(ehBotaoDePublicar('Save and continue'), false);
+  assert.strictEqual(ehBotaoDePublicar('Salvar como rascunho'), false);
+  assert.strictEqual(ehBotaoDePublicar('Save as draft'), false);
+});
+
+test('o rotulo real do KDP em portugues e reconhecido', () => {
+  const { ehBotaoDePublicar } = require('../src/agents/kdpRegras');
+  assert.strictEqual(ehBotaoDePublicar('Publicar seu eBooks Kindle'), true, 'e este o botao da tela');
+  assert.strictEqual(ehBotaoDePublicar('Publicar e-book Kindle'), true);
+  assert.strictEqual(ehBotaoDePublicar('Publish Your Kindle eBook'), true);
+  assert.strictEqual(ehBotaoDePublicar('  PUBLICAR  '), true, 'caixa e espaco nao importam');
+  assert.strictEqual(ehBotaoDePublicar('Voltar para o conteudo'), false);
+  assert.strictEqual(ehBotaoDePublicar(''), false);
+  assert.strictEqual(ehBotaoDePublicar(null), false);
+});
+
+test('conta incompleta vem PRIMEIRO na causa, e texto de ajuda de preco nao e causa', () => {
+  const { errosQueImportam, ehBloqueioDeConta } = require('../src/agents/kdpRegras');
+  // 30/09/2026: o log dizia "causa: Concluida | O tamanho do arquivo... | Use um
+  // formato de preco... | Defina um preco sugerido..." — todos textos de AJUDA,
+  // sempre presentes — e o bloqueio real (conta incompleta) nem aparecia. Custou
+  // duas rodadas perseguindo preco.
+  const tela = [
+    'Concluída',
+    'O tamanho do arquivo do seu livro após a conversão é de 0.04 MB.',
+    'Use um formato de preço de 0,00',
+    'Defina um preço sugerido entre $2,99-$12,99',
+    'O preço sugerido deve ser em múltiplos de 1 INR',
+    'Corrija o(s) erro(s) destacado(s) para continuar.',
+    'Informações de conta incompletas Você deve preencher as informações de sua conta para publicar itens.',
+  ];
+  const r = errosQueImportam(tela);
+  assert.match(r[0], /conta incompletas/, 'o bloqueio de conta e a causa');
+  assert.ok(!r.some(t => /Defina um pre|formato de pre|tamanho do arquivo|^Conclu/.test(t)), JSON.stringify(r));
+  assert.ok(r.includes('Corrija o(s) erro(s) destacado(s) para continuar.'), 'erro generico continua, depois');
+  assert.strictEqual(ehBloqueioDeConta('Account information is incomplete'), true);
+  assert.strictEqual(ehBloqueioDeConta('Adicione uma categoria'), false);
+  assert.strictEqual(ehBloqueioDeConta(null), false);
+});
+
+test('o robo NAO faz login sozinho no KDP, salvo com a chave escrita de proposito', () => {
+  const { podeLogarSozinhoNoKdp } = require('../src/agents/kdpRegras');
+  // 30/09/2026: com o .env ainda guardando a conta ANTIGA, o login automatico
+  // via tela de entrada com a conta nova, achava "conta errada", clicava em
+  // "Trocar contas" e entrava na antiga digitando a senha.
+  assert.strictEqual(podeLogarSozinhoNoKdp({}), false, 'padrao: desligado');
+  assert.strictEqual(podeLogarSozinhoNoKdp(null), false);
+  assert.strictEqual(podeLogarSozinhoNoKdp({ KDP_EMAIL: 'x@y.com', KDP_PASSWORD: 'z' }), false,
+    'ter senha no .env NAO liga o login');
+  assert.strictEqual(podeLogarSozinhoNoKdp({ KDP_LOGIN_AUTOMATICO: 'true' }), false, 'so o 1 literal liga');
+  assert.strictEqual(podeLogarSozinhoNoKdp({ KDP_LOGIN_AUTOMATICO: '0' }), false);
+  assert.strictEqual(podeLogarSozinhoNoKdp({ KDP_LOGIN_AUTOMATICO: ' 1 ' }), true);
+});

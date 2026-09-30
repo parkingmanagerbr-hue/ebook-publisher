@@ -14,6 +14,10 @@
  *   node scripts/publicar_kdp_local.js --limite=1
  *   node scripts/publicar_kdp_local.js --limite=1 --dry-run
  */
+// O .env desta maquina tem o AUTOR e a EDITORA do KDP (John Brooks /
+// Veloxis Editorial, decisao do dono em 30/09/2026). Sem carrega-lo, o
+// publicador caia no padrao do codigo e o livro saia como "GENIA Publishing".
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -107,9 +111,18 @@ async function principal() {
     try {
       if (!await baixar(e.pdf_path, pdfLocal)) throw new Error('PDF nao veio do VPS');
       if (!await baixar(e.cover_path, capaLocal)) throw new Error('capa nao veio do VPS');
+      // Capa PROPRIA do KDP: a das outras lojas traz um titulo-gancho diferente
+      // do titulo do livro, e a Amazon exige que capa e cadastro batam; o autor
+      // do cadastro tambem tem de aparecer. Falhou a montagem, o livro NAO sobe
+      // com a capa errada — vira falha e fica na fila (scripts/capaKdp.py).
+      const capaKdp = path.join(TMP, 'capa_kdp.jpg');
+      const autor = process.env.KDP_AUTHOR_NAME || 'John Brooks';
+      execFileSync(process.env.PYTHON || 'python', [path.join(__dirname, 'capaKdp.py'), capaLocal, capaKdp,
+        String(e.title || ''), String(e.subtitle || ''), autor], { timeout: 60000 });
+      if (!fs.existsSync(capaKdp)) throw new Error('capa do KDP nao foi montada');
       const r = await publishToAmazon({
         title: e.title, subtitle: e.subtitle, topic: e.topic, description: e.description,
-        language: e.language, price: e.price, pdfPath: pdfLocal, coverPath: capaLocal,
+        language: e.language, price: e.price, pdfPath: pdfLocal, coverPath: capaKdp,
         // Sem exclusividade: o mesmo livro segue na Hotmart, Cakto e Kiwify.
         kdpSelect: false,
       });
