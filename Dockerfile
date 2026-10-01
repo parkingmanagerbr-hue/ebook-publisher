@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
 
 # Puppeteer usa o Chromium instalado pelo sistema (não baixa o próprio)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     CHROMIUM_FLAGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage" \
     NODE_ENV=production
