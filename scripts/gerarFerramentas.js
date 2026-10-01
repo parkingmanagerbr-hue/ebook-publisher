@@ -92,6 +92,33 @@ async function gerarUma(db, e, { refazer = false, gerar } = {}) {
   return { estado: 'recusada', motivos };
 }
 
+/**
+ * Proximos livros para ganhar ferramenta, depois do piloto (01/10/2026).
+ *
+ * Os 20 "destaques" do piloto acabaram. O ml_score esta zerado em todos os
+ * livros, entao a ordem vem da demanda do TEMA. So entra livro que ja esta nas
+ * duas lojas (o combo sobe onde o livro vende), em portugues, com o PDF de
+ * VERDADE no disco (o campo preenchido nao basta: metade do catalogo perdeu o
+ * arquivo) e que ainda nao tem ferramenta nem e ele proprio um combo.
+ */
+function proximosCandidatos(db, limite, existe = fs.existsSync) {
+  const linhas = db.prepare(
+    "SELECT e.id, e.title, e.subtitle, e.topic, e.language, e.pdf_path FROM ebooks e " +
+    "LEFT JOIN topics t ON t.topic = e.topic " +
+    "LEFT JOIN ferramentas f ON f.ebook_id = e.id " +
+    "WHERE f.ebook_id IS NULL AND (e.combo_de IS NULL OR e.combo_de = '') " +
+    "AND LOWER(COALESCE(e.language, '')) LIKE 'pt%' " +
+    "AND COALESCE(e.hotmart_product_id, '') <> '' AND COALESCE(e.cakto_product_id, '') <> '' " +
+    "ORDER BY COALESCE(t.demand_score, 0) DESC, e.rowid DESC"
+  ).all();
+  const saida = [];
+  for (const l of linhas) {
+    if (saida.length >= limite) break;
+    if (l.pdf_path && existe(l.pdf_path)) saida.push(l);
+  }
+  return saida;
+}
+
 async function principal() {
   const db = require('../src/core/database').getDb();
   prepararBanco(db);
@@ -101,7 +128,9 @@ async function principal() {
     ? "SELECT id, title, subtitle, topic, language, pdf_path FROM ebooks WHERE id = ?"
     : "SELECT e.id, e.title, e.subtitle, e.topic, e.language, e.pdf_path FROM afiliacao_hotmart a " +
       "JOIN ebooks e ON CAST(e.hotmart_product_id AS TEXT) = a.produto WHERE a.destaque = 1 ORDER BY a.quando ASC";
-  const livros = (um ? db.prepare(sql).all(um) : db.prepare(sql).all()).slice(0, limite);
+  const livros = temFlag('proximos')
+    ? proximosCandidatos(db, limite)
+    : (um ? db.prepare(sql).all(um) : db.prepare(sql).all()).slice(0, limite);
   if (!livros.length) { log.warn('nenhum livro para gerar'); return { criadas: 0 }; }
 
   const { generate } = require('../src/core/aiClient');
@@ -133,4 +162,4 @@ if (require.main === module) {
     .catch(e => { log.error('ERRO: ' + umaLinha(e && e.message, 200)); process.exit(1); });
 }
 
-module.exports = { principal, gerarUma, textoDoLivro, prepararBanco };
+module.exports = { principal, gerarUma, textoDoLivro, prepararBanco, proximosCandidatos };
