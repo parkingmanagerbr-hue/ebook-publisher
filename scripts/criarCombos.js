@@ -59,11 +59,24 @@ async function criarUm(db, f) {
   return { estado: 'criado', id, titulo, acoes: totalDeAcoes(esp), kb: Math.round(bytes.length / 1024) };
 }
 
+/**
+ * Ferramentas que ainda nao viraram combo. Antes a consulta pegava as N mais
+ * ANTIGAS (LIMIT 20): depois do piloto eram sempre as 20 ja feitas, e as
+ * ferramentas novas nunca viravam combo (01/10/2026, "criados: 0" com 4 prontas).
+ */
+function ferramentasSemCombo(db, limite) {
+  return db.prepare(
+    'SELECT f.ebook_id, f.token, f.especificacao FROM ferramentas f ' +
+    'LEFT JOIN ebooks c ON c.combo_de = f.ebook_id ' +
+    'WHERE c.id IS NULL ORDER BY f.criado_em ASC LIMIT ?'
+  ).all(limite);
+}
+
 async function principal() {
   const db = require('../src/core/database').getDb();
   prepararBanco(db);
   const limite = Number(arg('limite', '20')) || 20;
-  const ferramentas = db.prepare('SELECT ebook_id, token, especificacao FROM ferramentas ORDER BY criado_em ASC LIMIT ?').all(limite);
+  const ferramentas = ferramentasSemCombo(db, limite);
   const resumo = { criados: 0, jaExistiam: 0, pulados: 0, falhas: 0 };
   for (const f of ferramentas) {
     try {
@@ -87,4 +100,4 @@ if (require.main === module) {
     .catch(e => { log.error('ERRO: ' + umaLinha(e && e.message, 200)); process.exit(1); });
 }
 
-module.exports = { principal, criarUm, prepararBanco };
+module.exports = { principal, criarUm, prepararBanco, ferramentasSemCombo };
