@@ -111,10 +111,22 @@ function proximosCandidatos(db, limite, existe = fs.existsSync) {
     "AND COALESCE(e.hotmart_product_id, '') <> '' AND COALESCE(e.cakto_product_id, '') <> '' " +
     "ORDER BY COALESCE(t.demand_score, 0) DESC, e.rowid DESC"
   ).all();
+  // Um livro por TEMA: o catalogo tem o mesmo tema gerado varias vezes
+  // ("Devocional Diario: 365 Dias com Deus" quatro vezes), e sem isto o lote
+  // virava combos repetidos do mesmo assunto. Tema que ja ganhou ferramenta
+  // tambem fica de fora.
+  const tema = (t) => String(t || '').trim().toLowerCase();
+  const vistos = new Set(db.prepare(
+    'SELECT e.topic FROM ferramentas f JOIN ebooks e ON e.id = f.ebook_id'
+  ).all().map((r) => tema(r.topic)));
   const saida = [];
   for (const l of linhas) {
     if (saida.length >= limite) break;
-    if (l.pdf_path && existe(l.pdf_path)) saida.push(l);
+    const t = tema(l.topic);
+    if (t && vistos.has(t)) continue;
+    if (!(l.pdf_path && existe(l.pdf_path))) continue;
+    if (t) vistos.add(t);
+    saida.push(l);
   }
   return saida;
 }
