@@ -5,6 +5,7 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+const { sanearLivro } = require('../core/textoDegenerado');
 const os = require('os');
 const { createLogger } = require('../core/logger');
 const { generateImage } = require('./imageGenAgent');
@@ -126,7 +127,11 @@ function formatChapterContent(doc, content, title) {
   }
 }
 
-async function generatePDF(ebook, coverPath) {
+async function generatePDF(ebookBruto, coverPath) {
+  // Texto que a IA devolveu em laco (145 mil hifens numa "palavra") faz o
+  // pdfkit estourar a memoria. Saneia antes de tudo e registra o defeito.
+  const { livro: ebook, defeitos } = sanearLivro(ebookBruto);
+  if (defeitos.length) logger.warn(`Texto degenerado saneado antes do PDF: ${ebook.title} — ${defeitos.join('; ')}`);
   logger.info(`Gerando PDF: ${ebook.title}`);
 
   // QA do conteúdo do e-book

@@ -50,6 +50,7 @@ async function main() {
   const { generateFullEbook } = require('../src/agents/writerAgent');
   const { salvarConteudo, carregarConteudo, quantosGuardados } = require('../src/core/conteudoEbook');
   const { generatePDF } = require('../src/agents/pdfAgent');
+  const { sanearLivro } = require('../src/core/textoDegenerado');
   const grava = db.prepare('UPDATE ebooks SET pdf_path = ? WHERE id = ?');
   // Sai da lista de pausados para o entregaCakto reativar na proxima rodada.
   const reabre = db.prepare("DELETE FROM cakto_entrega WHERE ebook_id = ? AND resultado = 'pausado-sem-pdf'");
@@ -59,8 +60,12 @@ async function main() {
       // Se o texto ja foi guardado, refazer o PDF nao custa IA nenhuma
       // (medido em 23/09/2026: 113 s e ~10 chamadas por livro reescrito).
       const guardado = carregarConteudo(db, e.id);
-      const novo = guardado || await generateFullEbook(e.topic || e.title, e.language || 'pt-BR');
-      if (!guardado) salvarConteudo(db, e.id, novo);
+      const bruto = guardado || await generateFullEbook(e.topic || e.title, e.language || 'pt-BR');
+      // Texto em laco (01/10/2026: 145 mil hifens) e GUARDADO voltava a cada
+      // rodada e derrubava o processo no PDF. Guarda a versao saneada.
+      const { livro: novo, defeitos } = sanearLivro(bruto);
+      if (defeitos.length) console.log('SANEADO ' + e.id.slice(0, 8) + ': ' + defeitos.join('; ').slice(0, 200));
+      if (!guardado || defeitos.length) salvarConteudo(db, e.id, novo);
       const capa = e.cover_path && fs.existsSync(e.cover_path) ? e.cover_path : null;
       const caminho = await generatePDF({ ...novo, title: e.title, subtitle: e.subtitle || novo.subtitle, id: e.id, language: e.language || 'pt-BR' }, capa);
       grava.run(caminho, e.id);

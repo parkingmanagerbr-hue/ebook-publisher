@@ -65,6 +65,7 @@ const MODULOS_NO_GATE = [
   'src/core/travaLocal.js',
   'src/core/prazo.js',
   'src/core/prazoDoProcesso.js',
+  'src/core/textoDegenerado.js',
   'src/core/tituloUnico.js',
   'src/core/diarioDeTestes.js',
   'src/ferramentas/especificacao.js',
