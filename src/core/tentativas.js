@@ -45,4 +45,22 @@ async function comTentativas(acao, { vezes = 3, esperar = ms => new Promise(r =>
   throw ultimo;
 }
 
-module.exports = { comTentativas, valeTentarDeNovo, esperaDaTentativa };
+/**
+ * Quantas tentativas para comando de rede (ssh/scp) ate a VPS.
+ *
+ * 02/10/2026: robos de forca bruta lotam o MaxStartups do sshd da VPS (278
+ * episodios em 24 h) e, enquanto dura, o sshd derruba qualquer conexao nova,
+ * inclusive a nossa ("kex_exchange_identification: Connection reset"). Com 4
+ * tentativas a janela era de 26 s; 82 episodios do dia duraram mais que isso, e
+ * cada um parava um lote da Hotmart. 7 tentativas = 2+6+18+54+60+60 = 200 s.
+ */
+const VEZES_REDE = 7;
+
+/** Soma das esperas entre `vezes` tentativas. Pura. */
+function janelaDeEspera(vezes) {
+  let t = 0;
+  for (let n = 1; n < vezes; n++) t += esperaDaTentativa(n);
+  return t;
+}
+
+module.exports = { comTentativas, valeTentarDeNovo, esperaDaTentativa, janelaDeEspera, VEZES_REDE };

@@ -84,3 +84,10 @@ test('sem relogio injetado, a espera real acontece (2s na primeira)', async () =
   assert.strictEqual(vez, 2);
   assert.ok(gasto >= 1900, 'esperou de verdade: ' + gasto + 'ms');
 });
+
+test('a janela de repeticao da rede cobre o estrangulamento do sshd medido (>= 3 min)', () => {
+  const { janelaDeEspera, VEZES_REDE } = require('../src/core/tentativas');
+  assert.strictEqual(janelaDeEspera(4), 26000); // a janela antiga, que perdia lotes
+  assert.ok(janelaDeEspera(VEZES_REDE) >= 180000, 'janela ' + janelaDeEspera(VEZES_REDE));
+  assert.strictEqual(janelaDeEspera(1), 0);
+});

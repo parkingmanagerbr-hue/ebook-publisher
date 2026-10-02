@@ -20,7 +20,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { rotuloDoResultado, detalheDoResultado, ehQuedaDeSessao, ehBloqueioDeAmbiente } = require('../src/agents/hotmartRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
-const { comTentativas, valeTentarDeNovo, esperaDaTentativa } = require('../src/core/tentativas');
+const { comTentativas, valeTentarDeNovo, esperaDaTentativa, VEZES_REDE } = require('../src/core/tentativas');
 const { travar } = require('../src/core/travaLocal');
 const { comPrazo, prazoPorItem } = require('../src/core/prazo');
 
@@ -47,7 +47,7 @@ function arg(nome, padrao) {
  * `baixar()` ja repetia, mas `ssh()` — usada para gravar o resultado no banco —
  * nao, entao a oscilacao da rede ainda custava o livro.
  */
-function comTentativasSincrono(acao, vezes = 4) {
+function comTentativasSincrono(acao, vezes = VEZES_REDE) {
   let ultimo;
   for (let n = 1; n <= vezes; n++) {
     try { return acao(); } catch (e) {
@@ -171,7 +171,7 @@ async function baixar(remoto, destino) {
     comTentativasSincrono(() => execFileSync('scp', [`${VPS}:/tmp/arquivo_atual`, destino], { timeout: 180000 }));
     if (!(fs.existsSync(destino) && fs.statSync(destino).size > 1000)) throw new Error('arquivo veio vazio do VPS');
     return true;
-  }, { vezes: 3, aoFalhar: (e, n) => console.log('  rede falhou (tentativa ' + n + '): ' + String(e.message).slice(0, 80)) });
+  }, { vezes: VEZES_REDE, aoFalhar: (e, n) => console.log('  rede falhou (tentativa ' + n + '): ' + String(e.message).slice(0, 80)) });
 }
 
 function gravarFalha(ebookId, erro) {
