@@ -114,6 +114,26 @@ async function fillReactInput(page, selector, value) {
   }, selector, value);
 }
 
+/**
+ * Confere nome e descricao do wizard e preenche de novo o que estiver vazio.
+ *
+ * 02/10/2026: o /4/info termina de montar DEPOIS do preenchimento e apaga os
+ * dois campos ("Name filled: true", e no Continuar o wizard cobra nome=null,
+ * desc=0). Sem nome o produto nao nasce, e o lote parava com "No product ID".
+ * Devolve o que estava vazio, para o log dizer se a re-montagem aconteceu.
+ */
+async function garantirNomeEDescricao(page, nome, descricao) {
+  const vazio = await page.evaluate(() => {
+    const n = document.querySelector('input#name, input[name="name"]');
+    const d = document.querySelector('textarea#description, textarea[name="description"]');
+    return { nome: !n || !n.value.trim(), descricao: !d || !d.value.trim() };
+  }).catch(() => ({ nome: false, descricao: false }));
+  if (vazio.nome) await fillReactInput(page, 'input#name, input[name="name"], input[type="text"]', nome);
+  if (vazio.descricao) await fillReactTextarea(page, 'textarea#description, textarea[name="description"], textarea[placeholder*="descri"], textarea', descricao);
+  if (vazio.nome || vazio.descricao) { log.warn('wizard apagou ' + [vazio.nome && 'nome', vazio.descricao && 'descricao'].filter(Boolean).join(' e ') + ' — preenchido de novo'); await sleep(500); }
+  return vazio;
+}
+
 async function fillReactTextarea(page, selector, value) {
   return page.evaluate((sel, val) => {
     const el = document.querySelector(sel);
@@ -400,9 +420,10 @@ async function createProduct(page, session, ebook) {
   await sleep(500);
 
   // Fill description
+  const textoDescricao = descricaoHotmart(description, title, topic, language);
   const descFilled = await fillReactTextarea(page,
     'textarea#description, textarea[name="description"], textarea[placeholder*="descri"], textarea',
-    descricaoHotmart(description, title, topic, language)
+    textoDescricao
   );
   log.info('Desc filled: ' + descFilled);
   await sleep(400);
@@ -735,6 +756,8 @@ async function createProduct(page, session, ebook) {
       log.info('Wizard cover input not found on /add/4/info — will try post-creation fallback');
     }
   }
+
+  await garantirNomeEDescricao(page, title, textoDescricao);
 
   // Step B: find ALL visible Continuar buttons and click them in order (panel first, then main)
   const continList = await page.evaluate(()=>{
@@ -1073,6 +1096,7 @@ async function createProduct(page, session, ebook) {
       const foto = (process.env.HOTMART_DEBUG_DIR || '') + 'wizard_preso.png';
       if (process.env.HOTMART_DEBUG_DIR) await page.screenshot({ path: foto, fullPage: true }).catch(() => {});
       log.warn('Still on /info after 10s — o wizard cobra: ' + (cobranca.length ? cobranca.join(' ; ') : '(nada marcado)') + ' — retrying Continuar...');
+      await garantirNomeEDescricao(page, title, textoDescricao);
       const retryPos = await page.evaluate(()=>{
         const b = Array.from(document.querySelectorAll('button')).find(b => {
           const t = (b.textContent||'').trim().toLowerCase();
@@ -2476,7 +2500,7 @@ async function backfillCapas(itens, aoTerminar) {
   return { total: lista.length, ok };
 }
 
-module.exports = { publishToHotmart, getCategory: getCategoryPT, aceitaAudiobook, sessaoHotmartViva, backfillCapas,
+module.exports = { publishToHotmart, garantirNomeEDescricao, getCategory: getCategoryPT, aceitaAudiobook, sessaoHotmartViva, backfillCapas,
   // exportado para o executor LOCAL: a Hotmart amarra a sessao a origem, entao
   // o reenvio de capa roda na maquina que fez o login, conectando ao Chrome ja
   // aberto em vez de subir um navegador com cookies transplantados.
