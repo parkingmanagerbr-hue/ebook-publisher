@@ -22,3 +22,14 @@ test('IP informado nao passa pelo DNS; porta configuravel', async () => {
 test('resolucao que nao devolve IP e recusada com o motivo de ambiente', async () => {
   await assert.rejects(urlCdpDoServidor({}, async () => ({ address: 'lixo' })), /CHROME_FORA_DO_AR/);
 });
+
+test('rodarAqui executa o trecho na pasta dada, devolve a saida e apaga o arquivo', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const { rodarAqui } = require('../src/core/modoServidor');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqui-'));
+  const saida = rodarAqui("console.log(JSON.stringify([process.cwd() === " + JSON.stringify(fs.realpathSync(dir)) + ", 2+2]))", { dir });
+  assert.strictEqual(saida.trim(), '[true,4]');
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+  assert.throws(() => rodarAqui('process.exit(3)', { dir }));
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'falha tambem apaga o arquivo');
+});

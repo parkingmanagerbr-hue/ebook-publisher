@@ -27,7 +27,7 @@ const { comPrazo, prazoPorItem } = require('../src/core/prazo');
 // Livro que da certo leva 2,5 a 3,5 min; o mais lento medido, 5.
 const PRAZO_LIVRO_MS = prazoPorItem(Number(process.env.HOTMART_MIN_POR_LIVRO || 3));
 
-const { noServidor } = require('../src/core/modoServidor');
+const { noServidor, rodarAqui } = require('../src/core/modoServidor');
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
 const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
@@ -71,13 +71,7 @@ function ssh(cmd, timeout) {
 }
 
 function rodarNoContainer(js, timeout) {
-  if (noServidor()) {
-    // Ja estamos no container: roda direto, sem ssh.
-    const arq = path.join('/app', 'cmd_' + process.pid + '.js');
-    fs.writeFileSync(arq, js);
-    try { return execFileSync(process.execPath, [arq], { cwd: '/app', encoding: 'utf8', timeout: timeout || 180000, maxBuffer: 8 * 1024 * 1024 }); }
-    finally { try { fs.unlinkSync(arq); } catch (_) { /* protocolo: arquivo temporario */ } }
-  }
+  if (noServidor()) return rodarAqui(js, { timeout: timeout || 180000 }); // na VPS: sem ssh
   fs.mkdirSync(TMP, { recursive: true });
   const local = path.join(TMP, 'cmd.js');
   fs.writeFileSync(local, js);

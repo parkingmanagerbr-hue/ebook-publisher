@@ -53,9 +53,8 @@ try {
     # produto (27/09/2026). Fica so o que ainda depende deste Chrome.
     Registrar 'publicar hotmart: na VPS (hotmart_vps.sh)'
 
-    # capa e idioma dos recem-publicados (o assistente nem sempre sobe a capa)
-    $saida = & node scripts\capas_em_lote.js --limite=10 2>&1 | Out-String
-    Registrar ('capas: ' + (($saida.Trim() -split "`n")[-1]))
+    # capa e idioma dos recem-publicados: tambem na VPS desde 05/10/2026
+    # (hotmart_vps.sh roda o capas_em_lote depois de cada lote).
   } else { Registrar 'Hotmart deslogada - pulando a parte dela' }
 
   if (-not $semKiwify) {

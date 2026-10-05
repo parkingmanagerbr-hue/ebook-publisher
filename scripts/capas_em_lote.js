@@ -35,6 +35,7 @@ const { execFileSync } = require('child_process');
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
 const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
+const { noServidor, rodarAqui } = require('../src/core/modoServidor');
 // A porta do Chrome muda quando o dono reabre o navegador: descobrir, nao supor.
 let CDP = process.env.HOTMART_CDP || null;
 const TMP = path.join(os.tmpdir(), 'capas-lote');
@@ -74,6 +75,7 @@ function ssh(cmd, timeout) {
     { encoding: 'utf8', timeout: timeout || 180000, maxBuffer: 8 * 1024 * 1024 });
 }
 function rodarNoContainer(js) {
+  if (noServidor()) return rodarAqui(js, { timeout: 180000 }); // na VPS: sem ssh
   fs.mkdirSync(TMP, { recursive: true });
   const local = path.join(TMP, 'q.js');
   fs.writeFileSync(local, js);
@@ -170,6 +172,10 @@ function buscarPendentes(limite) {
  */
 function baixarCapasEmLote(itens, destinoDir) {
   fs.mkdirSync(destinoDir, { recursive: true });
+  if (noServidor()) {
+    // A capa vai a pagina em base64, entao basta o arquivo estar aqui.
+    for (const i of itens) { try { fs.copyFileSync(i.cover_path, path.join(destinoDir, i.pid + '.png')); } catch (_) { /* protocolo: capa ausente fica fora do mapa abaixo */ } }
+  } else {
   const copias = itens
     .map(i => `cp '${i.cover_path}' /tmp/lotecapas/${i.pid}.png 2>/dev/null || true`)
     .join('; ');
@@ -188,6 +194,7 @@ function baixarCapasEmLote(itens, destinoDir) {
   // funciona igual nos dois.
   execFileSync('tar', ['-xzf', 'lote.tgz'], { cwd: destinoDir, timeout: 300000 });
   try { fs.unlinkSync(tgz); } catch {}
+  }
 
   const mapa = new Map();
   for (const i of itens) {

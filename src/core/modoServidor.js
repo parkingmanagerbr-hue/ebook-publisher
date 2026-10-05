@@ -31,4 +31,22 @@ async function urlCdpDoServidor(env = process.env, resolver = (h) => dns.promise
   return 'http://' + ip + ':' + porta;
 }
 
-module.exports = { noServidor, urlCdpDoServidor };
+/**
+ * Roda um trecho de JS no proprio container (o equivalente local do
+ * scp + docker exec que os scripts usam a partir da maquina do dono).
+ * `dir` existe para o teste.
+ */
+function rodarAqui(js, { timeout = 180000, dir = '/app' } = {}) {
+  const fs = require('fs');
+  const path = require('path');
+  const { execFileSync } = require('child_process');
+  const arq = path.join(dir, 'cmd_aqui_' + process.pid + '_' + Date.now() + '.js');
+  fs.writeFileSync(arq, js);
+  try {
+    return execFileSync(process.execPath, [arq], { cwd: dir, encoding: 'utf8', timeout, maxBuffer: 8 * 1024 * 1024 });
+  } finally {
+    try { fs.unlinkSync(arq); } catch (_) { /* protocolo: arquivo temporario */ }
+  }
+}
+
+module.exports = { noServidor, urlCdpDoServidor, rodarAqui };
