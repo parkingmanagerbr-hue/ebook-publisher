@@ -23,6 +23,7 @@ const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { comTentativas, valeTentarDeNovo, esperaDaTentativa, VEZES_REDE } = require('../src/core/tentativas');
 const { travar } = require('../src/core/travaLocal');
 const { comPrazo, prazoPorItem } = require('../src/core/prazo');
+const { noServidor } = require('../src/core/modoServidor');
 
 // Livro que da certo leva 2,5 a 3,5 min; o mais lento medido, 5.
 const PRAZO_LIVRO_MS = prazoPorItem(Number(process.env.HOTMART_MIN_POR_LIVRO || 3));
@@ -67,6 +68,13 @@ function ssh(cmd, timeout) {
 }
 
 function rodarNoContainer(js, timeout) {
+  if (noServidor()) {
+    // Ja estamos no container: roda direto, sem ssh.
+    const arq = path.join('/app', 'cmd_' + process.pid + '.js');
+    fs.writeFileSync(arq, js);
+    try { return execFileSync(process.execPath, [arq], { cwd: '/app', encoding: 'utf8', timeout: timeout || 180000, maxBuffer: 8 * 1024 * 1024 }); }
+    finally { try { fs.unlinkSync(arq); } catch (_) { /* protocolo: arquivo temporario */ } }
+  }
   fs.mkdirSync(TMP, { recursive: true });
   const local = path.join(TMP, 'cmd.js');
   fs.writeFileSync(local, js);
@@ -166,6 +174,11 @@ function buscarPendentes(limite) {
  * da loja, e cada uma ainda gastava uma das tres tentativas do livro.
  */
 async function baixar(remoto, destino) {
+  if (noServidor()) {
+    fs.copyFileSync(remoto, destino);
+    if (!(fs.statSync(destino).size > 1000)) throw new Error('arquivo vazio no disco: ' + remoto);
+    return true;
+  }
   return comTentativas(async () => {
     ssh(`docker cp ${CONTAINER}:${remoto} /tmp/arquivo_atual`);
     comTentativasSincrono(() => execFileSync('scp', [`${VPS}:/tmp/arquivo_atual`, destino], { timeout: 180000 }));

@@ -67,6 +67,13 @@ async function main() {
   if (!token) { console.error('nenhum token nas abas abertas — o Chrome esta logado?'); process.exit(1); }
   if (!jwtUtilizavel(token)) { console.error('o token do navegador tambem esta vencido — refaca o login'); process.exit(1); }
 
+  if (require('../src/core/modoServidor').noServidor()) {
+    // Na VPS o destino e o proprio disco: temporario + rename.
+    fs.writeFileSync(DESTINO + '.tmp', token);
+    fs.renameSync(DESTINO + '.tmp', DESTINO);
+    console.log('token instalado no VPS (' + token.length + ' chars), valido ate ' + validade(token));
+    return;
+  }
   const tmp = path.join(os.tmpdir(), 'hm_token.txt');
   fs.writeFileSync(tmp, token);
   execFileSync('scp', [tmp, `${VPS}:/tmp/hm_token.txt`], { timeout: 120000 });

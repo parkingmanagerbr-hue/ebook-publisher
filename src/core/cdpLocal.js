@@ -38,6 +38,9 @@ async function urlCdpAuto(env = process.env, testar = responde) {
 
 /** Mesma coisa, mas explode com uma mensagem que diz o que fazer. */
 async function urlCdpObrigatoria(env = process.env, testar = responde) {
+  // Na VPS o Chrome e o container navegador-hotmart, nao uma porta local.
+  const { noServidor, urlCdpDoServidor } = require('./modoServidor');
+  if (noServidor(env)) return urlCdpDoServidor(env);
   const url = await urlCdpAuto(env, testar);
   if (!url) throw new Error('CHROME_FORA_DO_AR: nenhuma porta de depuracao respondeu — rode "node scripts/vigia_navegador.js"');
   return url;

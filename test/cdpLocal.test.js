@@ -57,3 +57,9 @@ test('quando nao ha navegador, a mensagem diz o que fazer', async () => {
   });
   assert.strictEqual(await urlCdpObrigatoria({}, async p => p === 9223), 'http://127.0.0.1:9223');
 });
+
+test('na VPS (PUBLICAR_NO_SERVIDOR=1) o Chrome e o do container, sem varrer portas locais', async () => {
+  const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
+  const url = await urlCdpObrigatoria({ PUBLICAR_NO_SERVIDOR: '1', HOTMART_CDP_HOST: '10.1.1.1' }, async () => { throw new Error('nao devia testar porta local'); });
+  assert.strictEqual(url, 'http://10.1.1.1:9223');
+});
