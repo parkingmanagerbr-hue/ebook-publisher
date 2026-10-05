@@ -47,13 +47,11 @@ try {
     $saida = & node scripts\enviarPdfsRegerados.js --limite=3 2>&1 | Out-String
     Registrar ('pdfs: ' + (($saida.Trim() -split "`n")[-1]))
 
-    # livros novos: o servidor nao publica na Hotmart (sessao presa a esta maquina)
-    # 12 em 25 min (cabe na janela de 30 min da tarefa). Eram 6 em 14 min:
-    # metade do tempo ocioso, e a publicacao so andava enquanto havia uma
-    # sessao acompanhando. A trava de travaLocal impede que isto e um lote
-    # lancado a mao publiquem juntos (o que duplicava produto em 27/09/2026).
-    $saida = & node scripts\publicar_local.js --limite=12 --minutos=25 2>&1 | Out-String
-    Registrar ('publicar hotmart: ' + (($saida.Trim() -split "`n")[-1]))
+    # livros novos: desde 05/10/2026 quem publica e a VPS (Chrome do container
+    # navegador-hotmart, laco data/ebook-publisher/hotmart_vps.sh). Publicar daqui
+    # tambem seria ter dois publicadores ao mesmo tempo, o que ja duplicou
+    # produto (27/09/2026). Fica so o que ainda depende deste Chrome.
+    Registrar 'publicar hotmart: na VPS (hotmart_vps.sh)'
 
     # capa e idioma dos recem-publicados (o assistente nem sempre sobe a capa)
     $saida = & node scripts\capas_em_lote.js --limite=10 2>&1 | Out-String

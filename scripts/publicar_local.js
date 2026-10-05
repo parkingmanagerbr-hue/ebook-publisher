@@ -23,17 +23,20 @@ const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { comTentativas, valeTentarDeNovo, esperaDaTentativa, VEZES_REDE } = require('../src/core/tentativas');
 const { travar } = require('../src/core/travaLocal');
 const { comPrazo, prazoPorItem } = require('../src/core/prazo');
-const { noServidor } = require('../src/core/modoServidor');
 
 // Livro que da certo leva 2,5 a 3,5 min; o mais lento medido, 5.
 const PRAZO_LIVRO_MS = prazoPorItem(Number(process.env.HOTMART_MIN_POR_LIVRO || 3));
 
+const { noServidor } = require('../src/core/modoServidor');
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
 const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
 // A porta do Chrome muda quando o dono reabre o navegador: descobrir, nao supor.
 let CDP = process.env.HOTMART_CDP || null;
-const TMP = path.join(os.tmpdir(), 'publicar-hotmart');
+// Na VPS o Chrome e OUTRO container: o upload passa o CAMINHO do arquivo e o
+// Chrome le do disco dele. Esta pasta e montada nos dois no mesmo caminho
+// (05/10/2026: o primeiro teste criou o produto e o PDF nao foi anexado).
+const TMP = noServidor() ? (process.env.PUBLICAR_TMP || '/app/data/navegador_tmp') : path.join(os.tmpdir(), 'publicar-hotmart');
 const MAX_TENTATIVAS = 3;
 
 function arg(nome, padrao) {
