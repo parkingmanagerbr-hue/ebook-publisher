@@ -62,5 +62,13 @@ try {
     $saida = & node scripts\publicar_kiwify.js --limite=10 2>&1 | Out-String
     Registrar ('publicar kiwify: ' + (($saida.Trim() -split "`n")[-1]))
   } else { Registrar 'Kiwify deslogada - pulando a parte dela' }
+
+  # KDP: so publica com a conta liberada. Antes disso cada tentativa criaria um
+  # rascunho novo que nunca sai (conta bancaria em verificacao, 05/10/2026).
+  $saida = & node scripts\kdpLiberado.js 2>&1 | Out-String
+  if ($LASTEXITCODE -eq 0) {
+    $saida = & node scripts\publicar_kdp_local.js --limite=2 2>&1 | Out-String
+    Registrar ('publicar kdp: ' + (($saida.Trim() -split "`n")[-1]))
+  } else { Registrar ('kdp: ' + (($saida.Trim() -split "`n")[-1])) }
 }
 finally { $mutex.ReleaseMutex() }
