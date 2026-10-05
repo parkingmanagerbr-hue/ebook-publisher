@@ -87,6 +87,10 @@ function buscarPendentes(limite) {
   const saida = rodarNoContainer(`
     const D = require('better-sqlite3');
     const fs = require('fs');
+    // DONO DA LOJA: com a marca presente, so a VPS publica. A trava de
+    // travaLocal vale dentro de UMA maquina; em 05/10/2026 o laco do computador
+    // e o da VPS publicaram juntos e duplicaram 4 produtos.
+    if (${JSON.stringify(!noServidor())} && fs.existsSync('/app/data/hotmart_publica_na_vps')) { console.log('@@PUBLICA_NA_VPS'); process.exit(0); }
     const db = new D('/app/data/metrics.db');
     db.pragma('busy_timeout = 5000');
     db.prepare('CREATE TABLE IF NOT EXISTS hotmart_publicar_falha (ebook_id TEXT PRIMARY KEY, tentativas INTEGER, erro TEXT, quando INTEGER)').run();
@@ -156,6 +160,11 @@ function buscarPendentes(limite) {
       console.log(JSON.stringify(ok));
     })();
   `);
+  if (saida.includes('@@PUBLICA_NA_VPS')) {
+    const e = new Error('PUBLICA_NA_VPS: a Hotmart publica pela VPS (data/ebook-publisher/hotmart_publica_na_vps) — este computador nao publica');
+    e.naVps = true;
+    throw e;
+  }
   if (saida.includes('@@CATALOGO_INDISPONIVEL')) {
     const e = new Error('CATALOGO_INDISPONIVEL: nao deu para ler o catalogo da Hotmart (token vencido?) — nada foi publicado');
     e.catalogo = true;
