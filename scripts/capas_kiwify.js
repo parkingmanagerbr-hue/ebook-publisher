@@ -143,9 +143,16 @@ async function principal() {
 }
 
 if (require.main === module) {
+  // Um por vez: a tarefa agendada (de 30 em 30 min) e um lote grande lancado a
+  // mao subiriam a mesma capa no mesmo produto.
+  const soltar = require('../src/core/travaLocal').travar('kiwify-capas', { oQue: 'capas_kiwify --limite=' + arg('limite', '?'), avisar: m => console.log(m) });
+  if (!soltar) { console.log('ja existe uma rodada de capas da Kiwify em andamento — saindo'); process.exit(0); }
+  const fim = codigo => { soltar(); process.exit(codigo); };
+  process.on('SIGINT', () => fim(130));
+  process.on('SIGTERM', () => fim(143));
   principal()
-    .then(r => { log.info('resumo: ' + JSON.stringify(r)); console.log(JSON.stringify(r)); })
-    .catch(e => { log.error('ERRO: ' + umaLinha(e && e.message, 200)); process.exit(1); });
+    .then(r => { log.info('resumo: ' + JSON.stringify(r)); console.log(JSON.stringify(r)); fim(0); })
+    .catch(e => { log.error('ERRO: ' + umaLinha(e && e.message, 200)); fim(1); });
 }
 
 module.exports = { principal, mapaDeLivros };
