@@ -64,8 +64,11 @@ function baixarCapas(fila) {
   const caminhos = [...new Set(fila.map(i => i.capa))];
   const tar = path.join(TMP, 'lote.tar');
   const fd = fs.openSync(tar, 'w');
-  const r = spawnSync('ssh', ['-o', 'ConnectTimeout=30', VPS, 'docker exec ' + CONTAINER + ' tar -cf - ' + caminhos.map(c => "'" + c.replace(/'/g, '') + "'").join(' ')],
-    { stdio: ['ignore', fd, 'pipe'], timeout: 900000 });
+  // A lista vai pela ENTRADA do tar (-T -), nao pela linha de comando: 746
+  // caminhos passaram do limite de ~32 mil caracteres do Windows e o comando
+  // chegou cortado na VPS (06/10/2026).
+  const r = spawnSync('ssh', ['-o', 'ConnectTimeout=30', VPS, 'docker exec -i ' + CONTAINER + ' tar -cf - -T -'],
+    { input: caminhos.join('\n') + '\n', stdio: ['pipe', fd, 'pipe'], timeout: 900000 });
   fs.closeSync(fd);
   if (r.status !== 0 && !(fs.statSync(tar).size > 0)) throw new Error('tar das capas falhou: ' + umaLinha(r.stderr, 200));
   execFileSync('tar', ['-xf', 'lote.tar'], { cwd: TMP, timeout: 300000 });
