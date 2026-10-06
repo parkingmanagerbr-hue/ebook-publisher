@@ -23,6 +23,10 @@ const dormir = ms => new Promise(r => setTimeout(r, ms));
  */
 const PRECO_MINIMO = { JPY: 100000 };
 
+// O que fazer com produto abaixo do minimo: decisao do dono em 06/10/2026 —
+// vende em dolar, ao preco base dos estrangeiros (US$ 5,00 = 500 centavos).
+const MOEDA_SUBSTITUTA = { moeda: 'USD', centavos: 500 };
+
 /** O produto esta abaixo do minimo da moeda (e o painel nao salva)? Pura. */
 function precoAbaixoDoMinimo(produto) {
   const min = PRECO_MINIMO[String((produto && produto.currency) || '').toUpperCase()];
@@ -41,12 +45,14 @@ function filaDeCapas(produtos, livros, { feitos = new Set(), forcar = new Set(),
   // Forcados primeiro: a ordem da listagem da Kiwify muda entre chamadas.
   const ordem = [...(produtos || [])].sort((a, b) => (forcar.has(b && b.id) ? 1 : 0) - (forcar.has(a && a.id) ? 1 : 0));
   for (const p of ordem) {
-    if (!p || !p.id || feitos.has(p.id) || precoAbaixoDoMinimo(p)) continue;
-    const precisa = !p.product_img || forcar.has(p.id);
+    if (!p || !p.id || feitos.has(p.id)) continue;
+    const converter = precoAbaixoDoMinimo(p);
+    const precisa = !p.product_img || forcar.has(p.id) || converter;
     if (!precisa) continue;
     const livro = livros.get(p.id);
     if (!livro || !livro.cover_path) continue;
-    fila.push({ id: p.id, nome: p.name, capa: livro.cover_path, categoria: categoriaKiwify(livro.title, livro.topic), trocar: !!p.product_img });
+    fila.push({ id: p.id, nome: p.name, capa: livro.cover_path, categoria: categoriaKiwify(livro.title, livro.topic), trocar: !!p.product_img,
+      ...(converter ? { moeda: { de: String(p.currency).toUpperCase(), ...MOEDA_SUBSTITUTA } } : {}) });
     if (fila.length >= limite) break;
   }
   return fila;
@@ -122,6 +128,26 @@ async function aplicarNoPainel(page, item, { log = console, esperaMs = 1000 } = 
     else log.warn('categoria nao entrou no formulario de ' + item.id);
   }
 
+  // Moeda abaixo do minimo: troca a moeda e digita o preco. O campo e v-money
+  // (mascara por digitos): '500' vira 5,00 em dolar.
+  if (item.moeda) {
+    const trocou = await page.evaluate((de, para) => {
+      const s = [...document.querySelectorAll('select')].find(x => x.value === de && [...x.options].some(o => o.value === para) && x.getBoundingClientRect().width > 0);
+      if (!s) return false;
+      s.value = para;
+      s.dispatchEvent(new Event('change', { bubbles: true }));
+      return s.value === para;
+    }, item.moeda.de, item.moeda.moeda);
+    if (!trocou) throw new Error('KIWIFY_MOEDA: seletor de moeda em ' + item.moeda.de + ' nao achado');
+    await dormir(1500);
+    const preco = await page.$('input.v-money');
+    if (!preco) throw new Error('KIWIFY_MOEDA: campo de preco nao achado');
+    await preco.click({ clickCount: 3 });
+    await page.keyboard.press('Backspace');
+    await preco.type(String(item.moeda.centavos), { delay: 60 });
+    await dormir(800);
+  }
+
   // Salvar: o clique so conta quando o PUT do produto volta 200.
   for (let tentativa = 1; tentativa <= 3; tentativa++) {
     await dormir(1500);
@@ -136,7 +162,11 @@ async function aplicarNoPainel(page, item, { log = console, esperaMs = 1000 } = 
     const salvou = page.waitForResponse(r => r.request().method() === 'PUT' && r.url().includes('/v1/products/' + item.id), { timeout: 20000 }).catch(() => null);
     await page.mouse.click(ponto.x, ponto.y);
     const r = await salvou;
-    if (r && r.ok()) return { imagem, categoria };
+    if (r && r.ok()) {
+      let enviado = {};
+      try { enviado = JSON.parse(r.request().postData() || '{}'); } catch (_) { /* protocolo: corpo sem JSON, a conferencia pela API decide */ }
+      return { imagem, categoria, moeda: enviado.currency || null, preco: enviado.price == null ? null : Number(enviado.price) };
+    }
     if (r && r.status() === 429) throw new Error('KIWIFY_LIMITE: 429 ao salvar');
     // Sem PUT costuma ser validacao do formulario: a mensagem diz o porque.
     const aviso = await page.evaluate(() => [...document.querySelectorAll('.text-red-600, .text-red-500, [role=alert]')].filter(e => e.getBoundingClientRect().width > 0).map(e => e.textContent.trim().replace(/\s+/g, ' ')).filter(Boolean).slice(0, 2).join(' | '));
@@ -146,4 +176,4 @@ async function aplicarNoPainel(page, item, { log = console, esperaMs = 1000 } = 
   throw new Error('KIWIFY_CAPA: o painel nao salvou o produto');
 }
 
-module.exports = { filaDeCapas, categoriaPrecisaTrocar, aplicarNoPainel, precoAbaixoDoMinimo, PRECO_MINIMO };
+module.exports = { filaDeCapas, categoriaPrecisaTrocar, aplicarNoPainel, precoAbaixoDoMinimo, PRECO_MINIMO, MOEDA_SUBSTITUTA };

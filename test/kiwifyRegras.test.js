@@ -26,10 +26,11 @@ test('moeda segue o idioma do livro (catalogo mundial)', () => {
   assert.strictEqual(moedaPorIdioma('pt-BR'), 'BRL');
   assert.strictEqual(moedaPorIdioma('en-US'), 'USD');
   assert.strictEqual(moedaPorIdioma('fr'), 'EUR');
-  assert.strictEqual(moedaPorIdioma('ja-JP'), 'JPY');
+  // iene tem minimo de ¥1.000 na Kiwify; o preco base (5) seria ¥5 — japones vende em dolar
+  assert.strictEqual(moedaPorIdioma('ja-JP'), 'USD');
   assert.strictEqual(moedaPorIdioma('hi-IN'), 'USD', 'idioma sem moeda propria vende em dolar');
   assert.strictEqual(moedaPorIdioma(null), 'USD');
-  assert.strictEqual(moedaPorIdioma('ja', ['BRL', 'USD']), 'BRL', 'moeda fora da lista da loja cai para BRL');
+  assert.strictEqual(moedaPorIdioma('fr', ['BRL', 'USD']), 'BRL', 'moeda fora da lista da loja cai para BRL');
 });
 
 test('categoria pelo assunto, com "Outros" quando nada casa', () => {

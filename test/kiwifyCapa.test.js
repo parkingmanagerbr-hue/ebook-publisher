@@ -56,11 +56,21 @@ test('livro do produto: pelo id gravado; sem id, so por nome UNICO', () => {
   assert.strictEqual(m.has('k3'), false);
 });
 
-test('produto abaixo do minimo da moeda fica fora (o painel nao salva nada nele)', () => {
+test('preco abaixo do minimo da moeda e reconhecido', () => {
   const { precoAbaixoDoMinimo } = require('../src/agents/kiwifyCapa');
   assert.strictEqual(precoAbaixoDoMinimo({ currency: 'JPY', price: 500 }), true);
   assert.strictEqual(precoAbaixoDoMinimo({ currency: 'JPY', price: 100000 }), false);
   assert.strictEqual(precoAbaixoDoMinimo({ currency: 'BRL', price: 500 }), false);
+});
+
+test('produto em iene abaixo do minimo entra na fila PARA virar US$ 5 (decisao do dono)', () => {
+  const { MOEDA_SUBSTITUTA } = require('../src/agents/kiwifyCapa');
   const fila = filaDeCapas([{ id: 'p1', name: 'A', product_img: null, currency: 'JPY', price: 500 }], livros);
-  assert.strictEqual(fila.length, 0);
+  assert.strictEqual(fila.length, 1);
+  assert.deepStrictEqual(fila[0].moeda, { de: 'JPY', moeda: 'USD', centavos: 500 });
+  assert.deepStrictEqual(MOEDA_SUBSTITUTA, { moeda: 'USD', centavos: 500 });
+  // com imagem tambem entra, so pela moeda
+  assert.strictEqual(filaDeCapas([{ id: 'p1', name: 'A', product_img: 'x', currency: 'JPY', price: 500 }], livros).length, 1);
+  // em reais, nada de moeda
+  assert.strictEqual(filaDeCapas([{ id: 'p1', name: 'A', product_img: null, currency: 'BRL', price: 500 }], livros)[0].moeda, undefined);
 });

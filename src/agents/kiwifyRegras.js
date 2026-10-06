@@ -92,7 +92,10 @@ function precoCentavos(reais, minimo = 500) {
 }
 
 /** Moeda pelo idioma do livro — e assim o catalogo vende fora do Brasil. Pura. */
-const MOEDAS = { pt: 'BRL', en: 'USD', es: 'USD', fr: 'EUR', de: 'EUR', it: 'EUR', nl: 'EUR', ja: 'JPY', ar: 'AED' };
+// Japones em DOLAR desde 06/10/2026 (decisao do dono): o iene exige ¥1.000 de
+// minimo e o preco base (5) virava ¥5 — produto invendavel que o painel nem
+// deixava editar (55 produtos).
+const MOEDAS = { pt: 'BRL', en: 'USD', es: 'USD', fr: 'EUR', de: 'EUR', it: 'EUR', nl: 'EUR', ja: 'USD', ar: 'AED' };
 function moedaPorIdioma(idioma, aceitas = ['AED', 'ARS', 'AUD', 'BRL', 'CAD', 'CLP', 'COP', 'EUR', 'GBP', 'JPY', 'MXN', 'PEN', 'USD']) {
   const base = String(idioma || '').toLowerCase().slice(0, 2);
   const m = MOEDAS[base] || 'USD';

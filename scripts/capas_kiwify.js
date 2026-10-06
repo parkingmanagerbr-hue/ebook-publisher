@@ -110,7 +110,8 @@ async function principal() {
   const puppeteer = require('puppeteer');
   const browser = await puppeteer.connect({ browserURL: await urlCdpObrigatoria(), defaultViewport: { width: 1400, height: 1000 } });
   const page = await browser.newPage();
-  const resumo = { fila: 0, ok: 0, falhas: 0, semCapa: 0, categorias: 0 };
+  const resumo = { fila: 0, ok: 0, falhas: 0, semCapa: 0, categorias: 0, moedaTrocada: 0, moedaConfirmada: 0 };
+  const convertidos = new Map();
   try {
     const cred = await credenciais(page);
     const lista = await chamar(page, cred, 'GET', '/v1/products', null);
@@ -137,6 +138,11 @@ async function principal() {
         // Conferencia pela API: so conta o que ficou gravado.
         const d = await chamar(page, cred, 'GET', '/v1/products/' + item.id + '?full=true', null);
         const pr = (d.json && d.json.product) || {};
+        // Troca de moeda: o painel tem de ter ENVIADO a moeda e o preco pedidos.
+        if (item.moeda && !(feito.moeda === item.moeda.moeda && feito.preco === item.moeda.centavos)) {
+          throw new Error('KIWIFY_MOEDA: o painel salvou ' + feito.moeda + ' ' + feito.preco + ' em vez de ' + item.moeda.moeda + ' ' + item.moeda.centavos);
+        }
+        if (item.moeda) { resumo.moedaTrocada++; convertidos.set(item.id, item.moeda); }
         if (pr.product_img && (!feito.imagem || pr.product_img === feito.imagem)) {
           resumo.ok++;
           if (feito.categoria != null && pr.category === feito.categoria) resumo.categorias++;
@@ -162,6 +168,17 @@ async function principal() {
       semPainel = 0;
       await dormir(PAUSA_MS);
     }
+    }
+    // Conferencia final da moeda pela listagem (o GET do produto nao traz moeda).
+    if (convertidos.size) {
+      const depois = await chamar(page, cred, 'GET', '/v1/products', null);
+      const lista2 = Array.isArray(depois.json) ? depois.json : (depois.json && (depois.json.data || depois.json.products)) || [];
+      for (const q of lista2) {
+        const m = convertidos.get(q.id);
+        if (!m) continue;
+        if (q.currency === m.moeda && Number(q.price) === m.centavos) resumo.moedaConfirmada++;
+        else log.warn('moeda nao confirmada pela API: ' + umaLinha(q.name, 50) + ' esta em ' + q.currency + ' ' + q.price);
+      }
     }
   } finally {
     await page.close().catch(() => {});
