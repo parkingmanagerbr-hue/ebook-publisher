@@ -20,6 +20,7 @@ const { publicarNaKiwify, credenciais } = require('../src/agents/publisherKiwify
 const { portasCandidatas, escolherPorta } = require('../src/core/navegadorLocal');
 const { ehLimiteDeTaxa, valeTentarKiwify } = require('../src/agents/kiwifyRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
+const { noServidor, rodarAqui } = require('../src/core/modoServidor');
 
 let log;
 try { log = require('../src/core/logger').createLogger('publicarKiwify'); }
@@ -44,6 +45,7 @@ const temFlag = nome => process.argv.includes('--' + nome);
 const umaLinha = (s, n = 60) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, n);
 
 function rodarNoContainer(js, timeout = 180000) {
+  if (noServidor()) return rodarAqui(js, { timeout }); // na VPS: sem ssh
   fs.mkdirSync(TMP, { recursive: true });
   const local = path.join(TMP, 'cmd.js');
   fs.writeFileSync(local, js);
@@ -123,7 +125,7 @@ function responde(porta) {
 }
 
 /** Onde fica anotada a ultima recusa por limite da conta. */
-const MARCA_LIMITE = path.join(os.tmpdir(), 'kiwify-limite.txt');
+const MARCA_LIMITE = noServidor() ? '/app/data/kiwify-limite.txt' : path.join(os.tmpdir(), 'kiwify-limite.txt');
 function ultimaRecusa() {
   try { return Number(fs.readFileSync(MARCA_LIMITE, 'utf8').trim()) || null; } catch (_) { return null; }
 }
@@ -149,10 +151,13 @@ async function principal() {
   log.info('pendentes para a Kiwify: ' + pendentes.length + ' (' + resumoDaFila(pendentes) + ')' + (seco ? ' (dry-run)' : ''));
   if (!pendentes.length) return { publicados: 0, falhas: 0, recusados: 0 };
 
-  const porta = await escolherPorta(responde, portasCandidatas(process.env));
-  if (!porta) throw new Error('CHROME_FORA_DO_AR: nenhuma porta de depuracao respondeu (rode scripts/vigia_navegador.js)');
-  log.info('Chrome de automacao na porta ' + porta);
-  const browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:' + porta, defaultViewport: null, protocolTimeout: 180000 });
+  // Na VPS (PUBLICAR_NO_SERVIDOR=1) o Chrome e o do container navegador-hotmart.
+  const browserURL = noServidor()
+    ? await require('../src/core/cdpLocal').urlCdpObrigatoria()
+    : await escolherPorta(responde, portasCandidatas(process.env)).then(p => (p ? 'http://127.0.0.1:' + p : null));
+  if (!browserURL) throw new Error('CHROME_FORA_DO_AR: nenhuma porta de depuracao respondeu (rode scripts/vigia_navegador.js)');
+  log.info('Chrome de automacao em ' + browserURL);
+  const browser = await puppeteer.connect({ browserURL, defaultViewport: null, protocolTimeout: 180000 });
   // Aba propria: reaproveitar a aba aberta trouxe "Requesting main frame too
   // early!" quando ela ficava em estado ruim depois de outro lote (24/09/2026).
   // A sessao vive no perfil do Chrome, nao na aba.

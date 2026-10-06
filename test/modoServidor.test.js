@@ -33,3 +33,10 @@ test('rodarAqui executa o trecho na pasta dada, devolve a saida e apaga o arquiv
   assert.throws(() => rodarAqui('process.exit(3)', { dir }));
   assert.deepStrictEqual(fs.readdirSync(dir), [], 'falha tambem apaga o arquivo');
 });
+
+test('pasta de trabalho: na VPS e a pasta compartilhada com o Chrome; fora, a temporaria', () => {
+  const path = require('path'); const os = require('os');
+  const { pastaDeTrabalho } = require('../src/core/modoServidor');
+  assert.strictEqual(pastaDeTrabalho('kdp', { PUBLICAR_NO_SERVIDOR: '1' }), path.join('/app/data/navegador_tmp', 'kdp'));
+  assert.strictEqual(pastaDeTrabalho('kdp', {}), path.join(os.tmpdir(), 'kdp'));
+});

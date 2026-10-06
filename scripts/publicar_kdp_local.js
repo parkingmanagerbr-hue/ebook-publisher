@@ -32,11 +32,14 @@ catch { log = { info: console.log, warn: console.warn, error: console.error }; }
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
-const TMP = path.join(os.tmpdir(), 'publicar-kdp');
+const { noServidor, rodarAqui, pastaDeTrabalho } = require('../src/core/modoServidor');
+// Na VPS a pasta e a compartilhada com o Chrome: o upload passa o caminho.
+const TMP = pastaDeTrabalho('publicar-kdp');
 const arg = (n, p) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.split('=')[1] : p; };
 const umaLinha = (s, n = 80) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, n);
 
 function rodarNoContainer(js, timeout = 180000) {
+  if (noServidor()) return rodarAqui(js, { timeout }); // na VPS: sem ssh
   fs.mkdirSync(TMP, { recursive: true });
   const local = path.join(TMP, 'cmd.js');
   fs.writeFileSync(local, js);
@@ -83,6 +86,11 @@ function gravarResultado(id, produtoId, url) {
 
 /** Traz o arquivo do servidor, repetindo quando a queda e de rede. */
 async function baixar(remoto, destino) {
+  if (noServidor()) {
+    fs.copyFileSync(remoto, destino);
+    if (!(fs.statSync(destino).size > 1000)) throw new Error('arquivo vazio no disco: ' + remoto);
+    return true;
+  }
   return comTentativas(async () => {
     execFileSync('ssh', [VPS, 'docker cp ' + CONTAINER + ':' + remoto + ' /tmp/kdp_arquivo'], { timeout: 180000 });
     execFileSync('scp', [VPS + ':/tmp/kdp_arquivo', destino], { timeout: 180000 });
@@ -121,7 +129,7 @@ async function principal() {
       // com a capa errada — vira falha e fica na fila (scripts/capaKdp.py).
       const capaKdp = path.join(TMP, 'capa_kdp.jpg');
       const autor = process.env.KDP_AUTHOR_NAME || 'John Brooks';
-      execFileSync(process.env.PYTHON || 'python', [path.join(__dirname, 'capaKdp.py'), capaLocal, capaKdp,
+      execFileSync(process.env.PYTHON || (noServidor() ? 'python3' : 'python'), [path.join(__dirname, 'capaKdp.py'), capaLocal, capaKdp,
         String(e.title || ''), String(e.subtitle || ''), autor], { timeout: 60000 });
       if (!fs.existsSync(capaKdp)) throw new Error('capa do KDP nao foi montada');
       const r = await publishToAmazon({

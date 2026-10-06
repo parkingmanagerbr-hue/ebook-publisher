@@ -16,6 +16,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
+const { noServidor, rodarAqui, pastaDeTrabalho } = require('../src/core/modoServidor');
 const arg = (n, p) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.split('=')[1] : p; };
 
 const ssh = cmd => execFileSync('ssh', ['-o', 'ConnectTimeout=30', 'vps', cmd], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -53,6 +54,7 @@ function prontos(limite) {
   const consulta = 'const fs=require("fs");const d=require("/app/src/core/database").getDb();' +
     'const r=d.prepare("SELECT s.produto, e.pdf_path FROM hotmart_sem_arquivo s JOIN ebooks e ON e.id=s.ebook_id").all()' +
     '.filter(x=>x.pdf_path&&fs.existsSync(x.pdf_path)).slice(0,' + limite + ');console.log(JSON.stringify(r));';
+  if (noServidor()) return extrairJson(rodarAqui(consulta)); // na VPS: sem ssh
   fs.writeFileSync(path.join(os.tmpdir(), 'consulta_prontos.js'), consulta);
   execFileSync('scp', ['-q', path.join(os.tmpdir(), 'consulta_prontos.js'), 'vps:/tmp/consulta_prontos.js']);
   ssh('docker cp /tmp/consulta_prontos.js ' + CONTAINER + ':/tmp/consulta_prontos.js');
@@ -63,15 +65,23 @@ async function main() {
   const limite = parseInt(arg('limite', '5'), 10);
   const lista = prontos(limite);
   if (!lista.length) { console.log('nenhum PDF regerado esperando envio'); return; }
-  const destino = fs.mkdtempSync(path.join(os.tmpdir(), 'pdfs-hm-'));
+  // Na VPS a pasta e a compartilhada com o Chrome (o upload passa o caminho).
+  const base = pastaDeTrabalho('pdfs-hm');
+  fs.mkdirSync(base, { recursive: true });
+  const destino = fs.mkdtempSync(base + path.sep);
   const pares = [];
   for (const item of lista) {
     const local = path.join(destino, 'pdf_' + item.produto + '.pdf');
-    ssh('docker cp ' + CONTAINER + ':' + item.pdf_path + ' /tmp/envio_' + item.produto + '.pdf');
-    execFileSync('scp', ['-q', 'vps:/tmp/envio_' + item.produto + '.pdf', local]);
+    if (noServidor()) fs.copyFileSync(item.pdf_path, local);
+    else {
+      ssh('docker cp ' + CONTAINER + ':' + item.pdf_path + ' /tmp/envio_' + item.produto + '.pdf');
+      execFileSync('scp', ['-q', 'vps:/tmp/envio_' + item.produto + '.pdf', local]);
+    }
     pares.push(item.produto + '=' + local);
   }
-  const token = ssh('docker exec ' + CONTAINER + ' cat /app/data/hotmart_access_token.txt').trim();
+  const token = noServidor()
+    ? fs.readFileSync('/app/data/hotmart_access_token.txt', 'utf8').trim()
+    : ssh('docker exec ' + CONTAINER + ' cat /app/data/hotmart_access_token.txt').trim();
   console.log('enviando ' + pares.length + ' PDF(s)...');
   const saida = execFileSync(process.execPath, [path.join(__dirname, 'reanexarPdfHotmart.js'), '--token=' + token, ...pares], { encoding: 'utf8' });
   console.log(saida.trim());
@@ -88,10 +98,13 @@ async function main() {
       '{method:"PUT",headers:{authorization:"Bearer "+tok,"x-app-name":"app-product"}});' +
       'if(r.ok){d.prepare("DELETE FROM hotmart_pausados WHERE produto=?").run(id);reativados++}}' +
       'console.log(JSON.stringify({removidos:n,reativados}))})();';
-    fs.writeFileSync(path.join(os.tmpdir(), 'limpa_fila.js'), limpa);
-    execFileSync('scp', ['-q', path.join(os.tmpdir(), 'limpa_fila.js'), 'vps:/tmp/limpa_fila.js']);
-    ssh('docker cp /tmp/limpa_fila.js ' + CONTAINER + ':/tmp/limpa_fila.js');
-    console.log(ssh('docker exec ' + CONTAINER + ' node /tmp/limpa_fila.js').trim().split('\n').pop());
+    if (noServidor()) console.log(rodarAqui(limpa).trim().split('\n').pop());
+    else {
+      fs.writeFileSync(path.join(os.tmpdir(), 'limpa_fila.js'), limpa);
+      execFileSync('scp', ['-q', path.join(os.tmpdir(), 'limpa_fila.js'), 'vps:/tmp/limpa_fila.js']);
+      ssh('docker cp /tmp/limpa_fila.js ' + CONTAINER + ':/tmp/limpa_fila.js');
+      console.log(ssh('docker exec ' + CONTAINER + ' node /tmp/limpa_fila.js').trim().split('\n').pop());
+    }
   }
   fs.rmSync(destino, { recursive: true, force: true });
 }

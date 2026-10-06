@@ -49,4 +49,15 @@ function rodarAqui(js, { timeout = 180000, dir = '/app' } = {}) {
   }
 }
 
-module.exports = { noServidor, urlCdpDoServidor, rodarAqui };
+/**
+ * Pasta de trabalho do script. Na VPS e a pasta MONTADA tambem no Chrome
+ * (navegador-hotmart): upload de arquivo passa o CAMINHO e quem le e o Chrome,
+ * que e outro container. Fora da VPS, a pasta temporaria do sistema.
+ */
+function pastaDeTrabalho(nome, env = process.env) {
+  const path = require('path');
+  if (noServidor(env)) return path.join(env.PUBLICAR_TMP || '/app/data/navegador_tmp', nome);
+  return path.join(require('os').tmpdir(), nome);
+}
+
+module.exports = { noServidor, urlCdpDoServidor, rodarAqui, pastaDeTrabalho };

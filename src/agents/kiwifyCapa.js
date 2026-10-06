@@ -135,20 +135,32 @@ async function aplicarNoPainel(page, item, { log = console, esperaMs = 1000 } = 
   // Moeda abaixo do minimo: troca a moeda e digita o preco. O campo e v-money
   // (mascara por digitos): '500' vira 5,00 em dolar.
   if (item.moeda) {
-    const trocou = await page.evaluate((de, para) => {
-      const s = [...document.querySelectorAll('select')].find(x => x.value === de && [...x.options].some(o => o.value === para) && x.getBoundingClientRect().width > 0);
-      if (!s) return false;
-      s.value = para;
-      s.dispatchEvent(new Event('change', { bubbles: true }));
-      return s.value === para;
-    }, item.moeda.de, item.moeda.moeda);
+    // Escolha REAL no select (handle.select): mudar o .value por codigo nao avisa a
+    // mascara do preco, que seguia no formato do iene — '500' ficava 500, nao 5,00.
+    const seletor = await page.evaluateHandle((de, para) => [...document.querySelectorAll('select')]
+      .find(x => x.value === de && [...x.options].some(o => o.value === para) && x.getBoundingClientRect().width > 0) || null, item.moeda.de, item.moeda.moeda);
+    const el = seletor.asElement();
+    const trocou = !!el && (await el.select(item.moeda.moeda)).includes(item.moeda.moeda);
     if (!trocou) throw new Error('KIWIFY_MOEDA: seletor de moeda em ' + item.moeda.de + ' nao achado');
     await dormir(1500);
-    const preco = await page.$('input.v-money');
-    if (!preco) throw new Error('KIWIFY_MOEDA: campo de preco nao achado');
-    await preco.click({ clickCount: 3 });
+    // Ha mais de um campo de dinheiro na pagina (ofertas escondidas): so o VISIVEL
+    // e o preco do produto. 06/10/2026: o primeiro achado era oculto e o clique
+    // falhou com 'Node is either not clickable'.
+    const ponto = await page.evaluate(() => {
+      const i = [...document.querySelectorAll('input.v-money')].find(x => x.getBoundingClientRect().width > 0 && x.offsetParent !== null);
+      if (!i) return null;
+      i.scrollIntoView({ block: 'center' });
+      const q = i.getBoundingClientRect();
+      return { x: q.left + q.width / 2, y: q.top + q.height / 2 };
+    });
+    if (!ponto) throw new Error('KIWIFY_MOEDA: campo de preco visivel nao achado');
+    await page.mouse.click(ponto.x, ponto.y, { clickCount: 3 });
+    await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
-    await preco.type(String(item.moeda.centavos), { delay: 60 });
+    await page.keyboard.type(String(item.moeda.centavos), { delay: 60 });
+    const digitado = await page.evaluate(() => { const i = [...document.querySelectorAll('input.v-money')].find(x => x.getBoundingClientRect().width > 0 && x.offsetParent !== null); return i ? i.value : null; });
+    // '500' na mascara de dolar tem de virar 5,00 / 5.00 — qualquer outra coisa e preco errado
+    if (!/^\D*5[.,]00$/.test(String(digitado || '').trim())) throw new Error('KIWIFY_MOEDA: preco ficou ' + digitado + ' — nao salvo');
     await dormir(800);
   }
 

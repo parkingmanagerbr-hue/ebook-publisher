@@ -29,7 +29,9 @@ catch { log = { info: console.log, warn: console.warn, error: console.error }; }
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
-const TMP = path.join(os.tmpdir(), 'capas-kiwify');
+const { noServidor, rodarAqui, pastaDeTrabalho } = require('../src/core/modoServidor');
+// Na VPS a pasta e a compartilhada com o Chrome: o upload passa o caminho.
+const TMP = pastaDeTrabalho('capas-kiwify');
 // Cada produto recarrega o painel, e cada recarga renova o login (getIdToken).
 // 70 seguidos em 06/10/2026 e a Kiwify passou a recusar a renovacao: pagina
 // em branco para todo o resto. Pausa entre produtos e parada depois de 3
@@ -37,7 +39,8 @@ const TMP = path.join(os.tmpdir(), 'capas-kiwify');
 const PAUSA_MS = parseInt(process.env.KIWIFY_CAPA_PAUSA_MS || '20000', 10);
 const MAX_SEM_PAINEL = 3;
 const dormir = ms => new Promise(r => setTimeout(r, ms));
-const PROGRESSO = path.join(__dirname, '..', 'logs', 'kiwify_capas.jsonl');
+// Na VPS o progresso fica em data/ (sobrevive ao deploy, que recria o container).
+const PROGRESSO = noServidor() ? '/app/data/kiwify_capas.jsonl' : path.join(__dirname, '..', 'logs', 'kiwify_capas.jsonl');
 const arg = (n, p) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.split('=').slice(1).join('=') : p; };
 const umaLinha = (s, n = 80) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, n);
 const chaveNome = (s) => String(s || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -46,8 +49,10 @@ const chaveNome = (s) => String(s || '').normalize('NFKC').toLowerCase().replace
 function livrosDoServidor() {
   const js = "const D=require('better-sqlite3');const db=new D('/app/data/metrics.db',{readonly:true});" +
     "console.log(JSON.stringify(db.prepare(\"SELECT kiwify_product_id pid, title, topic, cover_path FROM ebooks WHERE cover_path IS NOT NULL AND cover_path <> ''\").all()))";
-  const saida = execFileSync('ssh', ['-o', 'ConnectTimeout=30', VPS, 'docker exec ' + CONTAINER + ' node -e "' + js.replace(/"/g, '\\"') + '"'],
-    { encoding: 'utf8', timeout: 180000, maxBuffer: 64 * 1024 * 1024 });
+  const saida = noServidor()
+    ? rodarAqui(js)
+    : execFileSync('ssh', ['-o', 'ConnectTimeout=30', VPS, 'docker exec ' + CONTAINER + ' node -e "' + js.replace(/"/g, '\\"') + '"'],
+      { encoding: 'utf8', timeout: 180000, maxBuffer: 64 * 1024 * 1024 });
   return JSON.parse(saida.slice(saida.indexOf('[')));
 }
 
@@ -68,6 +73,16 @@ function mapaDeLivros(linhas, produtos) {
 /** Baixa as capas da fila num tar so. Devolve id -> caminho local. */
 function baixarCapas(fila) {
   fs.mkdirSync(TMP, { recursive: true });
+  if (noServidor()) {
+    // Na VPS a capa ja esta no disco: copia para a pasta que o Chrome enxerga.
+    const mapa = new Map();
+    for (const i of fila) {
+      const destino = path.join(TMP, i.id + path.extname(i.capa || '.png'));
+      try { fs.copyFileSync(i.capa, destino); if (fs.statSync(destino).size > 1000) mapa.set(i.id, destino); }
+      catch (_) { /* protocolo: capa ausente fica fora do mapa e vira "sem-capa" */ }
+    }
+    return mapa;
+  }
   const caminhos = [...new Set(fila.map(i => i.capa))];
   const tar = path.join(TMP, 'lote.tar');
   const fd = fs.openSync(tar, 'w');
