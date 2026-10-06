@@ -30,6 +30,13 @@ catch { log = { info: console.log, warn: console.warn, error: console.error }; }
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
 const VPS = process.env.VPS_ALIAS || 'vps';
 const TMP = path.join(os.tmpdir(), 'capas-kiwify');
+// Cada produto recarrega o painel, e cada recarga renova o login (getIdToken).
+// 70 seguidos em 06/10/2026 e a Kiwify passou a recusar a renovacao: pagina
+// em branco para todo o resto. Pausa entre produtos e parada depois de 3
+// paginas que nao carregam (em vez de queimar a fila inteira com erro).
+const PAUSA_MS = parseInt(process.env.KIWIFY_CAPA_PAUSA_MS || '20000', 10);
+const MAX_SEM_PAINEL = 3;
+const dormir = ms => new Promise(r => setTimeout(r, ms));
 const PROGRESSO = path.join(__dirname, '..', 'logs', 'kiwify_capas.jsonl');
 const arg = (n, p) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.split('=').slice(1).join('=') : p; };
 const umaLinha = (s, n = 80) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, n);
@@ -118,6 +125,7 @@ async function principal() {
     // quando o container reiniciou no meio, e a rodada inteira morreu (06/10/2026).
     let capas = new Map();
     let parar = false;
+    let semPainel = 0;
     for (let ini = 0; ini < fila.length && !parar; ini += 40) {
     const bloco = fila.slice(ini, ini + 40);
     try { capas = baixarCapas(bloco); } catch (e) { log.warn('bloco de capas falhou: ' + umaLinha(e.message, 160)); capas = new Map(); }
@@ -144,7 +152,15 @@ async function principal() {
         registrar({ id: item.id, resultado: 'erro', erro: umaLinha(e.message, 160) });
         log.error('falha ' + umaLinha(item.nome, 50) + ': ' + umaLinha(e.message, 160));
         if (/KIWIFY_LIMITE|SEM_SESSAO/.test(e.message)) { parar = true; break; } // a conta toda parou: nao insistir
+        if (/nao apareceu/.test(e.message) && ++semPainel >= MAX_SEM_PAINEL) {
+          log.warn('o painel da Kiwify parou de carregar (' + semPainel + ' seguidos) — paro a rodada; a fila continua na proxima');
+          parar = true; break;
+        }
+        await dormir(PAUSA_MS);
+        continue;
       }
+      semPainel = 0;
+      await dormir(PAUSA_MS);
     }
     }
   } finally {
