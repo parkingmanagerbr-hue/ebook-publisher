@@ -158,8 +158,10 @@ async function principal() {
         registrar({ id: item.id, resultado: 'erro', erro: umaLinha(e.message, 160) });
         log.error('falha ' + umaLinha(item.nome, 50) + ': ' + umaLinha(e.message, 160));
         if (/KIWIFY_LIMITE|SEM_SESSAO/.test(e.message)) { parar = true; break; } // a conta toda parou: nao insistir
-        if (/nao apareceu/.test(e.message) && ++semPainel >= MAX_SEM_PAINEL) {
-          log.warn('o painel da Kiwify parou de carregar (' + semPainel + ' seguidos) — paro a rodada; a fila continua na proxima');
+        // Tres falhas SEGUIDAS de qualquer tipo = a Kiwify esta recusando o ritmo
+        // (pagina em branco ou salvar sem resposta): para e deixa para a proxima.
+        if (++semPainel >= MAX_SEM_PAINEL) {
+          log.warn('Kiwify falhou ' + semPainel + ' vezes seguidas — paro a rodada; a fila continua na proxima');
           parar = true; break;
         }
         await dormir(PAUSA_MS);
