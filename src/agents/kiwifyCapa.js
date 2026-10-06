@@ -105,11 +105,14 @@ async function aplicarNoPainel(page, item, { log = console, esperaMs = 1000 } = 
 
   // A moderacao e o sinal de que o arquivo subiu; o endereco dela e o que vai
   // ser gravado em product_img.
-  const moderou = page.waitForRequest(r => /\/v1\/uploads\/moderate-image/.test(r.url()) && r.method() === 'POST', { timeout: 120000 });
-  const aprovou = page.waitForResponse(r => /\/v1\/uploads\/moderate-image/.test(r.url()) && r.request().method() === 'POST', { timeout: 120000 });
+  // As duas esperas com .catch: uma rejeitada e nao lida derrubava o PROCESSO
+  // inteiro (06/10/2026: moderacao que nao veio em 2 min matou a rodada toda).
+  const moderou = page.waitForRequest(r => /\/v1\/uploads\/moderate-image/.test(r.url()) && r.method() === 'POST', { timeout: 120000 }).catch(() => null);
+  const aprovou = page.waitForResponse(r => /\/v1\/uploads\/moderate-image/.test(r.url()) && r.request().method() === 'POST', { timeout: 120000 }).catch(() => null);
   await campo.uploadFile(item.capa);
   const pedido = await moderou;
   const resposta = await aprovou;
+  if (!pedido || !resposta) throw new Error('KIWIFY_CAPA: o envio da imagem nao chegou a moderacao em 2 min');
   let imagem = null;
   try { imagem = JSON.parse(pedido.postData() || '{}').fileURL || null; } catch (_) { /* protocolo: corpo sem JSON, a conferencia pela API decide */ }
   const corpoModeracao = await resposta.text().catch(() => '');
@@ -165,8 +168,11 @@ async function aplicarNoPainel(page, item, { log = console, esperaMs = 1000 } = 
   }
 
   // Salvar: o clique so conta quando o PUT do produto volta 200.
-  for (let tentativa = 1; tentativa <= 3; tentativa++) {
-    await dormir(1500);
+  // Espera crescente (5, 10, 20, 40 s): logo depois da moderacao a pagina ainda
+  // processa a imagem e IGNORA o clique — sem erro e sem PUT (06/10/2026, varias
+  // capas perdidas com 1,5 s de espera; a sonda com mais folga salvou).
+  for (let tentativa = 1; tentativa <= 4; tentativa++) {
+    await dormir(5000 * Math.pow(2, tentativa - 1));
     const ponto = await page.evaluate(() => {
       const b = [...document.querySelectorAll('button')].find(x => /salvar produto/i.test(x.textContent) && x.getBoundingClientRect().width > 0 && !x.disabled);
       if (!b) return null;

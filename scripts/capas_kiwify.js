@@ -149,7 +149,14 @@ async function principal() {
       const local = capas.get(item.id);
       if (!local) { resumo.semCapa++; registrar({ id: item.id, resultado: 'sem-capa' }); continue; }
       try {
-        const feito = await aplicarNoPainel(page, { ...item, capa: local }, { log });
+        // Aba NOVA por produto: reaproveitando a mesma aba (que tambem faz as
+        // chamadas a API), o "Salvar produto" passou a ser ignorado — sem PUT,
+        // sem erro; a mesma capa numa aba nova salvou (06/10/2026).
+        const aba = await browser.newPage();
+        await aba.setViewport({ width: 1400, height: 1000 });
+        let feito;
+        try { feito = await aplicarNoPainel(aba, { ...item, capa: local }, { log }); }
+        finally { await aba.close().catch(() => {}); }
         // Conferencia pela API: so conta o que ficou gravado.
         const d = await chamar(page, cred, 'GET', '/v1/products/' + item.id + '?full=true', null);
         const pr = (d.json && d.json.product) || {};
