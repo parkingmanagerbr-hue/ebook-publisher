@@ -61,8 +61,9 @@ try {
     # A Kiwify estrangula o ritmo: lote pequeno, varias vezes por dia.
     $saida = & node scripts\publicar_kiwify.js --limite=10 2>&1 | Out-String
     Registrar ('publicar kiwify: ' + (($saida.Trim() -split "`n")[-1]))
-    # capa e categoria dos produtos novos (o publicador cria sem imagem)
-    $saida = & node scripts\capas_kiwify.js --limite=30 2>&1 | Out-String
+    # capa e categoria (o publicador cria sem imagem). 10 por rodada: 70 seguidos
+    # fizeram a Kiwify recusar o login por mais de uma hora (06/10/2026).
+    $saida = & node scripts\capas_kiwify.js --limite=10 2>&1 | Out-String
     Registrar ('capas kiwify: ' + (($saida.Trim() -split "`n")[-1]))
   } else { Registrar 'Kiwify deslogada - pulando a parte dela' }
 
