@@ -118,7 +118,7 @@ async function principal() {
     const produtos = Array.isArray(lista.json) ? lista.json : (lista.json && (lista.json.data || lista.json.products)) || [];
     if (!produtos.length) throw new Error('listagem da Kiwify vazia (status ' + lista.status + ')');
     const livros = mapaDeLivros(livrosDoServidor(), produtos);
-    const fila = filaDeCapas(produtos, livros, { feitos: lerFeitos(), forcar, limite });
+    const fila = filaDeCapas(produtos, livros, { feitos: lerFeitos(), forcar, limite, converterMoeda: process.argv.includes('--converter-moeda') });
     resumo.fila = fila.length;
     log.info('produtos ' + produtos.length + ', sem imagem ' + produtos.filter(p => !p.product_img).length + ', ligados a livro ' + livros.size + ', fila ' + fila.length);
     if (!fila.length) return resumo;

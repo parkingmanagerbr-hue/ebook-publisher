@@ -40,13 +40,17 @@ function precoAbaixoDoMinimo(produto) {
  * (capa errada). Produto sem livro ligado fica de fora: subir a capa de outro
  * livro e pior que nenhuma. Pura.
  */
-function filaDeCapas(produtos, livros, { feitos = new Set(), forcar = new Set(), limite = Infinity } = {}) {
+function filaDeCapas(produtos, livros, { feitos = new Set(), forcar = new Set(), limite = Infinity, converterMoeda = false } = {}) {
   const fila = [];
   // Forcados primeiro: a ordem da listagem da Kiwify muda entre chamadas.
   const ordem = [...(produtos || [])].sort((a, b) => (forcar.has(b && b.id) ? 1 : 0) - (forcar.has(a && a.id) ? 1 : 0));
   for (const p of ordem) {
     if (!p || !p.id || feitos.has(p.id)) continue;
-    const converter = precoAbaixoDoMinimo(p);
+    // Troca de moeda mexe em PRECO de produto no ar: so com --converter-moeda
+    // (rodada acompanhada). Sem a opcao, o produto fica fora, como antes.
+    const abaixo = precoAbaixoDoMinimo(p);
+    if (abaixo && !converterMoeda) continue;
+    const converter = abaixo;
     const precisa = !p.product_img || forcar.has(p.id) || converter;
     if (!precisa) continue;
     const livro = livros.get(p.id);

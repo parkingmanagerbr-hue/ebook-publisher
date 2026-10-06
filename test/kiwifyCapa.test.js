@@ -65,12 +65,14 @@ test('preco abaixo do minimo da moeda e reconhecido', () => {
 
 test('produto em iene abaixo do minimo entra na fila PARA virar US$ 5 (decisao do dono)', () => {
   const { MOEDA_SUBSTITUTA } = require('../src/agents/kiwifyCapa');
-  const fila = filaDeCapas([{ id: 'p1', name: 'A', product_img: null, currency: 'JPY', price: 500 }], livros);
+  const fila = filaDeCapas([{ id: 'p1', name: 'A', product_img: null, currency: 'JPY', price: 500 }], livros, { converterMoeda: true });
   assert.strictEqual(fila.length, 1);
   assert.deepStrictEqual(fila[0].moeda, { de: 'JPY', moeda: 'USD', centavos: 500 });
   assert.deepStrictEqual(MOEDA_SUBSTITUTA, { moeda: 'USD', centavos: 500 });
   // com imagem tambem entra, so pela moeda
-  assert.strictEqual(filaDeCapas([{ id: 'p1', name: 'A', product_img: 'x', currency: 'JPY', price: 500 }], livros).length, 1);
+  assert.strictEqual(filaDeCapas([{ id: 'p1', name: 'A', product_img: 'x', currency: 'JPY', price: 500 }], livros, { converterMoeda: true }).length, 1);
+  // sem a opcao, produto abaixo do minimo fica fora (troca de preco so acompanhada)
+  assert.strictEqual(filaDeCapas([{ id: 'p1', name: 'A', product_img: null, currency: 'JPY', price: 500 }], livros).length, 0);
   // em reais, nada de moeda
   assert.strictEqual(filaDeCapas([{ id: 'p1', name: 'A', product_img: null, currency: 'BRL', price: 500 }], livros)[0].moeda, undefined);
 });
