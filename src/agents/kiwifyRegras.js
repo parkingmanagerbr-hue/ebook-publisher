@@ -17,6 +17,18 @@ const CATEGORIAS = {
   musica: 20, ti: 21, empreendedorismo: 22, outros: 23,
 };
 
+/**
+ * Nome de cada categoria como o painel mostra (o mesmo texto da Cakto, o que
+ * deixa a mesma regra servir as duas lojas pelo nome).
+ */
+const NOMES_CATEGORIA = {
+  0: 'Saúde e Esportes', 1: 'Finanças e Investimentos', 2: 'Relacionamentos', 3: 'Negócios e Carreira',
+  4: 'Espiritualidade', 5: 'Sexualidade', 6: 'Entretenimento', 7: 'Culinária e Gastronomia', 8: 'Idiomas',
+  9: 'Direito', 10: 'Apps & Software', 11: 'Literatura', 12: 'Casa e Construção', 13: 'Desenvolvimento Pessoal',
+  14: 'Moda e Beleza', 15: 'Animais e Plantas', 16: 'Educacional', 17: 'Hobbies', 18: 'Internet',
+  19: 'Ecologia e Meio Ambiente', 20: 'Música e Artes', 21: 'Tecnologia da Informação', 22: 'Empreendedorismo Digital', 23: 'Outros',
+};
+
 const REGRAS_CATEGORIA = [
   [CATEGORIAS.financas, /finan[cç]|cripto|bitcoin|patrimon|dinheiro|investi|renda|divida|d[ií]vida|or[çc]amento|aposentad|cr[ée]dito|econom/i],
   [CATEGORIAS.saude, /sa[úu]de|sono|dieta|alimenta|nutri|emagrec|fitness|exerc[íi]cio|muscula|ansiedade|depress|medita|yoga|bem[- ]estar|mindfulness/i],
@@ -213,6 +225,6 @@ function valeTentarKiwify(ultimaFalha, agora = Date.now(), espera = ESPERA_APOS_
 
 module.exports = {
   valeTentarKiwify, ESPERA_APOS_LIMITE_MS,
-  CATEGORIAS, categoriaKiwify, precoCentavos, moedaPorIdioma, descricaoKiwify,
+  CATEGORIAS, NOMES_CATEGORIA, categoriaKiwify, precoCentavos, moedaPorIdioma, descricaoKiwify,
   descritorFatura, corpoDeCriacao, corpoDeAtualizacao, mesmoProdutoKiwify, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa,
 };
