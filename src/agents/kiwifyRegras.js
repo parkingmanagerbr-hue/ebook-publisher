@@ -18,7 +18,7 @@ const CATEGORIAS = {
 };
 
 const REGRAS_CATEGORIA = [
-  [CATEGORIAS.financas, /financ|dinheiro|investi|renda|divida|d[ií]vida|or[çc]amento|aposentad|cr[ée]dito|econom/i],
+  [CATEGORIAS.financas, /finan[cç]|cripto|bitcoin|patrimon|dinheiro|investi|renda|divida|d[ií]vida|or[çc]amento|aposentad|cr[ée]dito|econom/i],
   [CATEGORIAS.saude, /sa[úu]de|sono|dieta|alimenta|nutri|emagrec|fitness|exerc[íi]cio|muscula|ansiedade|depress|medita|yoga|bem[- ]estar|mindfulness/i],
   [CATEGORIAS.ti, /programa|c[óo]digo|python|javascript|docker|linux|devops|banco de dados|algoritmo|intelig[êe]ncia artificial|\bia\b|machine learning|data science/i],
   [CATEGORIAS.apps, /aplicativo|software|\bapp\b|saas|no[- ]code|planilha|excel|notion/i],
@@ -41,10 +41,34 @@ const REGRAS_CATEGORIA = [
   [CATEGORIAS.desenvolvimento, /h[áa]bito|foco|disciplina|autoestima|organiza|rotina|prop[óo]sito|desenvolvimento pessoal/i],
 ];
 
+/**
+ * Segunda rodada, so para o que a primeira nao reconhece. 06/10/2026: 178 de
+ * 783 livros da Kiwify (23%) caiam em "Outros" e o dono via como "sem
+ * categoria". Ficam DEPOIS para nao mudar a categoria de quem ja tinha uma.
+ * O tema esta em portugues em todos os livros, inclusive os estrangeiros.
+ */
+const REGRAS_CATEGORIA_2 = [
+  [CATEGORIAS.culinaria, /refei[çc]/i],
+  [CATEGORIAS.saude, /suplement|atleta|triatl|corredor|corrida|les[õo]es|les[ãa]o|pele|dermat|respira|press[ãa]o arterial|hipertens|cardio|fisioterap|postura|ergonom|odontol|cl[íi]nica|m[ée]dic|terapia|gravidez|gestante|idos/i],
+  [CATEGORIAS.ti, /wordpress|\bsites?\b|realidade (aumentada|virtual)|ciberseg|seguran[çc]a digital|prote[çc][ãa]o de dados|automa[çc][ãa]o|dispositivos?|\bti\b|tecnologia|blockchain|chatbot|aws|microsservi|serverless|sem servidor|nuvem|migra[çc][ãa]o de dados|drones?|\bapis?\b|seguran[çc]a cibern[ée]tica/i],
+  [CATEGORIAS.internet, /copywrit|escrita persuasiva|marketing|conte[úu]do|blog|podcast|discord|criadores?|influenci|branding|marca pessoal|e-?mail|comunidade/i],
+  [CATEGORIAS.negocios, /negocia|custos?|consultoria|corporativ|executiv|treinamento|salari|empresa|ind[úu]stria|f[áa]brica|varejo|freelanc|aut[ôo]nom|log[íi]stica|atendimento|portf[óo]lio|designers?|restaurantes?|servi[çc]o de/i],
+  [CATEGORIAS.educacional, /e-?learning|cursos?\b|gamifica|did[áa]tic|alfabetiza|universit/i],
+  [CATEGORIAS.direito, /propriedade intelectual|dados pessoais|lgpd|patente|compliance|loca[çc][ãa]o|cidadania|documentos|expatriad|visto/i],
+  [CATEGORIAS.ecologia, /solar|pain[ée]is|circular|verde|ecol[óo]gic|fazenda vertical|carbono|zero res[íi]duo|compost|desperd[íi]cio|org[âa]nic/i],
+  [CATEGORIAS.relacionamentos, /casais|\bpais\b|crian[çc]as?|adolescen|comunica[çc][ãa]o/i],
+  [CATEGORIAS.animais, /c[ãa]es|tutores/i],
+  [CATEGORIAS.hobbies, /artesana|viage(m|ns)|mochila|turismo|destinos?|artesanato|n[ôo]made|camping|trilha/i],
+  [CATEGORIAS.moda, /roupa|cole[çc][ãa]o|cosm[ée]tic|skincare/i],
+  [CATEGORIAS.desenvolvimento, /tempo|produtividade pessoal|motiva|resili[êe]ncia|mentalidade|minimalis|autocuidado|intelig[êe]ncia emocional|gratid[ãa]o|desconex[ãa]o|ritua/i],
+];
+
 /** Categoria da Kiwify a partir do titulo e do tema. "Outros" quando nada casa. Pura. */
 function categoriaKiwify(titulo, tema) {
-  const texto = String(titulo || '') + ' ' + String(tema || '');
+  // Hifen tipografico (U+2010 a U+2015: 'e‑commerce', 'low‑carb') nao casa com o hifen das regras.
+  const texto = (String(titulo || '') + ' ' + String(tema || '')).replace(/[‐-―]/g, '-');
   for (const [id, regra] of REGRAS_CATEGORIA) if (regra.test(texto)) return id;
+  for (const [id, regra] of REGRAS_CATEGORIA_2) if (regra.test(texto)) return id;
   return CATEGORIAS.outros;
 }
 

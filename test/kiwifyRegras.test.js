@@ -38,7 +38,9 @@ test('categoria pelo assunto, com "Outros" quando nada casa', () => {
   assert.strictEqual(categoriaKiwify('Cardápio Plant-Based nas Escolas', 'alimentação escolar'), CATEGORIAS.saude);
   assert.strictEqual(categoriaKiwify('Docker na prática', 'devops'), CATEGORIAS.ti);
   assert.strictEqual(categoriaKiwify('Como criar hábitos', 'rotina e disciplina'), CATEGORIAS.desenvolvimento);
-  assert.strictEqual(categoriaKiwify('Tricô para iniciantes', 'artesanato manual'), CATEGORIAS.outros);
+  // artesanato era Outros ate 06/10/2026; a segunda rodada o poe em Hobbies
+  assert.strictEqual(categoriaKiwify('Tricô para iniciantes', 'artesanato manual'), CATEGORIAS.hobbies);
+  assert.strictEqual(categoriaKiwify('Xyzzy', 'qwerty'), CATEGORIAS.outros);
   assert.strictEqual(categoriaKiwify(null, null), CATEGORIAS.outros);
 });
 
@@ -191,4 +193,32 @@ test('data invalida ou no futuro nao trava a Kiwify para sempre', () => {
   assert.strictEqual(valeTentarKiwify(agora + 99999999, agora), true, 'relogio para tras nao vira bloqueio eterno');
   assert.strictEqual(valeTentarKiwify(undefined, agora), true);
   assert.strictEqual(valeTentarKiwify(agora - 1000, agora, 0), true, 'espera zero desliga a trava');
+});
+
+test('categoria: tema que caia em Outros agora tem categoria (06/10/2026: 178 de 783)', () => {
+  const { categoriaKiwify, CATEGORIAS: C } = require('../src/agents/kiwifyRegras');
+  // o "ç" de financas nao casava com /financ/
+  assert.strictEqual(categoriaKiwify('x', 'Guia de finanças pessoais para recém-casados'), C.financas);
+  // hifen tipografico (U+2011) nao casava com e-?commerce
+  assert.strictEqual(categoriaKiwify('x', 'Expansão internacional para e‑commerce de nicho'), C.empreendedorismo);
+  assert.strictEqual(categoriaKiwify('x', 'Guia de preparação física para triatletas iniciantes'), C.saude);
+  assert.strictEqual(categoriaKiwify('x', 'Como otimizar a performance de sites WordPress'), C.ti);
+  assert.strictEqual(categoriaKiwify('x', 'Guia prático de integração de APIs REST para iniciantes'), C.ti);
+  assert.strictEqual(categoriaKiwify('x', 'Estratégias de negociação salarial para profissionais'), C.negocios);
+  assert.strictEqual(categoriaKiwify('x', 'Planejamento de viagens de aventura com mochila'), C.hobbies);
+  assert.strictEqual(categoriaKiwify('x', 'Guia de manutenção de painéis solares residenciais'), C.ecologia);
+});
+
+test('categoria: a segunda rodada nao muda quem ja tinha categoria na primeira', () => {
+  const { categoriaKiwify, CATEGORIAS: C } = require('../src/agents/kiwifyRegras');
+  // "dieta" (primeira rodada) vence "pele" e "corrida" (segunda)
+  assert.strictEqual(categoriaKiwify('Dieta para corrida', 'cuidados com a pele'), C.saude);
+  assert.strictEqual(categoriaKiwify('Investimentos para freelancers', ''), C.financas);
+  assert.strictEqual(categoriaKiwify('zzz', 'qqq'), C.outros);
+});
+
+test('as regras de categoria nao tem byte de controle (barra-b virando backspace)', () => {
+  const s = require('fs').readFileSync(require.resolve('../src/agents/kiwifyRegras'), 'utf8');
+  const ruins = [...s].filter((ch) => { const c = ch.charCodeAt(0); return c < 9 || c === 11 || c === 12 || (c >= 14 && c < 32); });
+  assert.strictEqual(ruins.length, 0);
 });
