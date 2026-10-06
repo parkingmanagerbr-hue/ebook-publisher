@@ -71,7 +71,10 @@ function baixarCapas(fila) {
     { input: caminhos.join('\n') + '\n', stdio: ['pipe', fd, 'pipe'], timeout: 900000 });
   fs.closeSync(fd);
   if (r.status !== 0 && !(fs.statSync(tar).size > 0)) throw new Error('tar das capas falhou: ' + umaLinha(r.stderr, 200));
-  execFileSync('tar', ['-xf', 'lote.tar'], { cwd: TMP, timeout: 300000 });
+  // tar cortado pode deixar a ULTIMA capa pela metade: o bloco inteiro fica
+  // para a proxima rodada em vez de subir imagem quebrada.
+  fs.rmSync(path.join(TMP, 'app'), { recursive: true, force: true });
+  execFileSync('tar', ['-xf', 'lote.tar'], { cwd: TMP, timeout: 300000, stdio: 'ignore' });
   const mapa = new Map();
   for (const i of fila) {
     const local = path.join(TMP, i.capa.replace(/^\//, ''));
@@ -111,9 +114,14 @@ async function principal() {
     resumo.fila = fila.length;
     log.info('produtos ' + produtos.length + ', sem imagem ' + produtos.filter(p => !p.product_img).length + ', ligados a livro ' + livros.size + ', fila ' + fila.length);
     if (!fila.length) return resumo;
-    const capas = baixarCapas(fila);
-
-    for (const item of fila) {
+    // Capas em blocos de 40: um tar de 746 capas (centenas de MB) chegou cortado
+    // quando o container reiniciou no meio, e a rodada inteira morreu (06/10/2026).
+    let capas = new Map();
+    let parar = false;
+    for (let ini = 0; ini < fila.length && !parar; ini += 40) {
+    const bloco = fila.slice(ini, ini + 40);
+    try { capas = baixarCapas(bloco); } catch (e) { log.warn('bloco de capas falhou: ' + umaLinha(e.message, 160)); capas = new Map(); }
+    for (const item of bloco) {
       const local = capas.get(item.id);
       if (!local) { resumo.semCapa++; registrar({ id: item.id, resultado: 'sem-capa' }); continue; }
       try {
@@ -135,8 +143,9 @@ async function principal() {
         resumo.falhas++;
         registrar({ id: item.id, resultado: 'erro', erro: umaLinha(e.message, 160) });
         log.error('falha ' + umaLinha(item.nome, 50) + ': ' + umaLinha(e.message, 160));
-        if (/KIWIFY_LIMITE|SEM_SESSAO/.test(e.message)) break; // a conta toda parou: nao insistir
+        if (/KIWIFY_LIMITE|SEM_SESSAO/.test(e.message)) { parar = true; break; } // a conta toda parou: nao insistir
       }
+    }
     }
   } finally {
     await page.close().catch(() => {});
