@@ -57,7 +57,8 @@ test('baixarCatalogo pagina ate a ultima e falha com HTTP de erro', async () => 
   };
   const todos = await c.baixarCatalogo('T', { fetchImpl, porPagina: 2 });
   assert.deepStrictEqual(todos.map(p => p.id), [1, 2, 3]);
-  assert.strictEqual(urls.length, 2);
+  // 3 pedidos: so a pagina VAZIA encerra (pagina curta no meio nao e o fim)
+  assert.strictEqual(urls.length, 3);
   const vazio = await c.baixarCatalogo('T', { fetchImpl: async () => ({ ok: true, json: async () => null }) });
   assert.deepStrictEqual(vazio, []);
   const limitado = await c.baixarCatalogo('T', { fetchImpl: async () => ({ ok: true, json: async () => ({ data: [P(1, 'a')] }) }), porPagina: 1, maxPaginas: 2 });
@@ -76,4 +77,51 @@ test('ordem com datas ausentes dos dois lados', () => {
   const com = P(9, 'x');
   assert.deepStrictEqual(c.ordenarGrupo([com, sem], info()).map(p => p.id), [8, 9]);
   assert.deepStrictEqual(c.ordenarGrupo([sem, com], info()).map(p => p.id), [8, 9]);
+});
+
+test('listagem inteira com 500: le estado por estado e junta sem repetir id (07/10/2026)', async () => {
+  const { baixarCatalogo, ESTADOS_DO_CATALOGO } = require('../src/agents/hotmartCatalogo');
+  const pedidos = [];
+  const fetchImpl = async (url) => {
+    pedidos.push(url);
+    const status = (url.match(/status=([A-Z_]+)/) || [])[1];
+    if (!status) return { ok: false, status: 500, json: async () => ({}) };
+    if (!/page=1&/.test(url)) return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    const dados = { ACTIVE: [{ id: 1, name: 'A' }, { id: 2, name: 'B' }], PAUSED: [{ id: 3, name: 'C' }], DRAFT: [{ id: 2, name: 'B' }] }[status] || [];
+    return { ok: true, status: 200, json: async () => ({ data: dados }) };
+  };
+  const avisos = [];
+  const cat = await baixarCatalogo('t', { fetchImpl, avisar: m => avisos.push(m) });
+  assert.deepStrictEqual(cat.map(p => p.id).sort(), [1, 2, 3]);
+  const consultados = new Set(pedidos.map(u => (u.match(/status=([A-Z_]+)/) || [])[1]).filter(Boolean));
+  assert.deepStrictEqual([...consultados].sort(), [...ESTADOS_DO_CATALOGO].sort());
+  assert.match(avisos[0], /500/);
+});
+
+test('estado que falha derruba a leitura (catalogo pela metade deixaria passar duplicata)', async () => {
+  const { baixarCatalogo } = require('../src/agents/hotmartCatalogo');
+  const fetchImpl = async (url) => {
+    if (!/status=/.test(url) || /status=PAUSED/.test(url)) return { ok: false, status: 500, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ data: [] }) };
+  };
+  await assert.rejects(baixarCatalogo('t', { fetchImpl }), /PAUSED/);
+});
+
+test('erro 4xx na listagem inteira NAO vira leitura por estado (token vencido e outra coisa)', async () => {
+  const { baixarCatalogo } = require('../src/agents/hotmartCatalogo');
+  let porEstado = 0;
+  const fetchImpl = async (url) => { if (/status=/.test(url)) porEstado++; return { ok: false, status: 401, json: async () => ({}) }; };
+  await assert.rejects(baixarCatalogo('t', { fetchImpl }), /401/);
+  assert.strictEqual(porEstado, 0);
+});
+
+test('pagina do meio com MENOS itens nao encerra a leitura; so a vazia encerra', async () => {
+  const { baixarCatalogo } = require('../src/agents/hotmartCatalogo');
+  const paginas = { 1: [1, 2, 3], 2: [4, 5], 3: [6, 7, 8], 4: [] };
+  const fetchImpl = async (url) => {
+    const p = Number(url.match(/page=(\d+)/)[1]);
+    return { ok: true, status: 200, json: async () => ({ data: (paginas[p] || []).map(id => ({ id })) }) };
+  };
+  const cat = await baixarCatalogo('t', { fetchImpl, porPagina: 3 });
+  assert.deepStrictEqual(cat.map(p => p.id), [1, 2, 3, 4, 5, 6, 7, 8]);
 });

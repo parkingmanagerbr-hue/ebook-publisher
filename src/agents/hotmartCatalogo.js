@@ -18,19 +18,54 @@ function normalizar(titulo) {
   return String(titulo || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-/** Todas as paginas do catalogo do produtor. */
-async function baixarCatalogo(token, { fetchImpl = fetch, porPagina = 100, maxPaginas = 200 } = {}) {
+/**
+ * Estados que o filtro `status` aceita e que cobrem todo produto que EXISTE.
+ * 07/10/2026: a listagem sem filtro passou a devolver 500 (PRODUCT_240), no
+ * painel da propria Hotmart tambem; `status=DELETED` da o mesmo 500 — o defeito
+ * deles esta nos apagados. Por estado, a leitura volta a fechar.
+ */
+const ESTADOS_DO_CATALOGO = ['ACTIVE', 'PAUSED', 'DRAFT', 'IN_REVIEW', 'NOT_APPROVED', 'CHANGES_PENDING_ON_PRODUCT'];
+
+/** Todas as paginas de uma consulta (`filtro` e o pedaco extra da query). */
+async function baixarPaginas(token, filtro, { fetchImpl, porPagina, maxPaginas }) {
   const todos = [];
   for (let p = 1; p <= maxPaginas; p++) {
-    const r = await fetchImpl(`${API}?page=${p}&rows=${porPagina}`, {
+    const r = await fetchImpl(`${API}?page=${p}&rows=${porPagina}${filtro}`, {
       headers: { authorization: 'Bearer ' + token, accept: 'application/json' },
     });
-    if (!r.ok) throw new Error('catalogo HTTP ' + r.status + ' na pagina ' + p);
+    if (!r.ok) {
+      const e = new Error('catalogo HTTP ' + r.status + ' na pagina ' + p + (filtro ? ' (' + filtro.slice(1) + ')' : ''));
+      e.status = r.status;
+      throw e;
+    }
     const lista = ((await r.json()) || {}).data || [];
     todos.push(...lista);
-    if (lista.length < porPagina) break;
+    // So para em pagina VAZIA. Com filtro a Hotmart devolve 99 em vez de 100 em
+    // algumas paginas do meio (some o produto que ela nao consegue montar), e
+    // "menos que o tamanho" encerrava a leitura em 1.399 de 6.075 ativos (07/10/2026).
+    if (lista.length === 0) break;
   }
   return todos;
+}
+
+/**
+ * Todas as paginas do catalogo do produtor. Se a listagem inteira der 5xx, le
+ * estado por estado e junta (sem repetir id). Estado que falhe derruba a leitura:
+ * catalogo pela metade deixaria passar duplicata, que e o que ele existe para evitar.
+ */
+async function baixarCatalogo(token, { fetchImpl = fetch, porPagina = 100, maxPaginas = 200, avisar = () => {} } = {}) {
+  const opcoes = { fetchImpl, porPagina, maxPaginas };
+  try {
+    return await baixarPaginas(token, '', opcoes);
+  } catch (e) {
+    if (!(e.status >= 500)) throw e;
+    avisar('listagem inteira deu ' + e.status + ' — lendo por estado');
+  }
+  const porId = new Map();
+  for (const estado of ESTADOS_DO_CATALOGO) {
+    for (const p of await baixarPaginas(token, '&status=' + estado, opcoes)) porId.set(String(p.id), p);
+  }
+  return [...porId.values()];
 }
 
 /** Grupos (2+) de produtos nao excluidos com o mesmo titulo. Pura. */
@@ -100,4 +135,4 @@ function idsPorTitulo(catalogo, titulo) {
     .map(p => String(p.id));
 }
 
-module.exports = { normalizar, baixarCatalogo, agruparDuplicados, ordenarGrupo, decidirGrupo, aplicarCanonico, idsPorTitulo };
+module.exports = { normalizar, baixarCatalogo, ESTADOS_DO_CATALOGO, agruparDuplicados, ordenarGrupo, decidirGrupo, aplicarCanonico, idsPorTitulo };
