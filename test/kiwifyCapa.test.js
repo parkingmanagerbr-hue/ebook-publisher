@@ -76,3 +76,11 @@ test('produto em iene abaixo do minimo entra na fila PARA virar US$ 5 (decisao d
   // em reais, nada de moeda
   assert.strictEqual(filaDeCapas([{ id: 'p1', name: 'A', product_img: null, currency: 'BRL', price: 500 }], livros)[0].moeda, undefined);
 });
+
+test('produto com soft_ban (a Kiwify recusa editar) fica fora da fila', () => {
+  const fila = filaDeCapas([
+    { id: 'p1', name: 'A', product_img: null, soft_ban: true },
+    { id: 'p2', name: 'B', product_img: null, soft_ban: false },
+  ], new Map([['p1', { title: 'A', topic: '', cover_path: '/c/a.png' }], ['p2', { title: 'B', topic: '', cover_path: '/c/b.png' }]]));
+  assert.deepStrictEqual(fila.map(i => i.id), ['p2']);
+});

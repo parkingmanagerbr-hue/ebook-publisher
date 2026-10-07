@@ -45,7 +45,10 @@ function filaDeCapas(produtos, livros, { feitos = new Set(), forcar = new Set(),
   // Forcados primeiro: a ordem da listagem da Kiwify muda entre chamadas.
   const ordem = [...(produtos || [])].sort((a, b) => (forcar.has(b && b.id) ? 1 : 0) - (forcar.has(a && a.id) ? 1 : 0));
   for (const p of ordem) {
-    if (!p || !p.id || feitos.has(p.id)) continue;
+    // soft_ban: a Kiwify bloqueou o produto e recusa QUALQUER edicao (403
+    // SoftBanProduct). 07/10/2026: 6 deles no inicio da fila davam 3 falhas
+    // seguidas por rodada, a rodada parava e nenhuma capa saia o dia todo.
+    if (!p || !p.id || feitos.has(p.id) || p.soft_ban === true) continue;
     // Troca de moeda mexe em PRECO de produto no ar: so com --converter-moeda
     // (rodada acompanhada). Sem a opcao, o produto fica fora, como antes.
     const abaixo = precoAbaixoDoMinimo(p);
@@ -190,6 +193,12 @@ async function aplicarNoPainel(page, item, { log = console, esperaMs = 1000 } = 
       return { imagem, categoria, moeda: enviado.currency || null, preco: enviado.price == null ? null : Number(enviado.price) };
     }
     if (r && r.status() === 429) throw new Error('KIWIFY_LIMITE: 429 ao salvar');
+    // 403 ao salvar e recusa da CONTA (07/10/2026: rodadas inteiras de 403 junto
+    // com o limite que pausa a publicacao). Repetir nao muda; o motivo vai no erro.
+    if (r && r.status() === 403) {
+      const corpo = await r.text().catch(() => '');
+      throw new Error('KIWIFY_LIMITE: 403 ao salvar — ' + String(corpo).replace(/\s+/g, ' ').slice(0, 160));
+    }
     // Sem PUT costuma ser validacao do formulario: a mensagem diz o porque.
     const aviso = await page.evaluate(() => [...document.querySelectorAll('.text-red-600, .text-red-500, [role=alert]')].filter(e => e.getBoundingClientRect().width > 0).map(e => e.textContent.trim().replace(/\s+/g, ' ')).filter(Boolean).slice(0, 2).join(' | '));
     if (aviso) throw new Error('KIWIFY_VALIDACAO: ' + aviso.slice(0, 160));
