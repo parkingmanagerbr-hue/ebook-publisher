@@ -68,6 +68,26 @@ async function baixarCatalogo(token, { fetchImpl = fetch, porPagina = 100, maxPa
   return [...porId.values()];
 }
 
+/**
+ * Catalogo RESTRITO aos titulos dados: busca cada um pelo filtro `name`.
+ *
+ * 07/10/2026 (noite): depois da listagem inteira, o filtro `status=PAUSED`
+ * tambem passou a dar 500 — o produto quebrado do lado da Hotmart muda de
+ * estado. Para a trava anti-duplicata nao e preciso o catalogo inteiro: basta
+ * saber se o TITULO de cada candidato ja existe, e a busca por nome responde.
+ * Qualquer titulo que falhe derruba tudo (sem conferir um, nao se publica nenhum).
+ */
+async function catalogoPorTitulos(token, titulos, { fetchImpl = fetch, porPagina = 100, maxPaginas = 20 } = {}) {
+  const opcoes = { fetchImpl, porPagina, maxPaginas };
+  const porId = new Map();
+  for (const t of [...new Set((titulos || []).map(x => String(x || '').trim()).filter(Boolean))]) {
+    // a busca da Hotmart casa trecho do nome; os primeiros 60 caracteres bastam e
+    // evitam URL gigante. Quem decide se e o MESMO titulo e idsPorTitulo.
+    for (const p of await baixarPaginas(token, '&name=' + encodeURIComponent(t.slice(0, 60)), opcoes)) porId.set(String(p.id), p);
+  }
+  return [...porId.values()];
+}
+
 /** Grupos (2+) de produtos nao excluidos com o mesmo titulo. Pura. */
 function agruparDuplicados(catalogo) {
   const grupos = new Map();
@@ -135,4 +155,4 @@ function idsPorTitulo(catalogo, titulo) {
     .map(p => String(p.id));
 }
 
-module.exports = { normalizar, baixarCatalogo, ESTADOS_DO_CATALOGO, agruparDuplicados, ordenarGrupo, decidirGrupo, aplicarCanonico, idsPorTitulo };
+module.exports = { normalizar, baixarCatalogo, catalogoPorTitulos, ESTADOS_DO_CATALOGO, agruparDuplicados, ordenarGrupo, decidirGrupo, aplicarCanonico, idsPorTitulo };

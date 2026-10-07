@@ -128,8 +128,15 @@ function buscarPendentes(limite) {
       let catalogo = null;
       try {
         const tok = fs.readFileSync('/app/data/hotmart_access_token.txt', 'utf8').trim();
-        catalogo = await require('/app/src/agents/hotmartCatalogo').baixarCatalogo(tok);
-      } catch (e) { console.error('catalogo indisponivel: ' + e.message); }
+        try {
+          catalogo = await require('/app/src/agents/hotmartCatalogo').baixarCatalogo(tok);
+        } catch (e) {
+          // Catalogo inteiro fora (500 da Hotmart, 07/10/2026): basta conferir os
+          // titulos DESTA rodada, um por um, pela busca por nome.
+          console.error('catalogo inteiro indisponivel (' + e.message + ') — conferindo ' + candidatos.length + ' titulos pela busca');
+          catalogo = await require('/app/src/agents/hotmartCatalogo').catalogoPorTitulos(tok, candidatos.map(r => r.title));
+        }
+      } catch (e) { console.error('catalogo indisponivel: ' + e.message); catalogo = null; }
       // Sem conferir o catalogo nao se publica (duplicaria produto). Mas o
       // aviso tem de ser DISTINTO de fila vazia: em 26/09/2026 o token venceu,
       // isto imprimia "[]" e oito lotes seguidos registraram "nada pendente" —

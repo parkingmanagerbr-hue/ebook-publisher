@@ -125,3 +125,21 @@ test('pagina do meio com MENOS itens nao encerra a leitura; so a vazia encerra',
   const cat = await baixarCatalogo('t', { fetchImpl, porPagina: 3 });
   assert.deepStrictEqual(cat.map(p => p.id), [1, 2, 3, 4, 5, 6, 7, 8]);
 });
+
+test('catalogo por titulos: busca cada titulo pelo nome, junta sem repetir, e falha se um titulo falhar', async () => {
+  const { catalogoPorTitulos, idsPorTitulo } = require('../src/agents/hotmartCatalogo');
+  const buscados = [];
+  const fetchImpl = async (url) => {
+    const nome = decodeURIComponent((url.match(/name=([^&]+)/) || [])[1] || '');
+    const pagina = Number(url.match(/page=(\d+)/)[1]);
+    if (pagina === 1) buscados.push(nome);
+    const dados = pagina === 1 ? ({ 'Livro A': [{ id: 1, name: 'Livro A' }, { id: 9, name: 'Livro A: segunda parte' }], 'Livro B': [{ id: 1, name: 'Livro A' }] }[nome] || []) : [];
+    return { ok: true, status: 200, json: async () => ({ data: dados }) };
+  };
+  const cat = await catalogoPorTitulos('t', ['Livro A', 'Livro B', 'Livro A', ''], { fetchImpl });
+  assert.deepStrictEqual(buscados, ['Livro A', 'Livro B'], 'titulo repetido e vazio nao viram busca');
+  assert.deepStrictEqual(cat.map(p => p.id).sort(), [1, 9]);
+  // a busca casa trecho; o titulo IGUAL e so o produto 1 ('segunda parte' e outro livro)
+  assert.deepStrictEqual(idsPorTitulo(cat, 'Livro A'), ['1']);
+  await assert.rejects(catalogoPorTitulos('t', ['X'], { fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }) }), /500/);
+});
