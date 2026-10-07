@@ -14,23 +14,25 @@ function banco() {
   return db;
 }
 
-test('protege PDF e capa de livro a venda na Cakto ou Hotmart, nao de rascunho', () => {
+test('protege PDF e capa de TODO livro, inclusive rascunho (07/10/2026: rascunho sem capa nunca publica)', () => {
   const p = arquivosProtegidos(banco());
   assert.ok(p.has(require('path').resolve('/d/pdfs/a.pdf')));
   assert.ok(p.has(require('path').resolve('/d/covers/a.png')));
   assert.ok(p.has(require('path').resolve('/d/pdfs/b.pdf')));
-  assert.ok(!p.has(require('path').resolve('/d/pdfs/c.pdf')), 'rascunho nao e protegido');
+  assert.ok(p.has(require('path').resolve('/d/pdfs/c.pdf')), 'rascunho tambem e protegido');
+  assert.ok(p.has(require('path').resolve('/d/covers/c.png')));
+  assert.ok(!p.has(require('path').resolve('/d/covers/orfa.png')), 'arquivo que nenhum livro referencia nao e protegido');
 });
 
 test('caso real: PDF antigo de produto Cakto sobrevive mesmo fora do teto', () => {
   const p = arquivosProtegidos(banco());
   const arquivos = [
     { full: '/d/pdfs/a.pdf', mtime: 1 },     // o mais velho, a venda
-    { full: '/d/pdfs/c.pdf', mtime: 2 },     // rascunho velho
+    { full: '/d/pdfs/orfao.pdf', mtime: 2 },  // nenhum livro aponta
     { full: '/d/pdfs/novo.pdf', mtime: 3 },
   ];
   const apagar = escolherExcedente(arquivos, 1, p).map(a => a.full);
-  assert.deepStrictEqual(apagar, ['/d/pdfs/c.pdf']);
+  assert.deepStrictEqual(apagar, ['/d/pdfs/orfao.pdf']);
 });
 
 test('controle: sem protecao, o teto apaga os mais velhos como antes', () => {

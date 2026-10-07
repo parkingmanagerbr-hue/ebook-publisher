@@ -13,12 +13,19 @@
  */
 const path = require('path');
 
-/** Caminhos (absolutos, normalizados) que a limpeza nunca pode apagar. */
+/**
+ * Caminhos (absolutos, normalizados) que a limpeza nunca pode apagar: TODO
+ * arquivo que algum livro referencia.
+ *
+ * 07/10/2026: a protecao listava as lojas (Cakto com URL, Hotmart) e deixava de
+ * fora o resto — livro so na Kiwify, Cakto sem `cakto_url` e o RASCUNHO, que
+ * precisa da capa em disco para ser publicado (portao da publicacao). Eram 2.086
+ * capas em uso expostas; a limpeza de 18:43 apagou 283 enquanto 4.053 capas
+ * estavam sendo refeitas. Lista de lojas envelhece a cada loja nova; "alguem
+ * aponta para este arquivo" nao. O teto passa a valer so para arquivo orfao.
+ */
 function arquivosProtegidos(db) {
-  const linhas = db.prepare(
-    "SELECT pdf_path, cover_path FROM ebooks WHERE (cakto_url IS NOT NULL AND cakto_url <> '') " +
-    "OR (hotmart_url IS NOT NULL AND hotmart_url <> '') OR (hotmart_product_id IS NOT NULL AND hotmart_product_id <> '')"
-  ).all();
+  const linhas = db.prepare('SELECT pdf_path, cover_path FROM ebooks').all();
   const s = new Set();
   for (const l of linhas) for (const p of [l.pdf_path, l.cover_path]) if (p) s.add(path.resolve(p));
   return s;
