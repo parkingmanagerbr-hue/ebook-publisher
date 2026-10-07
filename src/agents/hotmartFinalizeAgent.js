@@ -173,14 +173,22 @@ function saveState(s) {
   } catch (e) { log.warn('saveState: ' + e.message); }
 }
 
-/** Lista todos os produtos. A API ignora max/size: sempre 10 itens por página. */
+/**
+ * Lista os RASCUNHOS (o unico estado que este agente usa).
+ *
+ * 07/10/2026: a listagem inteira passou a dar 500 na Hotmart, e este agente via
+ * "0 rascunhos" enquanto os livros novos ficavam em rascunho, sem vender. E,
+ * mesmo antes, ele parava em 300 paginas de 10 = 3.000 produtos, com 6.500 no
+ * catalogo: rascunho alem disso nunca era finalizado. Filtrar por DRAFT resolve
+ * os dois; so a pagina VAZIA encerra (com filtro vem pagina do meio menor).
+ */
 async function listProducts() {
   if (!token()) throw new Error('HOTMART_ACCESS_TOKEN ausente');
   const all = [];
   for (let p = 1; p <= 300; p++) {
     let data;
     try {
-      const r = await axios.get(API + '/product/v2/product?page=' + p, { headers: headers(), timeout: 30000 });
+      const r = await axios.get(API + '/product/v2/product?status=DRAFT&rows=100&page=' + p, { headers: headers(), timeout: 30000 });
       data = r.data;
     } catch (e) {
       if (e.response && e.response.status === 401) throw new Error('token expirado (401) — renove HOTMART_ACCESS_TOKEN');
@@ -189,7 +197,6 @@ async function listProducts() {
     }
     if (!data || !data.data || !data.data.length) break;
     all.push(...data.data);
-    if (data.size && all.length >= data.size) break;
     await sleep(200);
   }
   return all;
