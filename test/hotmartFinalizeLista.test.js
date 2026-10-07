@@ -49,3 +49,16 @@ test('listagem que falha NAO vira "zero rascunhos": lanca LISTAGEM_FALHOU', asyn
   await assert.rejects(listProducts(), /LISTAGEM_FALHOU/);
   require.cache[caminhoAxios].exports.get = antes;
 });
+
+test('finalizado ganha URL no banco e sai da lista de rascunhos; URL existente nao e sobrescrita', () => {
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE ebooks (title TEXT, hotmart_product_id TEXT, hotmart_url TEXT)');
+  db.prepare('INSERT INTO ebooks VALUES (?,?,?)').run('Rascunho', '8681207', null);
+  db.prepare('INSERT INTO ebooks VALUES (?,?,?)').run('Ja tinha', '8000001', 'https://hotmart.com/product/outra');
+  const { gravarUrl, rascunhosDoBanco } = require('../src/agents/hotmartFinalizeAgent');
+  assert.strictEqual(gravarUrl(8681207, db), 1);
+  assert.strictEqual(gravarUrl(8000001, db), 0);
+  assert.strictEqual(db.prepare('SELECT hotmart_url u FROM ebooks WHERE hotmart_product_id = ?').get('8000001').u, 'https://hotmart.com/product/outra');
+  assert.deepStrictEqual(rascunhosDoBanco(db), []);
+});

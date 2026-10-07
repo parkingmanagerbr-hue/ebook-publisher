@@ -214,6 +214,24 @@ function rascunhosDoBanco(db = require('../core/database').getDb()) {
   ).all().map(r => ({ id: Number(r.id), name: r.name, status: 'DRAFT' })).filter(r => Number.isFinite(r.id) && r.id > 0);
 }
 
+/**
+ * Grava a URL de venda no livro do produto finalizado. Sem isso ele seguia
+ * "rascunho" no banco para sempre (id sem URL) e a lista de reserva so crescia,
+ * empurrando os rascunhos novos para fora da janela conferida.
+ */
+function gravarUrl(id, db) {
+  try {
+    const banco = db || require('../core/database').getDb();
+    const n = banco.prepare("UPDATE ebooks SET hotmart_url = ? WHERE hotmart_product_id = ? AND COALESCE(hotmart_url,'') = ''")
+      .run('https://hotmart.com/product/' + id, String(id)).changes;
+    if (n) log.info('[finalize] url gravada no livro do produto ' + id);
+    return n;
+  } catch (e) {
+    log.warn('[finalize] url nao gravada para ' + id + ': ' + String(e.message).slice(0, 80));
+    return 0;
+  }
+}
+
 /** Envia um produto para aprovação. Retorna true se aceito. */
 async function approveProduct(id) {
   await axios.post(API + '/product/v1/product/' + id + '/approval', {}, { headers: headers(), timeout: 30000 });
@@ -289,6 +307,7 @@ async function finalizeDrafts() {
       await approveProduct(p.id);
       done.add(p.id);
       stats.sent++;
+      gravarUrl(p.id);
       log.info('[finalize] ✅ ' + p.id + ' "' + (p.name || '').slice(0, 45) + '"');
     } catch (e) {
       const st = e.response ? e.response.status : 0;
@@ -310,7 +329,7 @@ async function finalizeDrafts() {
   return stats;
 }
 
-module.exports = { finalizeDrafts, listProducts, rascunhosDoBanco };
+module.exports = { finalizeDrafts, listProducts, rascunhosDoBanco, gravarUrl };
 
 if (require.main === module) {
   finalizeDrafts()
