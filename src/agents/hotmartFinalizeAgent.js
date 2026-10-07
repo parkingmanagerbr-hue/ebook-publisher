@@ -192,14 +192,26 @@ async function listProducts() {
       data = r.data;
     } catch (e) {
       if (e.response && e.response.status === 401) throw new Error('token expirado (401) — renove HOTMART_ACCESS_TOKEN');
-      log.warn('[finalize] página ' + p + ': ' + e.message.slice(0, 60));
-      break;
+      // Falha de listagem NAO e "nenhum rascunho": antes isto dava break e o
+      // resumo dizia "0 rascunhos pendentes" com tres livros parados (07/10/2026).
+      throw new Error('LISTAGEM_FALHOU: página ' + p + ' — ' + e.message.slice(0, 60));
     }
     if (!data || !data.data || !data.data.length) break;
     all.push(...data.data);
     await sleep(200);
   }
   return all;
+}
+
+/**
+ * Rascunhos segundo o BANCO: livro com produto criado na Hotmart (id gravado)
+ * e sem URL de venda — e o rastro que o publicador deixa quando o cadastro nao
+ * finaliza. Reserva para quando a Hotmart nao lista. `db` injetavel.
+ */
+function rascunhosDoBanco(db = require('../core/database').getDb()) {
+  return db.prepare(
+    "SELECT hotmart_product_id id, title name FROM ebooks WHERE COALESCE(hotmart_product_id,'') <> '' AND COALESCE(hotmart_url,'') = '' ORDER BY rowid"
+  ).all().map(r => ({ id: Number(r.id), name: r.name, status: 'DRAFT' })).filter(r => Number.isFinite(r.id) && r.id > 0);
 }
 
 /** Envia um produto para aprovação. Retorna true se aceito. */
@@ -245,6 +257,22 @@ async function finalizeDrafts() {
       if (!novo) { log.warn('[finalize] renovação falhou: ' + e.message); return { error: e.message, ...stats }; }
       try { products = await listProducts(); }
       catch (e2) { log.warn('[finalize] após renovar: ' + e2.message); return { error: e2.message, ...stats }; }
+    } else if (/LISTAGEM_FALHOU/.test(e.message)) {
+      // A Hotmart nao lista (500 em quase todo filtro em 07/10/2026). O banco
+      // sabe quem ficou em rascunho: produto criado (id gravado) sem URL de venda.
+      // O banco tem 234 "rascunhos", quase todos produtos ATIVOS que so nao
+      // tiveram a URL gravada; mandar ativo para aprovacao poderia tira-lo da
+      // venda. Por isso cada um e CONFERIDO na Hotmart (busca por nome, que
+      // ainda responde) e so entra quem esta de fato em DRAFT. Os mais novos.
+      const candidatos = rascunhosDoBanco().slice(-60);
+      const { catalogoPorTitulos } = require('./hotmartCatalogo');
+      products = [];
+      try {
+        const achados = await catalogoPorTitulos(token(), candidatos.map(c => c.name));
+        const status = new Map(achados.map(p => [String(p.id), p.status]));
+        products = candidatos.filter(c => status.get(String(c.id)) === 'DRAFT');
+      } catch (e3) { log.warn('[finalize] conferencia por nome falhou: ' + e3.message.slice(0, 80)); }
+      log.warn('[finalize] ' + e.message + ' — rascunhos do banco: ' + candidatos.length + ' conferidos, ' + products.length + ' em DRAFT de fato');
     } else {
       log.warn('[finalize] ' + e.message);
       return { error: e.message, ...stats };
@@ -282,7 +310,7 @@ async function finalizeDrafts() {
   return stats;
 }
 
-module.exports = { finalizeDrafts, listProducts };
+module.exports = { finalizeDrafts, listProducts, rascunhosDoBanco };
 
 if (require.main === module) {
   finalizeDrafts()

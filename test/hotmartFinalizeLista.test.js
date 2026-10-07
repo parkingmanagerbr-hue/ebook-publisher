@@ -26,3 +26,26 @@ test('listProducts pede status=DRAFT e atravessa pagina do meio menor', async ()
   assert.ok(urls.every(u => /status=DRAFT/.test(u)), 'toda pagina pede so rascunho');
   assert.strictEqual(urls.length, 4, 'para na primeira pagina vazia');
 });
+
+test('rascunhos do banco: produto criado (id) e sem URL de venda; o resto fica de fora', () => {
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE ebooks (title TEXT, hotmart_product_id TEXT, hotmart_url TEXT)');
+  const i = db.prepare('INSERT INTO ebooks VALUES (?,?,?)');
+  i.run('Rascunho', '8680746', null);
+  i.run('Rascunho vazio', '8680801', '');
+  i.run('Publicado', '8664721', 'https://hotmart.com/product/8664721');
+  i.run('Nunca criado', null, null);
+  i.run('Id torto', 'abc', null);
+  const { rascunhosDoBanco } = require('../src/agents/hotmartFinalizeAgent');
+  assert.deepStrictEqual(rascunhosDoBanco(db).map(r => r.id), [8680746, 8680801]);
+});
+
+test('listagem que falha NAO vira "zero rascunhos": lanca LISTAGEM_FALHOU', async () => {
+  const caminhoAxios = require.resolve('axios');
+  const antes = require.cache[caminhoAxios].exports.get;
+  require.cache[caminhoAxios].exports.get = async () => { const e = new Error('Request failed with status code 500'); e.response = { status: 500 }; throw e; };
+  const { listProducts } = require('../src/agents/hotmartFinalizeAgent');
+  await assert.rejects(listProducts(), /LISTAGEM_FALHOU/);
+  require.cache[caminhoAxios].exports.get = antes;
+});
