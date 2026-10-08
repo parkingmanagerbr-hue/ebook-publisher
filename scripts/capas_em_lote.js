@@ -232,8 +232,19 @@ function registrarLote(resultados) {
 }
 
 /** Sobe a capa e grava no produto, tudo de dentro da pagina logada. */
-async function aplicar(page, id, b64, locale) {
-  return await page.evaluate(async (dados, produto, loc) => {
+/**
+ * Tipo da imagem pelos primeiros bytes (nao pela extensao). 08/10/2026: as capas
+ * passaram de PNG para JPEG para liberar disco, e este envio rotulava tudo como
+ * image/png "capa.png" — JPEG com rotulo de PNG. Pura.
+ */
+function tipoDaImagem(buf) {
+  const b = buf || [];
+  if (b[0] === 0xFF && b[1] === 0xD8) return { nome: 'capa.jpg', tipo: 'image/jpeg' };
+  return { nome: 'capa.png', tipo: 'image/png' };
+}
+
+async function aplicar(page, id, b64, locale, img = { nome: 'capa.png', tipo: 'image/png' }) {
+  return await page.evaluate(async (dados, produto, loc, nomeArq, tipoArq) => {
     const tok = localStorage.getItem('token');
     // SESSAO_MORTA e diferente de falha do produto: quando a sessao cai, TODOS
     // falham igual, e insistir so consumiria a fila inteira em erro. Quem chama
@@ -241,7 +252,7 @@ async function aplicar(page, id, b64, locale) {
     if (!tok) return { erro: 'SESSAO_MORTA' };
     const bin = Uint8Array.from(atob(dados), c => c.charCodeAt(0));
     // File (nao Blob): o Blob anonimo vira midia name="blob" e o PUT da 500.
-    const arquivo = new File([bin], 'capa.png', { type: 'image/png' });
+    const arquivo = new File([bin], nomeArq, { type: tipoArq });
     const fd = new FormData();
     fd.append('data', arquivo);
 
@@ -270,7 +281,7 @@ async function aplicar(page, id, b64, locale) {
     const dep = await (await fetch(base, { headers: H, credentials: 'include' })).json();
     // Confirmar pelo EFEITO, nunca pelo status: ja houve 200 que nao gravava nada.
     return { capa: !!(dep.coverPhoto && dep.coverPhoto.webPath), locale: dep.contentLocale };
-  }, b64, String(id), locale);
+  }, b64, String(id), locale, img.nome, img.tipo);
 }
 
 async function main() {
@@ -314,8 +325,9 @@ async function main() {
       let r = { erro: 'nao processado' };
       try {
         if (!local) throw new Error('capa nao veio do VPS');
-        const b64 = fs.readFileSync(local).toString('base64');
-        r = await aplicar(page, item.pid, b64, paraLocaleHotmart(item.language));
+        const bruto = fs.readFileSync(local);
+        const b64 = bruto.toString('base64');
+        r = await aplicar(page, item.pid, b64, paraLocaleHotmart(item.language), tipoDaImagem(bruto));
       } catch (e) {
         r = { erro: String(e.message).slice(0, 80) };
       }
@@ -344,7 +356,7 @@ async function main() {
     (idiomasCorrigidos ? ` | ${idiomasCorrigidos} com idioma nao-portugues gravado` : ''));
 }
 
-module.exports = { paraLocaleHotmart };
+module.exports = { paraLocaleHotmart, tipoDaImagem };
 
 if (require.main === module) {
   main().then(() => process.exit(0)).catch(e => { console.error('ERRO:', e.message); process.exit(1); });
