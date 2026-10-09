@@ -126,6 +126,7 @@ function buscarPendentes(limite) {
     (async () => {
       const ok = [];
       let catalogo = null;
+      let naoConferidos = new Set();
       try {
         const tok = fs.readFileSync('/app/data/hotmart_access_token.txt', 'utf8').trim();
         try {
@@ -134,7 +135,12 @@ function buscarPendentes(limite) {
           // Catalogo inteiro fora (500 da Hotmart, 07/10/2026): basta conferir os
           // titulos DESTA rodada, um por um, pela busca por nome.
           console.error('catalogo inteiro indisponivel (' + e.message + ') — conferindo ' + candidatos.length + ' titulos pela busca');
-          catalogo = await require('/app/src/agents/hotmartCatalogo').catalogoPorTitulos(tok, candidatos.map(r => r.title));
+          // Titulo cuja busca falha (500 do produto quebrado deles) fica para outra
+          // rodada; os outros seguem (09/10/2026: um titulo travava o lote todo).
+          const conf = await require('/app/src/agents/hotmartCatalogo').conferirTitulos(tok, candidatos.map(r => r.title));
+          catalogo = conf.catalogo;
+          naoConferidos = new Set(conf.naoConferidos);
+          if (naoConferidos.size) console.error('busca falhou para ' + naoConferidos.size + ' titulo(s), ficam para outra rodada: ' + [...naoConferidos].map(t => t.slice(0, 40)).join(' | '));
         }
       } catch (e) { console.error('catalogo indisponivel: ' + e.message); catalogo = null; }
       // Sem conferir o catalogo nao se publica (duplicaria produto). Mas o
@@ -145,6 +151,7 @@ function buscarPendentes(limite) {
       const { idsPorTitulo } = require('/app/src/agents/hotmartCatalogo');
       const liga = db.prepare("UPDATE ebooks SET hotmart_product_id = ?, hotmart_url = ?, status = 'published' WHERE id = ?");
       for (const r of candidatos) {
+        if (naoConferidos.has(String(r.title || '').trim())) continue;
         const existentes = idsPorTitulo(catalogo, r.title);
         if (existentes.length) {
           liga.run(existentes[0], 'https://hotmart.com/product/' + existentes[0], r.id);

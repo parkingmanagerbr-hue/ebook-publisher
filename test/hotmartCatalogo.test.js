@@ -152,3 +152,29 @@ test('catalogoPorTitulos sem titulos (ou so nulos) nao consulta nada', async () 
   assert.deepStrictEqual(await catalogoPorTitulos('t', [null, undefined, '  '], { fetchImpl }), []);
   assert.strictEqual(chamadas, 0);
 });
+
+test('conferirTitulos: titulo cuja busca da 500 fica de fora; os outros sao conferidos', async () => {
+  const { conferirTitulos } = require('../src/agents/hotmartCatalogo');
+  const fetchImpl = async (url) => {
+    if (/name=Fotografia/.test(url)) return { ok: false, status: 500, json: async () => ({}) };
+    const pagina = Number(url.match(/page=(\d+)/)[1]);
+    const dados = /name=Livro%20B/.test(url) && pagina === 1 ? [{ id: 7, name: 'Livro B' }] : [];
+    return { ok: true, status: 200, json: async () => ({ data: dados }) };
+  };
+  const r = await conferirTitulos('t', ['Fotografia de Moda Sustentavel', ' Livro B ', 'Livro C'], { fetchImpl });
+  assert.deepStrictEqual(r.naoConferidos, ['Fotografia de Moda Sustentavel']);
+  assert.deepStrictEqual(r.catalogo.map(p => p.id), [7]);
+});
+
+test('conferirTitulos: nenhum titulo conferido e a Hotmart fora — lanca, nao devolve catalogo vazio', async () => {
+  const { conferirTitulos } = require('../src/agents/hotmartCatalogo');
+  const fetchImpl = async () => ({ ok: false, status: 500, json: async () => ({}) });
+  await assert.rejects(conferirTitulos('t', ['A', 'B'], { fetchImpl }), /500/);
+  assert.deepStrictEqual(await conferirTitulos('t', [], { fetchImpl }), { catalogo: [], naoConferidos: [] });
+});
+
+test('conferirTitulos sem titulos (ausente ou so nulos) nao consulta nada', async () => {
+  const { conferirTitulos } = require('../src/agents/hotmartCatalogo');
+  assert.deepStrictEqual(await conferirTitulos('t'), { catalogo: [], naoConferidos: [] });
+  assert.deepStrictEqual(await conferirTitulos('t', [null, '  ']), { catalogo: [], naoConferidos: [] });
+});

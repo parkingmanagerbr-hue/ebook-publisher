@@ -88,6 +88,29 @@ async function catalogoPorTitulos(token, titulos, { fetchImpl = fetch, porPagina
   return [...porId.values()];
 }
 
+/**
+ * Como catalogoPorTitulos, mas o titulo cuja busca FALHA fica de fora em vez de
+ * derrubar a rodada. 09/10/2026: a busca por nome devolve 500 para qualquer termo
+ * que case com o produto quebrado do lado da Hotmart (ate "Fotografia" sozinho),
+ * e um titulo azarado travava o lote inteiro — horas sem publicar nada. A trava
+ * anti-duplicata continua: titulo nao conferido NAO e publicado nesta rodada.
+ * Se nenhum titulo for conferido, lanca (a Hotmart esta fora, nao e o titulo).
+ */
+async function conferirTitulos(token, titulos, { fetchImpl = fetch, porPagina = 100, maxPaginas = 20 } = {}) {
+  const opcoes = { fetchImpl, porPagina, maxPaginas };
+  const porId = new Map();
+  const naoConferidos = [];
+  const unicos = [...new Set((titulos || []).map(x => String(x || '').trim()).filter(Boolean))];
+  let ultimoErro = null;
+  for (const t of unicos) {
+    try {
+      for (const p of await baixarPaginas(token, '&name=' + encodeURIComponent(t.slice(0, 60)), opcoes)) porId.set(String(p.id), p);
+    } catch (e) { naoConferidos.push(t); ultimoErro = e; }
+  }
+  if (unicos.length && naoConferidos.length === unicos.length) throw ultimoErro;
+  return { catalogo: [...porId.values()], naoConferidos };
+}
+
 /** Grupos (2+) de produtos nao excluidos com o mesmo titulo. Pura. */
 function agruparDuplicados(catalogo) {
   const grupos = new Map();
@@ -155,4 +178,4 @@ function idsPorTitulo(catalogo, titulo) {
     .map(p => String(p.id));
 }
 
-module.exports = { normalizar, baixarCatalogo, catalogoPorTitulos, ESTADOS_DO_CATALOGO, agruparDuplicados, ordenarGrupo, decidirGrupo, aplicarCanonico, idsPorTitulo };
+module.exports = { normalizar, baixarCatalogo, catalogoPorTitulos, conferirTitulos, ESTADOS_DO_CATALOGO, agruparDuplicados, ordenarGrupo, decidirGrupo, aplicarCanonico, idsPorTitulo };
