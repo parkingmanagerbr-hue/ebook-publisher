@@ -143,3 +143,12 @@ test('catalogo por titulos: busca cada titulo pelo nome, junta sem repetir, e fa
   assert.deepStrictEqual(idsPorTitulo(cat, 'Livro A'), ['1']);
   await assert.rejects(catalogoPorTitulos('t', ['X'], { fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }) }), /500/);
 });
+
+test('catalogoPorTitulos sem titulos (ou so nulos) nao consulta nada', async () => {
+  const { catalogoPorTitulos } = require('../src/agents/hotmartCatalogo');
+  let chamadas = 0;
+  const fetchImpl = async () => { chamadas++; return { ok: true, status: 200, json: async () => ({ data: [] }) }; };
+  assert.deepStrictEqual(await catalogoPorTitulos('t', undefined, { fetchImpl }), []);
+  assert.deepStrictEqual(await catalogoPorTitulos('t', [null, undefined, '  '], { fetchImpl }), []);
+  assert.strictEqual(chamadas, 0);
+});

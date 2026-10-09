@@ -60,4 +60,21 @@ function pastaDeTrabalho(nome, env = process.env) {
   return path.join(require('os').tmpdir(), nome);
 }
 
-module.exports = { noServidor, urlCdpDoServidor, rodarAqui, pastaDeTrabalho };
+/**
+ * Pasta temporaria NOVA dentro da pasta de trabalho, legivel pelo Chrome.
+ * 09/10/2026: mkdtempSync cria com modo 700 (dono root) e o Chrome do
+ * navegador-hotmart roda como uid 1000 — o upload mandava o NOME do PDF e
+ * zero bytes. A Hotmart registrava o arquivo com size 0, o reenvio repetia a
+ * cada rodada e 8 produtos seguiram a venda sem conteudo.
+ */
+function pastaTemporaria(nome, env = process.env) {
+  const fs = require('fs');
+  const path = require('path');
+  const base = pastaDeTrabalho(nome, env);
+  fs.mkdirSync(base, { recursive: true });
+  const dir = fs.mkdtempSync(base + path.sep);
+  fs.chmodSync(dir, 0o755);
+  return dir;
+}
+
+module.exports = { noServidor, urlCdpDoServidor, rodarAqui, pastaDeTrabalho, pastaTemporaria };

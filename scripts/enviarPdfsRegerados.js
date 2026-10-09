@@ -16,7 +16,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const CONTAINER = process.env.EBOOK_CONTAINER || 'platform-ebook-publisher-1';
-const { noServidor, rodarAqui, pastaDeTrabalho } = require('../src/core/modoServidor');
+const { noServidor, rodarAqui, pastaTemporaria } = require('../src/core/modoServidor');
 const arg = (n, p) => { const a = process.argv.find(x => x.startsWith('--' + n + '=')); return a ? a.split('=')[1] : p; };
 
 const ssh = cmd => execFileSync('ssh', ['-o', 'ConnectTimeout=30', 'vps', cmd], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -66,13 +66,16 @@ async function main() {
   const lista = prontos(limite);
   if (!lista.length) { console.log('nenhum PDF regerado esperando envio'); return; }
   // Na VPS a pasta e a compartilhada com o Chrome (o upload passa o caminho).
-  const base = pastaDeTrabalho('pdfs-hm');
-  fs.mkdirSync(base, { recursive: true });
-  const destino = fs.mkdtempSync(base + path.sep);
+  // pastaTemporaria: modo 755, senao o Chrome (outro usuario) le zero bytes.
+  const destino = pastaTemporaria('pdfs-hm');
+  try { await enviar(lista, destino); } finally { fs.rmSync(destino, { recursive: true, force: true }); }
+}
+
+async function enviar(lista, destino) {
   const pares = [];
   for (const item of lista) {
     const local = path.join(destino, 'pdf_' + item.produto + '.pdf');
-    if (noServidor()) fs.copyFileSync(item.pdf_path, local);
+    if (noServidor()) { fs.copyFileSync(item.pdf_path, local); fs.chmodSync(local, 0o644); }
     else {
       ssh('docker cp ' + CONTAINER + ':' + item.pdf_path + ' /tmp/envio_' + item.produto + '.pdf');
       execFileSync('scp', ['-q', 'vps:/tmp/envio_' + item.produto + '.pdf', local]);
@@ -106,7 +109,6 @@ async function main() {
       console.log(ssh('docker exec ' + CONTAINER + ' node /tmp/limpa_fila.js').trim().split('\n').pop());
     }
   }
-  fs.rmSync(destino, { recursive: true, force: true });
 }
 
 module.exports = { extrairJson, produtosConfirmados };
