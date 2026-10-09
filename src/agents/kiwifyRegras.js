@@ -117,10 +117,28 @@ function descritorFatura(titulo) {
   return (s.slice(0, 10) || 'Ebook').padEnd(3, 'x');
 }
 
+/**
+ * Nome do produto na Kiwify: o titulo cortado em 100 caracteres. Pura.
+ *
+ * 09/10/2026: a criacao cortava o nome, mas a busca "ja existe?" e a conferencia
+ * depois de criar usavam o titulo INTEIRO. Titulo acima de 100 nunca era achado
+ * e, criado, era recusado como "produto errado" antes de gravar o id: um produto
+ * novo por rodada. 58 livros viraram 200 produtos (ate 9 copias), e 537 ficavam
+ * voltando a fila. Criar, buscar e conferir usam ESTE nome.
+ */
+function nomeKiwify(titulo) {
+  return String(titulo || '').trim().slice(0, 100);
+}
+
+/** Chave de comparacao de nomes (caixa, espacos, forma unicode). Pura. */
+function chaveDeNome(nome) {
+  return String(nome == null ? '' : nome).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 /** Corpo do POST que cria o produto. Pura — o publisher so manda. */
 function corpoDeCriacao(livro) {
   return {
-    name: String(livro.title || '').slice(0, 100),
+    name: nomeKiwify(livro.title),
     price: precoCentavos(livro.preco),
     payment_type: 'charge',
     sales_page_url: livro.paginaDeVendas || '',
@@ -161,10 +179,10 @@ function esperaPorTentativa(tentativa, base = 5000, teto = 120000) {
 
 /** O produto aberto e o livro certo? Mesmo cuidado da Hotmart. Pura. */
 function mesmoProdutoKiwify(nomeNaKiwify, titulo) {
-  const n = t => String(t == null ? '' : t).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
-  const a = n(nomeNaKiwify);
+  const a = chaveDeNome(nomeNaKiwify);
   if (!a) return true;
-  return a === n(titulo);
+  // A Kiwify guarda o nome cortado: compara com o nome que foi CRIADO.
+  return a === chaveDeNome(nomeKiwify(titulo));
 }
 
 /**
@@ -229,5 +247,5 @@ function valeTentarKiwify(ultimaFalha, agora = Date.now(), espera = ESPERA_APOS_
 module.exports = {
   valeTentarKiwify, ESPERA_APOS_LIMITE_MS,
   CATEGORIAS, NOMES_CATEGORIA, categoriaKiwify, precoCentavos, moedaPorIdioma, descricaoKiwify,
-  descritorFatura, corpoDeCriacao, corpoDeAtualizacao, mesmoProdutoKiwify, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa,
+  descritorFatura, corpoDeCriacao, corpoDeAtualizacao, mesmoProdutoKiwify, nomeKiwify, chaveDeNome, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa,
 };

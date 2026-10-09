@@ -223,3 +223,15 @@ test('as regras de categoria nao tem byte de controle (barra-b virando backspace
   const ruins = [...s].filter((ch) => { const c = ch.charCodeAt(0); return c < 9 || c === 11 || c === 12 || (c >= 14 && c < 32); });
   assert.strictEqual(ruins.length, 0);
 });
+
+test('nome na Kiwify: o mesmo corte na criacao e na conferencia', () => {
+  const { nomeKiwify, chaveDeNome } = require('../src/agents/kiwifyRegras');
+  const longo = 'X'.repeat(90) + ' Fim Do Titulo Que Passa Dos Cem';
+  assert.strictEqual(nomeKiwify('  ' + longo), longo.slice(0, 100));
+  assert.strictEqual(nomeKiwify(undefined), '');
+  assert.strictEqual(corpoDeCriacao({ title: longo }).name, nomeKiwify(longo));
+  assert.strictEqual(mesmoProdutoKiwify(longo.slice(0, 100), longo), true, 'nome cortado e o mesmo produto');
+  assert.strictEqual(mesmoProdutoKiwify(longo.slice(0, 99) + 'Z', longo), false, 'nome diferente continua recusado');
+  assert.strictEqual(chaveDeNome(null), '');
+  assert.strictEqual(chaveDeNome(' A  b '), 'a b');
+});

@@ -305,3 +305,26 @@ test('REGRESSAO: catalogo grande nao pode ser cortado (JSON quebrado = duplicata
   assert.strictEqual(porNome.size, 200);
   assert.ok(porNome.has('livro numero 199 com um titulo longo o suficiente para encher a resposta'));
 });
+
+// 09/10/2026: titulo acima de 100 caracteres virava um produto novo por rodada
+// (58 livros -> 200 produtos). A Kiwify guarda o nome cortado.
+const LONGO = 'Barba e Pele Impecaveis: O Guia Definitivo para Homens: Domine a Rotina de Cuidados e Eleve sua Autoestima Todo Dia';
+
+test('titulo longo que ja esta la (nome cortado em 100) e achado, nao duplicado', async () => {
+  assert.ok(LONGO.length > 100);
+  const p = paginaFalsa({ produtos: [{ id: 'longo1', name: LONGO.slice(0, 100) }] });
+  const r = await publicarNaKiwify(p, { ...LIVRO, title: LONGO }, { cred: CRED });
+  assert.deepStrictEqual([r.jaExistia, r.id], [true, 'longo1']);
+  assert.ok(!p.chamadas.some(c => c.metodo === 'POST'), 'nao cria a segunda copia');
+});
+
+test('titulo longo recem-criado passa na conferencia e grava (antes: PRODUTO_ERRADO e id perdido)', async () => {
+  const p = paginaFalsa({
+    criar: { status: 200, texto: JSON.stringify({ id: 'longo2' }) },
+    ao_buscar_id: { status: 200, texto: JSON.stringify({ id: 'longo2', name: LONGO.slice(0, 100) }) },
+  });
+  const r = await publicarNaKiwify(p, { ...LIVRO, title: LONGO }, { cred: CRED });
+  assert.deepStrictEqual([r.jaExistia, r.id], [false, 'longo2']);
+  assert.strictEqual(p.chamadas.find(c => c.metodo === 'POST').corpo.name, LONGO.slice(0, 100));
+  assert.ok(p.chamadas.some(c => c.metodo === 'PUT'), 'seguiu ate gravar a categoria');
+});

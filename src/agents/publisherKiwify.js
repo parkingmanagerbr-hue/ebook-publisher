@@ -14,7 +14,7 @@
  * Ele nao preenche cadastro, documento nem dado bancario: a conta so recebe
  * quando o titular completa isso no painel.
  */
-const { corpoDeCriacao, corpoDeAtualizacao, categoriaKiwify, mesmoProdutoKiwify, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa } = require('./kiwifyRegras');
+const { corpoDeCriacao, corpoDeAtualizacao, categoriaKiwify, mesmoProdutoKiwify, nomeKiwify, chaveDeNome, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa } = require('./kiwifyRegras');
 
 let log;
 try { log = require('../core/logger').createLogger('kiwify'); }
@@ -91,7 +91,7 @@ async function catalogo(page, cred, opcoes) {
   const porNome = new Map();
   for (const p of lista) {
     if (!p || !p.name) continue;
-    porNome.set(String(p.name).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim(), p.id);
+    porNome.set(chaveDeNome(p.name), p.id);
   }
   return { total: lista.length, porNome };
 }
@@ -106,7 +106,8 @@ async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada } =
   if (!titulo) throw new Error('KIWIFY_SEM_TITULO: livro sem nome');
 
   const { porNome, total } = await catalogo(page, credenciais_, opcoesDeChamada);
-  const chave = titulo.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+  // A Kiwify guarda o nome cortado em 100: buscar pelo titulo inteiro nunca acha.
+  const chave = chaveDeNome(nomeKiwify(titulo));
   if (porNome.has(chave)) {
     const id = porNome.get(chave);
     log.info('ja estava na Kiwify: "' + umaLinha(titulo) + '" id=' + umaLinha(id, 40) + ' (catalogo com ' + total + ')');
