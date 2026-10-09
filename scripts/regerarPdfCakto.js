@@ -41,6 +41,18 @@ function pendentes(db, limite, existe = fs.existsSync) {
     .slice(0, limite);
 }
 
+/**
+ * Livro com o PDF refeito volta para a fila da entrega SEM perder a marca de
+ * "pausado por nos". 09/10/2026: aqui havia um DELETE dessa marca — e e ela que
+ * autoriza o entregaCakto a reativar. Sem ela, a entrega gravava o link e o
+ * produto ficava em waiting_config para sempre: 3.568 livros com PDF pronto e
+ * checkout fora do ar, ~250 por dia (o ritmo da regeneracao).
+ */
+function reabrir(db, ebookId) {
+  return db.prepare("UPDATE cakto_entrega SET resultado = 'pdf-regerado', quando = ? WHERE ebook_id = ? AND resultado = 'pausado-sem-pdf'")
+    .run(Date.now(), ebookId).changes;
+}
+
 async function main() {
   const limite = parseInt(arg('limite', '1'), 10);
   const db = require('../src/core/database').getDb();
@@ -52,8 +64,6 @@ async function main() {
   const { generatePDF } = require('../src/agents/pdfAgent');
   const { sanearLivro } = require('../src/core/textoDegenerado');
   const grava = db.prepare('UPDATE ebooks SET pdf_path = ? WHERE id = ?');
-  // Sai da lista de pausados para o entregaCakto reativar na proxima rodada.
-  const reabre = db.prepare("DELETE FROM cakto_entrega WHERE ebook_id = ? AND resultado = 'pausado-sem-pdf'");
   let ok = 0, falha = 0;
   for (const e of fila) {
     try {
@@ -69,7 +79,7 @@ async function main() {
       const capa = e.cover_path && fs.existsSync(e.cover_path) ? e.cover_path : null;
       const caminho = await generatePDF({ ...novo, title: e.title, subtitle: e.subtitle || novo.subtitle, id: e.id, language: e.language || 'pt-BR' }, capa);
       grava.run(caminho, e.id);
-      reabre.run(e.id);
+      reabrir(db, e.id); // sai da fila de regerar e o entregaCakto reativa
       ok++;
       console.log('OK ' + e.id.slice(0, 8) + ' ' + (guardado ? '(texto guardado) ' : '(reescrito) ') + String(e.title).slice(0, 50) + ' -> ' + caminho);
     } catch (err) {
@@ -80,6 +90,6 @@ async function main() {
   console.log(JSON.stringify({ fila: fila.length, ok, falha, textosGuardados: quantosGuardados(db) }));
 }
 
-module.exports = { pendentes, nota };
+module.exports = { pendentes, nota, reabrir };
 
 if (require.main === module) main().catch(e => { console.error('ERRO ' + e.message); process.exit(1); });

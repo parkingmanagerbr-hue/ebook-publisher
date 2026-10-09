@@ -43,3 +43,21 @@ test('usa fs.existsSync por padrao', () => {
   assert.deepStrictEqual(pendentes(bancoFalso([L('x', { pdf_path: '/nao/existe.pdf' })]), 5).map(e => e.id), ['x']);
   assert.strictEqual(nota({ cover_path: '/nao/existe.jpg', language: 'pt' }), 100);
 });
+
+test('PDF refeito: sai da fila de regerar e CONTINUA marcado como pausado por nos (senao nunca volta a vender)', () => {
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE ebooks (id TEXT, title TEXT, subtitle TEXT, topic TEXT, language TEXT, cover_path TEXT, pdf_path TEXT)');
+  db.exec('CREATE TABLE cakto_entrega (ebook_id TEXT PRIMARY KEY, produto TEXT, resultado TEXT, quando INTEGER)');
+  db.prepare('INSERT INTO ebooks VALUES (?,?,?,?,?,?,?)').run('L1', 'Livro', null, 't', 'pt-BR', null, null);
+  db.prepare('INSERT INTO ebooks VALUES (?,?,?,?,?,?,?)').run('L2', 'Outro', null, 't', 'pt-BR', null, null);
+  db.prepare('INSERT INTO cakto_entrega VALUES (?,?,?,?)').run('L1', 'p1', 'pausado-sem-pdf', 1);
+  db.prepare('INSERT INTO cakto_entrega VALUES (?,?,?,?)').run('L2', 'p2', 'gravado-v4', 1);
+  const { reabrir, pendentes } = require('../scripts/regerarPdfCakto');
+  const { pausadosPorNos } = require('../scripts/entregaCakto');
+  assert.deepStrictEqual(pendentes(db, 5, () => false).map(e => e.id), ['L1']);
+  assert.strictEqual(reabrir(db, 'L1'), 1);
+  assert.strictEqual(reabrir(db, 'L2'), 0, 'registro que nao era pausa nossa nao vira pausa nossa');
+  assert.deepStrictEqual(pendentes(db, 5, () => false), [], 'saiu da fila de regerar');
+  assert.deepStrictEqual([...pausadosPorNos(db)], ['L1'], 'a entrega ainda sabe que foi ela que pausou');
+});

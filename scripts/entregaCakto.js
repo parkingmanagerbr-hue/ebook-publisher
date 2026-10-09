@@ -124,7 +124,7 @@ async function main() {
   const limite = parseInt(arg('limite', '1'), 10);
   const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('gravado-v4','ok-v4','oferta-inexistente')").all().map(r => r.ebook_id));
   const fila = comPdf.filter(e => !feitos.has(e.id)).slice(0, limite);
-  const pausados = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado = 'pausado-sem-pdf'").all().map(r => r.ebook_id));
+  const pausados = pausadosPorNos(db);
   const vistosSemPdf = new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('pausado-sem-pdf','sem-pdf-nao-ativo')").all().map(r => r.ebook_id));
   const semPdf = livros.filter(e => !(e.pdf_path && fs.existsSync(e.pdf_path)) && !vistosSemPdf.has(e.id));
   const filaPausa = semPdf.slice(0, Math.max(0, limite - fila.length));
@@ -204,6 +204,15 @@ async function main() {
   console.log(JSON.stringify({ fila: fila.length, filaPausa: filaPausa.length, ...cont }));
 }
 
+/**
+ * Livros cujo produto ESTE sistema pausou: so esses sao reativados quando o PDF
+ * volta. 'pdf-regerado' e a marca que o regerarPdfCakto deixa ao refazer o PDF
+ * (antes ele apagava a marca, e nada era reativado — 3.568 livros, 09/10/2026).
+ */
+function pausadosPorNos(db) {
+  return new Set(db.prepare("SELECT ebook_id FROM cakto_entrega WHERE resultado IN ('pausado-sem-pdf', 'pdf-regerado')").all().map(r => r.ebook_id));
+}
+
 /** Livro sem PDF: so pausa o que esta ATIVO (vendendo). Pura. */
 function acaoSemPdf(produto) {
   return produto.status === 'active' ? 'pausar' : 'nada';
@@ -257,6 +266,6 @@ function camposAlterados(antes, depois) {
   return [...chaves].filter(k => JSON.stringify((antes || {})[k]) !== JSON.stringify((depois || {})[k]));
 }
 
-module.exports = { planejar, alvo, resultadoDoErro, acaoSemPdf, mesmoValor, COMISSAO_AFILIADO, camposAlterados, precisaImagem, PRODUTOR };
+module.exports = { planejar, alvo, resultadoDoErro, acaoSemPdf, pausadosPorNos, mesmoValor, COMISSAO_AFILIADO, camposAlterados, precisaImagem, PRODUTOR };
 
 if (require.main === module) main().catch(e => { console.error('ERRO', e.message); process.exit(1); });
