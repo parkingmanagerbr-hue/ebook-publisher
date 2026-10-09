@@ -16,7 +16,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { alvoHigiene, precisaSubirCapa, resumoDaCorrecao, ehErroDaLoja, lojaForaDoAr } = require('../src/agents/higieneCakto');
+const { alvoHigiene, precisaSubirCapa, resumoDaCorrecao, ehErroDaLoja, lojaForaDoAr, erroDefinitivo } = require('../src/agents/higieneCakto');
 
 let log;
 try { log = require('../src/core/logger').createLogger('higieneCakto'); }
@@ -75,7 +75,7 @@ async function main() {
   const db = require('../src/core/database').getDb();
   db.prepare('CREATE TABLE IF NOT EXISTS cakto_higiene (ebook_id TEXT PRIMARY KEY, resultado TEXT, quando INTEGER)').run();
 
-  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_higiene WHERE resultado IN ('ok','nada')").all().map(r => r.ebook_id));
+  const feitos = new Set(db.prepare("SELECT ebook_id FROM cakto_higiene WHERE resultado IN ('ok','nada','sumiu')").all().map(r => r.ebook_id));
   const livros = db.prepare(
     "SELECT id, title, cover_path, cakto_product_id FROM ebooks " +
     "WHERE cakto_product_id IS NOT NULL AND cakto_product_id <> '' ORDER BY rowid DESC"
@@ -130,6 +130,12 @@ async function main() {
       const msg = umaLinha(err && err.message, 160);
       log.error('FALHA ' + umaLinha(e.cakto_product_id, 20) + ': ' + msg);
       if (err && err.cloudflare) { log.warn('Cloudflare barrou — parando esta rodada'); break; }
+      if (erroDefinitivo(err && err.status)) {
+        // Sem a marca, o livro volta a fila em toda rodada (1.022x em 09/10/2026).
+        marca.run(e.id, 'sumiu', Date.now());
+        log.warn('oferta inexistente na Cakto, fora da fila (conferir o id gravado): livro ' + umaLinha(e.id, 40) + ' "' + umaLinha(e.title, 50) + '"');
+        continue;
+      }
       // 500 da loja: nao adianta seguir nem voltar daqui a 20 min martelando.
       if (ehErroDaLoja(err && err.status, msg)) {
         // UM produto com 500 nao e a loja fora do ar: em 28/09/2026 isso

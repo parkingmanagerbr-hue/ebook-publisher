@@ -124,8 +124,21 @@ function resumoDaCorrecao(produtoId, mudancas, subiuCapa) {
  * se pula. Pura.
  */
 const TOLERANCIA_5XX = 3;
+/**
+ * Erro que nao muda tentando de novo: a oferta nao existe (404/410). Pura.
+ *
+ * 09/10/2026: um livro guardava o id do PRODUTO no lugar do codigo da oferta;
+ * offers/<id> dava 404, a falha nao marcava nada e o livro voltava a fila em
+ * toda rodada — 1.022 vezes. Erro definitivo marca o livro e sai da fila (o
+ * log diz o motivo); 5xx e rede continuam sendo tentados depois.
+ */
+function erroDefinitivo(status) {
+  const n = Number(status);
+  return n === 404 || n === 410;
+}
+
 function lojaForaDoAr(seguidas, tolerancia = TOLERANCIA_5XX) {
   return Number(seguidas) >= tolerancia;
 }
 
-module.exports = { alvoHigiene, lojaForaDoAr, TOLERANCIA_5XX, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, metodosDePagamentoValidos, ehErroDaLoja, DESCRICAO_AFILIADO };
+module.exports = { alvoHigiene, lojaForaDoAr, TOLERANCIA_5XX, precisaSubirCapa, paginaDeVendasRuim, resumoDaCorrecao, metodosDePagamentoValidos, ehErroDaLoja, erroDefinitivo, DESCRICAO_AFILIADO };

@@ -138,3 +138,10 @@ test('UM produto com erro 500 nao e a loja fora do ar', () => {
   assert.strictEqual(lojaForaDoAr(null), false);
   assert.strictEqual(lojaForaDoAr(1, 1), true, 'a tolerancia e ajustavel');
 });
+
+test('oferta inexistente (404/410) e definitiva; 5xx, 429 e rede seguem tentando', () => {
+  const { erroDefinitivo } = require('../src/agents/higieneCakto');
+  assert.strictEqual(erroDefinitivo(404), true);
+  assert.strictEqual(erroDefinitivo('410'), true);
+  for (const s of [500, 503, 429, 403, 0, undefined, null]) assert.strictEqual(erroDefinitivo(s), false, String(s));
+});
