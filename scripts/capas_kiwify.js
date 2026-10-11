@@ -70,6 +70,19 @@ function mapaDeLivros(linhas, produtos) {
   return mapa;
 }
 
+/**
+ * Apaga as copias de capa de um bloco ja processado. 11/10/2026: na VPS cada capa
+ * era copiada para a pasta que o Chrome enxerga e nunca saia de la — 2,3 GB com o
+ * disco a 91%. O original fica em covers/; isto apaga so a copia. Devolve quantas.
+ */
+function apagarCopias(mapa, unlink = fs.unlinkSync) {
+  let n = 0;
+  for (const caminho of (mapa || new Map()).values()) {
+    try { unlink(caminho); n++; } catch (_) { /* protocolo: copia ja ausente */ }
+  }
+  return n;
+}
+
 /** Baixa as capas da fila num tar so. Devolve id -> caminho local. */
 function baixarCapas(fila) {
   fs.mkdirSync(TMP, { recursive: true });
@@ -127,6 +140,7 @@ async function principal() {
   const page = await browser.newPage();
   const resumo = { fila: 0, ok: 0, falhas: 0, semCapa: 0, categorias: 0, moedaTrocada: 0, moedaConfirmada: 0 };
   const convertidos = new Map();
+  let capas = new Map(); // fora do try: o finally apaga as copias do ultimo bloco
   try {
     const cred = await credenciais(page);
     const lista = await chamar(page, cred, 'GET', '/v1/products', null);
@@ -139,11 +153,12 @@ async function principal() {
     if (!fila.length) return resumo;
     // Capas em blocos de 40: um tar de 746 capas (centenas de MB) chegou cortado
     // quando o container reiniciou no meio, e a rodada inteira morreu (06/10/2026).
-    let capas = new Map();
+    capas = new Map();
     let parar = false;
     let semPainel = 0;
     for (let ini = 0; ini < fila.length && !parar; ini += 40) {
     const bloco = fila.slice(ini, ini + 40);
+    apagarCopias(capas);
     try { capas = baixarCapas(bloco); } catch (e) { log.warn('bloco de capas falhou: ' + umaLinha(e.message, 160)); capas = new Map(); }
     for (const item of bloco) {
       const local = capas.get(item.id);
@@ -205,6 +220,7 @@ async function principal() {
       }
     }
   } finally {
+    apagarCopias(capas);
     await page.close().catch(() => {});
     browser.disconnect();
   }
@@ -224,4 +240,4 @@ if (require.main === module) {
     .catch(e => { log.error('ERRO: ' + umaLinha(e && e.message, 200)); fim(1); });
 }
 
-module.exports = { principal, mapaDeLivros };
+module.exports = { principal, mapaDeLivros, apagarCopias };
