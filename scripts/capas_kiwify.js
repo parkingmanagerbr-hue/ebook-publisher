@@ -121,10 +121,32 @@ function baixarCapas(fila) {
 function lerFeitos() {
   const feitos = new Set();
   if (!fs.existsSync(PROGRESSO)) return feitos;
-  for (const l of fs.readFileSync(PROGRESSO, 'utf8').split('\n')) {
+  const linhas = fs.readFileSync(PROGRESSO, 'utf8').split('\n');
+  for (const l of linhas) {
     try { const o = JSON.parse(l); if (o.resultado === 'ok') feitos.add(o.id); } catch (_) { /* protocolo: linha vazia ou cortada */ }
   }
+  // Quem desistiu tambem sai da fila (o painel recusa sempre o mesmo produto).
+  const fora = desistidos(linhas);
+  if (fora.size) log.warn('fora da fila apos ' + TETO_ERROS + ' erros seguidos: ' + fora.size + ' produto(s) — ' + [...fora].map(i => i.slice(0, 8)).join(', '));
+  for (const id of fora) feitos.add(id);
   return feitos;
+}
+
+/**
+ * Produtos com TETO_ERROS erros SEGUIDOS (sem outro desfecho no meio). 11/10/2026:
+ * o painel devolvia 400 ao salvar o mesmo produto em toda rodada, ~2 min de
+ * Chrome cada, para sempre. Qualquer outro desfecho zera a contagem. Pura.
+ */
+const TETO_ERROS = 3;
+function desistidos(linhas, teto = TETO_ERROS) {
+  const seguidos = new Map();
+  for (const l of linhas || []) {
+    let o;
+    try { o = JSON.parse(l); } catch (_) { continue; /* protocolo: linha vazia ou cortada */ }
+    if (!o || !o.id) continue;
+    seguidos.set(o.id, o.resultado === 'erro' ? (seguidos.get(o.id) || 0) + 1 : 0);
+  }
+  return new Set([...seguidos].filter(([, n]) => n >= teto).map(([id]) => id));
 }
 
 function registrar(o) {
@@ -240,4 +262,4 @@ if (require.main === module) {
     .catch(e => { log.error('ERRO: ' + umaLinha(e && e.message, 200)); fim(1); });
 }
 
-module.exports = { principal, mapaDeLivros, apagarCopias };
+module.exports = { principal, mapaDeLivros, apagarCopias, desistidos };

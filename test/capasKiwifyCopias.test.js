@@ -22,3 +22,18 @@ test('apaga cada copia do mapa; copia ja ausente nao derruba; o original fica', 
   assert.strictEqual(apagarCopias(undefined), 0);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('produto com 3 erros SEGUIDOS sai da fila; ok no meio zera; sem-capa nao conta como erro', () => {
+  const { desistidos } = require('../scripts/capas_kiwify');
+  const L = (id, resultado) => JSON.stringify({ id, resultado });
+  const linhas = [
+    L('a', 'erro'), L('a', 'erro'), L('a', 'erro'),
+    L('b', 'erro'), L('b', 'erro'), L('b', 'ok'), L('b', 'erro'),
+    L('c', 'erro'), L('c', 'erro'),
+    L('d', 'erro'), L('d', 'sem-capa'), L('d', 'erro'), L('d', 'erro'),
+    '', '{cortada', JSON.stringify({ resultado: 'erro' }),
+  ];
+  assert.deepStrictEqual([...desistidos(linhas)], ['a']);
+  assert.deepStrictEqual([...desistidos(linhas, 2)].sort(), ['a', 'c', 'd']);
+  assert.deepStrictEqual([...desistidos(undefined)], []);
+});
