@@ -65,4 +65,14 @@ function quantosGuardados(db) {
   } catch (_) { return 0; }
 }
 
-module.exports = { salvarConteudo, carregarConteudo, quantosGuardados, contarPalavras, vale, TABELA };
+/**
+ * Joga fora o texto guardado de um livro. 12/10/2026: texto guardado com capitulo
+ * vazio era reprovado no QA a cada regeracao (313 vezes o mesmo livro) — sem o
+ * descarte, a tentativa seguinte relia o mesmo texto ruim. Devolve quantos apagou.
+ */
+function descartarConteudo(db, ebookId) {
+  garantirTabela(db);
+  return db.prepare('DELETE FROM ' + TABELA + ' WHERE ebook_id = ?').run(String(ebookId)).changes;
+}
+
+module.exports = { salvarConteudo, carregarConteudo, descartarConteudo, quantosGuardados, contarPalavras, vale, TABELA };

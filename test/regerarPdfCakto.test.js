@@ -61,3 +61,41 @@ test('PDF refeito: sai da fila de regerar e CONTINUA marcado como pausado por no
   assert.deepStrictEqual(pendentes(db, 5, () => false), [], 'saiu da fila de regerar');
   assert.deepStrictEqual([...pausadosPorNos(db)], ['L1'], 'a entrega ainda sabe que foi ela que pausou');
 });
+
+test('falha: sem IA para a rodada sem contar; QA e outras contam', () => {
+  const { classificarFalha } = require('../scripts/regerarPdfCakto');
+  assert.strictEqual(classificarFalha('Todos os providers de AI falharam. Pulados: gemini(sem chave livre)'), 'sem-ia');
+  assert.strictEqual(classificarFalha('E-book reprovado no QA: Capítulo 3: conteúdo muito curto (0 chars)'), 'qa');
+  assert.strictEqual(classificarFalha('ENOSPC: no space left on device'), 'outra');
+  assert.strictEqual(classificarFalha(undefined), 'outra');
+});
+
+test('3 tentativas contadas tiram o livro da fila de regerar; os outros seguem', () => {
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  db.exec('CREATE TABLE ebooks (id TEXT, title TEXT, subtitle TEXT, topic TEXT, language TEXT, cover_path TEXT, pdf_path TEXT)');
+  db.exec('CREATE TABLE cakto_entrega (ebook_id TEXT PRIMARY KEY, produto TEXT, resultado TEXT, quando INTEGER)');
+  for (const id of ['A', 'B']) {
+    db.prepare('INSERT INTO ebooks VALUES (?,?,?,?,?,?,?)').run(id, 't' + id, null, 't', 'pt-BR', null, null);
+    db.prepare('INSERT INTO cakto_entrega VALUES (?,?,?,?)').run(id, 'p' + id, 'pausado-sem-pdf', 1);
+  }
+  const { pendentes, registrarFalha, TETO_TENTATIVAS } = require('../scripts/regerarPdfCakto');
+  assert.strictEqual(TETO_TENTATIVAS, 3);
+  assert.strictEqual(registrarFalha(db, 'A', 'x'), 1);
+  assert.strictEqual(registrarFalha(db, 'A', 'x'), 2);
+  assert.deepStrictEqual(pendentes(db, 5, () => false).map(e => e.id).sort(), ['A', 'B'], 'com 2 ainda tenta');
+  assert.strictEqual(registrarFalha(db, 'A', 'ultimo erro'), 3);
+  assert.deepStrictEqual(pendentes(db, 5, () => false).map(e => e.id), ['B']);
+  assert.strictEqual(db.prepare('SELECT ultimo_erro FROM regerar_falha WHERE ebook_id = ?').get('A').ultimo_erro, 'ultimo erro');
+});
+
+test('texto guardado reprovado e descartado: a proxima tentativa reescreve', () => {
+  const Database = require('better-sqlite3');
+  const db = new Database(':memory:');
+  const { salvarConteudo, carregarConteudo, descartarConteudo } = require('../src/core/conteudoEbook');
+  assert.ok(salvarConteudo(db, 'L1', { sections: [{ title: 'c', content: 'palavra '.repeat(400) }] }));
+  assert.ok(carregarConteudo(db, 'L1'));
+  assert.strictEqual(descartarConteudo(db, 'L1'), 1);
+  assert.strictEqual(carregarConteudo(db, 'L1'), null);
+  assert.strictEqual(descartarConteudo(db, 'L1'), 0);
+});

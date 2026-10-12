@@ -29,16 +29,52 @@ function nota(e, existe = fs.existsSync) {
 function pendentes(db, limite, existe = fs.existsSync) {
   let linhas = [];
   try {
+    garantirFalhas(db);
     linhas = db.prepare(
       'SELECT e.id, e.title, e.subtitle, e.topic, e.language, e.cover_path, e.pdf_path, e.rowid AS ordem, c.produto ' +
       'FROM cakto_entrega c JOIN ebooks e ON e.id = c.ebook_id ' +
-      "WHERE c.resultado = 'pausado-sem-pdf'"
+      "WHERE c.resultado = 'pausado-sem-pdf' " +
+      'AND e.id NOT IN (SELECT ebook_id FROM regerar_falha WHERE tentativas >= ' + TETO_TENTATIVAS + ')'
     ).all();
   } catch { return []; }
   return linhas
     .filter(e => !e.pdf_path || !existe(e.pdf_path))
     .sort((a, b) => nota(b, existe) - nota(a, existe))
     .slice(0, limite);
+}
+
+/**
+ * Teto de tentativas por livro. 12/10/2026: sem ele, o mesmo livro falhava em
+ * toda rodada (313 vezes um, 203 outro) e ocupava as vagas dos ~2.000 que esperam.
+ */
+const TETO_TENTATIVAS = 3;
+
+function garantirFalhas(db) {
+  db.prepare('CREATE TABLE IF NOT EXISTS regerar_falha (ebook_id TEXT PRIMARY KEY, tentativas INTEGER NOT NULL, ultimo_erro TEXT, quando INTEGER)').run();
+}
+
+/**
+ * O que a falha significa. Pura.
+ *  - 'sem-ia': nenhuma IA respondeu (cota do dia). Vale para TODOS: para a rodada
+ *    e nao conta contra o livro.
+ *  - 'qa': o texto foi reprovado (capitulo vazio, curto). Conta, e o texto
+ *    guardado e descartado para a proxima tentativa reescrever.
+ *  - 'outra': conta.
+ */
+function classificarFalha(mensagem) {
+  const m = String(mensagem || '');
+  if (/Todos os providers|sem chave livre/i.test(m)) return 'sem-ia';
+  if (/reprovado no QA/i.test(m)) return 'qa';
+  return 'outra';
+}
+
+/** Soma uma tentativa e devolve o total. */
+function registrarFalha(db, ebookId, mensagem, agora = Date.now()) {
+  garantirFalhas(db);
+  db.prepare('INSERT INTO regerar_falha (ebook_id, tentativas, ultimo_erro, quando) VALUES (?, 1, ?, ?) ' +
+    'ON CONFLICT(ebook_id) DO UPDATE SET tentativas = tentativas + 1, ultimo_erro = excluded.ultimo_erro, quando = excluded.quando')
+    .run(ebookId, String(mensagem || '').slice(0, 200), agora);
+  return db.prepare('SELECT tentativas FROM regerar_falha WHERE ebook_id = ?').get(ebookId).tentativas;
 }
 
 /**
@@ -60,7 +96,7 @@ async function main() {
   if (!fila.length) { console.log(JSON.stringify({ pendentes: 0 })); return; }
 
   const { generateFullEbook } = require('../src/agents/writerAgent');
-  const { salvarConteudo, carregarConteudo, quantosGuardados } = require('../src/core/conteudoEbook');
+  const { salvarConteudo, carregarConteudo, descartarConteudo, quantosGuardados } = require('../src/core/conteudoEbook');
   const { generatePDF } = require('../src/agents/pdfAgent');
   const { sanearLivro } = require('../src/core/textoDegenerado');
   const grava = db.prepare('UPDATE ebooks SET pdf_path = ? WHERE id = ?');
@@ -84,12 +120,19 @@ async function main() {
       console.log('OK ' + e.id.slice(0, 8) + ' ' + (guardado ? '(texto guardado) ' : '(reescrito) ') + String(e.title).slice(0, 50) + ' -> ' + caminho);
     } catch (err) {
       falha++;
-      console.log('FALHA ' + e.id.slice(0, 8) + ': ' + String(err.message).slice(0, 120));
+      const msg = String(err && err.message);
+      console.log('FALHA ' + e.id.slice(0, 8) + ': ' + msg.slice(0, 120));
+      const tipo = classificarFalha(msg);
+      // Sem IA para ninguem: os proximos falhariam igual — para a rodada.
+      if (tipo === 'sem-ia') { console.log('sem IA disponivel agora — rodada interrompida, nada contado contra o livro'); break; }
+      if (tipo === 'qa') descartarConteudo(db, e.id);
+      const n = registrarFalha(db, e.id, msg);
+      if (n >= TETO_TENTATIVAS) console.log('DESISTIU ' + e.id.slice(0, 8) + ' apos ' + n + ' tentativas — fica pausado, fora da fila: ' + String(e.title).slice(0, 50));
     }
   }
   console.log(JSON.stringify({ fila: fila.length, ok, falha, textosGuardados: quantosGuardados(db) }));
 }
 
-module.exports = { pendentes, nota, reabrir };
+module.exports = { pendentes, nota, reabrir, classificarFalha, registrarFalha, TETO_TENTATIVAS };
 
 if (require.main === module) main().catch(e => { console.error('ERRO ' + e.message); process.exit(1); });
