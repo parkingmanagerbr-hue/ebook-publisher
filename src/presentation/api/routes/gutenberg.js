@@ -3,6 +3,8 @@
  * Catálogo de audiobooks de livros famosos (Project Gutenberg / domínio público)
  */
 'use strict';
+const { createLogger } = require('../../../core/logger');
+const logger = createLogger('gutenberg');
 
 const express = require('express');
 const router  = express.Router();
@@ -28,7 +30,7 @@ module.exports = function() {
     res.json({ ok: true, message: 'Geração iniciada em background', total: FAMOUS_BOOKS.length });
     // Rodar em background sem await
     generateAllFamousAudiobooks().catch(err =>
-      console.error('[gutenberg] generateAll error:', err.message)
+      logger.error('[gutenberg] generateAll error:', err.message)
     );
   });
 
@@ -40,7 +42,7 @@ module.exports = function() {
 
     res.json({ ok: true, message: `Gerando audiobook: ${book.title}`, id });
     generateSingleBook(id).catch(err =>
-      console.error(`[gutenberg] generate ${id} error:`, err.message)
+      logger.error(`[gutenberg] generate ${id} error:`, err.message)
     );
   });
 

@@ -333,6 +333,6 @@ module.exports = { finalizeDrafts, listProducts, rascunhosDoBanco, gravarUrl };
 
 if (require.main === module) {
   finalizeDrafts()
-    .then(s => { log.info('resumo'); console.log(JSON.stringify(s)); process.exit(0); })
+    .then(s => { log.info('resumo', { resultado: s }); process.exit(0); })
     .catch(e => { console.error('FATAL: ' + e.message); process.exit(1); });
 }

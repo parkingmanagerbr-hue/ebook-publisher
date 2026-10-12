@@ -437,10 +437,10 @@ if (require.main === module) {
   const arg = process.argv[2];
   if (arg === 'list') {
     const catalog = listCatalog();
-    console.table(catalog.map(b => ({ id: b.id, title: b.title, lang: b.language, status: b.status })));
+    log.info('catalogo', { items: catalog.map(b => ({ id: b.id, title: b.title, lang: b.language, status: b.status })) });
     process.exit(0);
   }
 
   const fn = arg ? generateSingleBook(arg) : generateAllFamousAudiobooks();
-  fn.then(() => process.exit(0)).catch(err => { console.error(err); process.exit(1); });
+  fn.then(() => process.exit(0)).catch(err => { logger.error(err); process.exit(1); });
 }

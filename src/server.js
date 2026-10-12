@@ -12,7 +12,7 @@ const path       = require('path');
 const fs         = require('fs');
 const jwt        = require('jsonwebtoken');
 
-const { createLogger }   = require('./core/logger');
+const { createLogger, httpLoggerMiddleware } = require('./core/logger');
 const authRoutes         = require('./routes/auth');
 const legacyApiRoutes    = require('./routes/api');
 
@@ -90,6 +90,7 @@ if (io) {
 }
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
+app.use(httpLoggerMiddleware);  // HTTP access log → logs/access-DATE.log
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

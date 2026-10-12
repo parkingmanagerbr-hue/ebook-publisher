@@ -1,4 +1,6 @@
 'use strict';
+const { createLogger } = require('../../core/logger');
+const logger = createLogger('gammaAgent');
 /**
  * gammaAgent.js — Gera ebooks via Gamma.app com Google OAuth
  *
@@ -42,7 +44,7 @@ async function screenshot(page, name) {
  * @returns {{ title, description, pdfPath, pages } | null}
  */
 async function generateWithGamma({ topic, language, email, googleSessionFile, serviceSessionFile }) {
-  console.log(`[gamma] Gerando ebook: "${topic}" [${language}] com ${email}`);
+  logger.info(`[gamma] Gerando ebook: "${topic}" [${language}] com ${email}`);
 
   const langInstructions = {
     'pt-BR': 'em português do Brasil',
@@ -82,7 +84,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
     // ── 1. Tentar carregar sessão existente do Gamma ──────────────────────────
     const hasSession = await loadServiceSession(page, serviceSessionFile);
     if (hasSession) {
-      console.log('[gamma] Sessão existente carregada — verificando validade...');
+      logger.info('[gamma] Sessão existente carregada — verificando validade...');
     }
 
     // ── 2. Navegar ao Gamma ────────────────────────────────────────────────────
@@ -91,7 +93,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
     await screenshot(page, 'start');
 
     const currentUrl = page.url();
-    console.log('[gamma] URL inicial: ' + currentUrl.slice(0, 80));
+    logger.info('[gamma] URL inicial: ' + currentUrl.slice(0, 80));
 
     // ── 3. Login se necessário ─────────────────────────────────────────────────
     const needsLogin = await page.evaluate(() => {
@@ -103,7 +105,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
     });
 
     if (needsLogin || !currentUrl.includes('gamma.app/home') && !currentUrl.includes('gamma.app/dashboard')) {
-      console.log('[gamma] Login necessário — iniciando OAuth Google');
+      logger.info('[gamma] Login necessário — iniciando OAuth Google');
       await screenshot(page, 'login_needed');
 
       // Clicar em "Sign in with Google"
@@ -123,7 +125,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       });
 
       if (googleBtnClicked) {
-        console.log('[gamma] ' + googleBtnClicked);
+        logger.info('[gamma] ' + googleBtnClicked);
         await sleep(2000);
       }
 
@@ -146,11 +148,11 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       });
 
       if (googleOAuthClicked) {
-        console.log('[gamma] ' + googleOAuthClicked);
+        logger.info('[gamma] ' + googleOAuthClicked);
         // Resolver popup OAuth
         const oauthOk = await resolveGoogleOAuth(page, email, 25000);
         if (!oauthOk) {
-          console.warn('[gamma] OAuth não resolvido — tentando continuar mesmo assim');
+          logger.warn('[gamma] OAuth não resolvido — tentando continuar mesmo assim');
         }
         await sleep(3000);
         await screenshot(page, 'after_oauth');
@@ -164,14 +166,14 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
           { timeout: 20000 }
         );
       } catch {
-        console.warn('[gamma] Dashboard não detectado após login');
+        logger.warn('[gamma] Dashboard não detectado após login');
       }
 
       await saveServiceSession(page, serviceSessionFile, { email, service: 'gamma' });
     }
 
     await screenshot(page, 'dashboard');
-    console.log('[gamma] Dashboard: ' + page.url().slice(0, 80));
+    logger.info('[gamma] Dashboard: ' + page.url().slice(0, 80));
 
     // ── 4. Criar novo documento AI ─────────────────────────────────────────────
     // Clicar em botão "New" ou "Create"
@@ -195,7 +197,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       }
       return null;
     });
-    console.log('[gamma] New button: ' + (newClicked || 'not found'));
+    logger.info('[gamma] New button: ' + (newClicked || 'not found'));
     await sleep(2000);
     await screenshot(page, 'new_modal');
 
@@ -213,7 +215,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       }
       return null;
     });
-    console.log('[gamma] AI option: ' + (aiClicked || 'not found'));
+    logger.info('[gamma] AI option: ' + (aiClicked || 'not found'));
     await sleep(1500);
     await screenshot(page, 'ai_modal');
 
@@ -240,7 +242,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       }
       return null;
     }, prompt);
-    console.log('[gamma] Prompt: ' + (promptFilled || 'not filled'));
+    logger.info('[gamma] Prompt: ' + (promptFilled || 'not filled'));
 
     if (!promptFilled) {
       // Tentar digitar via keyboard
@@ -265,14 +267,14 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       }
       return null;
     });
-    console.log('[gamma] Generate: ' + (generateClicked || 'not found'));
+    logger.info('[gamma] Generate: ' + (generateClicked || 'not found'));
 
     if (!generateClicked) await page.keyboard.press('Enter');
     await sleep(2000);
     await screenshot(page, 'generating');
 
     // ── 7. Aguardar geração (até 3 min) ───────────────────────────────────────
-    console.log('[gamma] Aguardando geração AI...');
+    logger.info('[gamma] Aguardando geração AI...');
     const generated = await page.waitForFunction(
       () => {
         // Verificar se o documento foi gerado
@@ -290,7 +292,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
     await screenshot(page, 'generated');
 
     const docUrl = page.url();
-    console.log('[gamma] Documento gerado: ' + docUrl.slice(0, 80));
+    logger.info('[gamma] Documento gerado: ' + docUrl.slice(0, 80));
 
     // Extrair título da página gerada
     const title = await page.evaluate(() => {
@@ -298,7 +300,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
              document.querySelector('h1')?.textContent?.trim() ||
              'Ebook Gerado';
     });
-    console.log('[gamma] Título: ' + title);
+    logger.info('[gamma] Título: ' + title);
 
     // ── 8. Exportar como PDF ──────────────────────────────────────────────────
     // Procurar menu de exportação
@@ -318,7 +320,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       if (moreBtn) { moreBtn.click(); return 'more-menu'; }
       return null;
     });
-    console.log('[gamma] Export: ' + (exportClicked || 'not found'));
+    logger.info('[gamma] Export: ' + (exportClicked || 'not found'));
     await sleep(1500);
     await screenshot(page, 'export_menu');
 
@@ -335,7 +337,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       }
       return null;
     });
-    console.log('[gamma] PDF option: ' + (pdfClicked || 'not found'));
+    logger.info('[gamma] PDF option: ' + (pdfClicked || 'not found'));
     await sleep(2000);
     await screenshot(page, 'pdf_dialog');
 
@@ -366,7 +368,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
       }
       return null;
     });
-    console.log('[gamma] Download: ' + (downloadClicked || 'not found'));
+    logger.info('[gamma] Download: ' + (downloadClicked || 'not found'));
 
     // Aguardar arquivo aparecer no diretório
     const deadline2 = Date.now() + 60000;
@@ -388,7 +390,7 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
           fs.renameSync(src, pdfPath);
         }
         pdfSaved = true;
-        console.log('[gamma] ✅ PDF salvo: ' + pdfPath);
+        logger.info('[gamma] ✅ PDF salvo: ' + pdfPath);
         break;
       }
       await sleep(2000);
@@ -396,13 +398,13 @@ and a conclusion. Make it professional, visually appealing, and valuable for rea
 
     if (!pdfSaved) {
       // Tentar capturar via print
-      console.log('[gamma] Tentando salvar via page.pdf()...');
+      logger.info('[gamma] Tentando salvar via page.pdf()...');
       try {
         await page.pdf({ path: pdfPath, format: 'A4', printBackground: true });
         pdfSaved = fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 10000;
-        if (pdfSaved) console.log('[gamma] ✅ PDF via page.pdf(): ' + pdfPath);
+        if (pdfSaved) logger.info('[gamma] ✅ PDF via page.pdf(): ' + pdfPath);
       } catch (e) {
-        console.warn('[gamma] page.pdf() falhou: ' + e.message);
+        logger.warn('[gamma] page.pdf() falhou: ' + e.message);
       }
     }
 

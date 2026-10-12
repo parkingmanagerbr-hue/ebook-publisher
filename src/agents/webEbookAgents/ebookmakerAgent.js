@@ -1,4 +1,6 @@
 'use strict';
+const { createLogger } = require('../../core/logger');
+const logger = createLogger('ebookmakerAgent');
 /**
  * ebookmakerAgent.js — Gera ebooks via ebookmaker.ai
  *
@@ -26,7 +28,7 @@ async function screenshot(page, name) {
 }
 
 async function generateWithEbookmaker({ topic, language, email, googleSessionFile, serviceSessionFile }) {
-  console.log(`[ebookmaker] Gerando ebook: "${topic}" [${language}] com ${email}`);
+  logger.info(`[ebookmaker] Gerando ebook: "${topic}" [${language}] com ${email}`);
 
   const langMap = {
     'pt-BR': 'pt', 'en': 'en', 'es': 'es', 'fr': 'fr', 'de': 'de', 'it': 'it',
@@ -54,7 +56,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
     await screenshot(page, 'start');
 
     const startUrl = page.url();
-    console.log('[ebookmaker] URL: ' + startUrl.slice(0, 80));
+    logger.info('[ebookmaker] URL: ' + startUrl.slice(0, 80));
 
     // Verificar se precisa de login
     const needsLogin = startUrl.includes('/login') || startUrl.includes('/register') || await page.evaluate(() => {
@@ -63,7 +65,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
     });
 
     if (needsLogin) {
-      console.log('[ebookmaker] Login necessário');
+      logger.info('[ebookmaker] Login necessário');
 
       // Tentar Google OAuth primeiro
       const googleClicked = await page.evaluate(() => {
@@ -76,10 +78,10 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
         return null;
       });
       if (googleClicked) {
-        console.log('[ebookmaker] ' + googleClicked);
+        logger.info('[ebookmaker] ' + googleClicked);
         await sleep(1500);
         const oauthOk = await resolveGoogleOAuth(page, email, 20000);
-        console.log('[ebookmaker] OAuth: ' + oauthOk);
+        logger.info('[ebookmaker] OAuth: ' + oauthOk);
         await sleep(3000);
       }
 
@@ -110,7 +112,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
       inp.dispatchEvent(new Event('change', { bubbles: true }));
       return inp.id || inp.name || inp.placeholder || 'input';
     }, topic);
-    console.log('[ebookmaker] Título: ' + (titleFilled || 'not filled'));
+    logger.info('[ebookmaker] Título: ' + (titleFilled || 'not filled'));
 
     await sleep(300);
 
@@ -146,11 +148,11 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
       }
       return null;
     });
-    console.log('[ebookmaker] Gerar: ' + (genClicked || 'not found'));
+    logger.info('[ebookmaker] Gerar: ' + (genClicked || 'not found'));
     if (!genClicked) await page.keyboard.press('Enter');
 
     // Aguardar geração
-    console.log('[ebookmaker] Aguardando geração (até 5 min)...');
+    logger.info('[ebookmaker] Aguardando geração (até 5 min)...');
     await sleep(5000);
     await screenshot(page, 'generating');
 
@@ -164,7 +166,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
         return !progress || progress.style.display === 'none';
       },
       { timeout: 300000, polling: 5000 }
-    ).catch(() => console.warn('[ebookmaker] Timeout na geração'));
+    ).catch(() => logger.warn('[ebookmaker] Timeout na geração'));
 
     await sleep(3000);
     await screenshot(page, 'generated');
@@ -173,7 +175,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
       document.title?.replace(/ebookmaker\.ai.*/i, '').trim() ||
       document.querySelector('h1')?.textContent?.trim() || topic
     );
-    console.log('[ebookmaker] Gerado: ' + title);
+    logger.info('[ebookmaker] Gerado: ' + title);
 
     // ── Download PDF ──────────────────────────────────────────────────────────
     const ts = Date.now();
@@ -199,7 +201,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
     });
 
     if (downloadUrl) {
-      console.log('[ebookmaker] Download URL: ' + downloadUrl.slice(0, 80));
+      logger.info('[ebookmaker] Download URL: ' + downloadUrl.slice(0, 80));
       // Baixar via fetch / navegação direta
       const resp = await page.evaluate(async (url) => {
         try {
@@ -214,7 +216,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
       if (resp && resp.length > 5000) {
         fs.writeFileSync(pdfPath, Buffer.from(resp));
         pdfSaved = true;
-        console.log('[ebookmaker] ✅ PDF via fetch: ' + pdfPath + ' (' + resp.length + ' bytes)');
+        logger.info('[ebookmaker] ✅ PDF via fetch: ' + pdfPath + ' (' + resp.length + ' bytes)');
       }
     }
 
@@ -231,7 +233,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
         }
         return null;
       });
-      console.log('[ebookmaker] Download click: ' + (dlClicked || 'not found'));
+      logger.info('[ebookmaker] Download click: ' + (dlClicked || 'not found'));
       await sleep(5000);
 
       const files = fs.readdirSync(OUTPUT_DIR)
@@ -240,7 +242,7 @@ async function generateWithEbookmaker({ topic, language, email, googleSessionFil
         const src = path.join(OUTPUT_DIR, files[0]);
         if (src !== pdfPath) fs.renameSync(src, pdfPath);
         pdfSaved = true;
-        console.log('[ebookmaker] ✅ PDF: ' + pdfPath);
+        logger.info('[ebookmaker] ✅ PDF: ' + pdfPath);
       }
     }
 

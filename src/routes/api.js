@@ -1,3 +1,5 @@
+const { createLogger } = require('../core/logger');
+const logger = createLogger('api');
 /**
  * API Routes — Ebooks, Stats, Generate, Publish
  */
@@ -151,7 +153,7 @@ router.post('/generate', requireAuth, async (req, res) => {
         const { runPipeline } = require('../index');
         if (runPipeline) await runPipeline(topic || null);
       } catch (e) {
-        console.error('Pipeline error:', e.message);
+        logger.error('Pipeline error:', e.message);
       }
     });
   } catch (e) {
@@ -209,7 +211,7 @@ router.post('/publish/:platform', requireAuth, async (req, res) => {
           }
         }
       } catch (e) {
-        console.error(`Publish ${platform} error:`, e.message);
+        logger.error(`Publish ${platform} error:`, e.message);
       }
     });
   } catch (e) {
@@ -296,8 +298,8 @@ router.post('/agent/sync-sales', requireAuth, (req, res) => {
     try {
       const { syncSalesFromPlatforms } = require('../agents/learningAgent');
       const result = await syncSalesFromPlatforms();
-      console.info('[api] sync-sales concluído:', result);
-    } catch (e) { console.error('[api] sync-sales erro:', e.message); }
+      logger.info('[api] sync-sales concluído:', result);
+    } catch (e) { logger.error('[api] sync-sales erro:', e.message); }
   });
 });
 
@@ -519,7 +521,7 @@ router.post('/affiliate-products/discover', requireAuth, (req, res) => {
     try {
       const { runAffiliateAgent } = require('../agents/affiliateAgent');
       await runAffiliateAgent();
-    } catch (e) { console.error('[api] affiliate discover error:', e.message); }
+    } catch (e) { logger.error('[api] affiliate discover error:', e.message); }
   });
 });
 
@@ -533,13 +535,13 @@ router.post('/affiliate-products/:id/generate-lp', requireAuth, (req, res) => {
     try {
       const db = getAffiliateDb();
       const product = db.prepare('SELECT * FROM affiliate_products WHERE id = ?').get(id);
-      if (!product) return console.error('[api] Produto não encontrado:', id);
-      if (!product.affiliate_link) return console.error('[api] Produto sem affiliate_link:', id);
+      if (!product) return logger.error('[api] Produto não encontrado:', id);
+      if (!product.affiliate_link) return logger.error('[api] Produto sem affiliate_link:', id);
 
       const { deployLandingPage } = require('../agents/landingPageAgent');
       const result = await deployLandingPage(product);
-      console.info('[api] LP gerada:', result.landingPageUrl);
-    } catch (e) { console.error('[api] generate-lp error:', e.message); }
+      logger.info('[api] LP gerada:', result.landingPageUrl);
+    } catch (e) { logger.error('[api] generate-lp error:', e.message); }
   });
 });
 
@@ -576,7 +578,7 @@ router.post('/landing-pages/generate', requireAuth, (req, res) => {
     try {
       const { generateLandingPages } = require('../agents/landingPageAgent');
       await generateLandingPages();
-    } catch (e) { console.error('[api] landing-pages/generate error:', e.message); }
+    } catch (e) { logger.error('[api] landing-pages/generate error:', e.message); }
   });
 });
 
@@ -615,7 +617,7 @@ router.post('/backlinks/build', requireAuth, (req, res) => {
     try {
       const { buildBacklinks } = require('../agents/backlinkAgent');
       await buildBacklinks();
-    } catch (e) { console.error('[api] backlinks/build error:', e.message); }
+    } catch (e) { logger.error('[api] backlinks/build error:', e.message); }
   });
 });
 

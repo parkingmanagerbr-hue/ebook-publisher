@@ -1,4 +1,6 @@
 'use strict';
+const { createLogger } = require('../../core/logger');
+const logger = createLogger('piktochartAgent');
 /**
  * piktochartAgent.js — Gera ebooks via Piktochart com Google OAuth
  *
@@ -25,7 +27,7 @@ async function screenshot(page, name) {
 }
 
 async function generateWithPiktochart({ topic, language, email, googleSessionFile, serviceSessionFile }) {
-  console.log(`[piktochart] Gerando ebook: "${topic}" [${language}] com ${email}`);
+  logger.info(`[piktochart] Gerando ebook: "${topic}" [${language}] com ${email}`);
 
   const langInstructions = {
     'pt-BR': 'em português do Brasil', 'en': 'in English', 'es': 'en español',
@@ -62,7 +64,7 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
     });
 
     if (needsLogin) {
-      console.log('[piktochart] Login necessário');
+      logger.info('[piktochart] Login necessário');
       await screenshot(page, 'login');
 
       // Clicar em "Sign in with Google"
@@ -77,7 +79,7 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
         }
         return null;
       });
-      console.log('[piktochart] Login click: ' + (clicked || 'not found'));
+      logger.info('[piktochart] Login click: ' + (clicked || 'not found'));
       await sleep(1500);
       await screenshot(page, 'login2');
 
@@ -94,9 +96,9 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
         return null;
       });
       if (googleClicked) {
-        console.log('[piktochart] ' + googleClicked);
+        logger.info('[piktochart] ' + googleClicked);
         const oauthOk = await resolveGoogleOAuth(page, email, 25000);
-        console.log('[piktochart] OAuth: ' + oauthOk);
+        logger.info('[piktochart] OAuth: ' + oauthOk);
         await sleep(4000);
       }
 
@@ -111,7 +113,7 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
     }
 
     await screenshot(page, 'dashboard');
-    console.log('[piktochart] Dashboard: ' + page.url().slice(0, 80));
+    logger.info('[piktochart] Dashboard: ' + page.url().slice(0, 80));
 
     // ── Criar novo ebook/report AI ────────────────────────────────────────────
     // Navegar para criação de ebook
@@ -142,7 +144,7 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
       inp.dispatchEvent(new Event('change', { bubbles: true }));
       return inp.tagName + ': ' + promptText.slice(0, 30);
     }, prompt);
-    console.log('[piktochart] Prompt: ' + (promptFilled || 'not filled'));
+    logger.info('[piktochart] Prompt: ' + (promptFilled || 'not filled'));
 
     if (!promptFilled) await page.keyboard.type(prompt, { delay: 15 });
     await sleep(500);
@@ -161,11 +163,11 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
       }
       return null;
     });
-    console.log('[piktochart] Generate: ' + (generateClicked || 'not found, pressing Enter'));
+    logger.info('[piktochart] Generate: ' + (generateClicked || 'not found, pressing Enter'));
     if (!generateClicked) await page.keyboard.press('Enter');
 
     // Aguardar geração
-    console.log('[piktochart] Aguardando geração AI (até 3 min)...');
+    logger.info('[piktochart] Aguardando geração AI (até 3 min)...');
     await sleep(5000);
     await screenshot(page, 'generating');
 
@@ -177,13 +179,13 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
         return el.length > 1;
       },
       { timeout: 180000, polling: 3000 }
-    ).catch(() => console.warn('[piktochart] Timeout na geração'));
+    ).catch(() => logger.warn('[piktochart] Timeout na geração'));
 
     await sleep(3000);
     await screenshot(page, 'generated');
     const docUrl = page.url();
     const title = await page.evaluate(() => document.title?.replace(' - Piktochart','').trim() || topic);
-    console.log('[piktochart] Gerado: ' + title + ' | ' + docUrl.slice(0, 60));
+    logger.info('[piktochart] Gerado: ' + title + ' | ' + docUrl.slice(0, 60));
 
     // ── Exportar PDF ──────────────────────────────────────────────────────────
     const ts = Date.now();
@@ -207,7 +209,7 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
       }
       return null;
     });
-    console.log('[piktochart] Export: ' + (exportClicked || 'not found'));
+    logger.info('[piktochart] Export: ' + (exportClicked || 'not found'));
     await sleep(2000);
     await screenshot(page, 'export');
 
@@ -227,7 +229,7 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
       }
       return null;
     });
-    console.log('[piktochart] PDF option: ' + (pdfOptionClicked || 'not found'));
+    logger.info('[piktochart] PDF option: ' + (pdfOptionClicked || 'not found'));
     await sleep(3000);
 
     // Aguardar download
@@ -240,18 +242,18 @@ async function generateWithPiktochart({ topic, language, email, googleSessionFil
         const src = path.join(OUTPUT_DIR, files[0]);
         if (src !== pdfPath) fs.renameSync(src, pdfPath);
         pdfSaved = true;
-        console.log('[piktochart] ✅ PDF: ' + pdfPath);
+        logger.info('[piktochart] ✅ PDF: ' + pdfPath);
         break;
       }
       await sleep(2000);
     }
 
     if (!pdfSaved) {
-      console.log('[piktochart] Tentando page.pdf()...');
+      logger.info('[piktochart] Tentando page.pdf()...');
       try {
         await page.pdf({ path: pdfPath, format: 'A4', printBackground: true });
         pdfSaved = fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 5000;
-      } catch (e) { console.warn('[piktochart] page.pdf() falhou: ' + e.message); }
+      } catch (e) { logger.warn('[piktochart] page.pdf() falhou: ' + e.message); }
     }
 
     if (!pdfSaved) throw new Error('PDF não gerado pelo Piktochart');

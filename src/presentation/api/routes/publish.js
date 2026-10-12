@@ -1,3 +1,5 @@
+const { createLogger } = require('../../../core/logger');
+const logger = createLogger('publish');
 /**
  * publish.js - POST /api/publish/single, /batch, /cancel; GET /api/publish/status
  */
@@ -13,7 +15,7 @@ module.exports = function(orchestrator) {
       const { ebookId, stores = ['hotmart', 'cakto'] } = req.body;
       if (!ebookId) return res.status(400).json({ error: 'ebookId required' });
       res.json({ ok: true, message: 'Publishing started', ebookId });
-      orchestrator.publishSingle(ebookId, stores).catch(e => console.error('publishSingle:', e.message));
+      orchestrator.publishSingle(ebookId, stores).catch(e => logger.error('publishSingle:', e.message));
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

@@ -1,4 +1,6 @@
 'use strict';
+const { createLogger } = require('../../core/logger');
+const logger = createLogger('vismeAgent');
 /**
  * vismeAgent.js — Gera ebooks via Visme AI Designer
  *
@@ -26,7 +28,7 @@ async function screenshot(page, name) {
 }
 
 async function generateWithVisme({ topic, language, email, googleSessionFile, serviceSessionFile }) {
-  console.log(`[visme] Gerando ebook: "${topic}" [${language}] com ${email}`);
+  logger.info(`[visme] Gerando ebook: "${topic}" [${language}] com ${email}`);
 
   const langInstructions = {
     'pt-BR': 'in Portuguese (Brazil)', 'en': 'in English', 'es': 'in Spanish',
@@ -62,7 +64,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
     });
 
     if (needsLogin || !currentUrl.includes('/dashboard')) {
-      console.log('[visme] Login necessário');
+      logger.info('[visme] Login necessário');
 
       // Ir para login
       if (!currentUrl.includes('/login')) {
@@ -81,11 +83,11 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
         }
         return null;
       });
-      console.log('[visme] Google login: ' + (googleClicked || 'not found'));
+      logger.info('[visme] Google login: ' + (googleClicked || 'not found'));
 
       if (googleClicked) {
         const oauthOk = await resolveGoogleOAuth(page, email, 25000);
-        console.log('[visme] OAuth: ' + oauthOk);
+        logger.info('[visme] OAuth: ' + oauthOk);
         await sleep(4000);
       }
 
@@ -101,7 +103,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
     }
 
     await screenshot(page, 'dashboard');
-    console.log('[visme] Dashboard: ' + page.url().slice(0, 80));
+    logger.info('[visme] Dashboard: ' + page.url().slice(0, 80));
 
     // ── Navegar ao AI Designer Wizard ─────────────────────────────────────────
     await page.goto('https://dashboard.visme.co/v2/ai-designer-wizard', {
@@ -112,7 +114,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
     });
     await sleep(2000);
     await screenshot(page, 'ai_wizard');
-    console.log('[visme] AI Wizard: ' + page.url().slice(0, 80));
+    logger.info('[visme] AI Wizard: ' + page.url().slice(0, 80));
 
     // Selecionar tipo de documento (Ebook/Report/Document)
     const typeClicked = await page.evaluate(() => {
@@ -127,7 +129,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
       }
       return null;
     });
-    console.log('[visme] Tipo: ' + (typeClicked || 'não selecionado'));
+    logger.info('[visme] Tipo: ' + (typeClicked || 'não selecionado'));
     await sleep(1000);
     await screenshot(page, 'type_selected');
 
@@ -153,7 +155,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
       }
       return inp.tagName + ':' + (inp.placeholder || '');
     }, prompt);
-    console.log('[visme] Prompt: ' + (promptFilled || 'not filled'));
+    logger.info('[visme] Prompt: ' + (promptFilled || 'not filled'));
     if (!promptFilled) await page.keyboard.type(prompt, { delay: 15 });
     await sleep(500);
     await screenshot(page, 'prompt_filled');
@@ -171,11 +173,11 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
       }
       return null;
     });
-    console.log('[visme] Generate: ' + (genClicked || 'not found'));
+    logger.info('[visme] Generate: ' + (genClicked || 'not found'));
     if (!genClicked) await page.keyboard.press('Enter');
 
     // Aguardar geração
-    console.log('[visme] Aguardando geração AI (até 5 min)...');
+    logger.info('[visme] Aguardando geração AI (até 5 min)...');
     await sleep(5000);
     await screenshot(page, 'generating');
 
@@ -188,7 +190,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
         return false;
       },
       { timeout: 300000, polling: 5000 }
-    ).catch(() => console.warn('[visme] Timeout na geração'));
+    ).catch(() => logger.warn('[visme] Timeout na geração'));
 
     await sleep(3000);
     await screenshot(page, 'generated');
@@ -197,7 +199,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
       document.title?.replace(/\s*[|\-–]\s*Visme.*/i, '').trim() ||
       document.querySelector('h1')?.textContent?.trim() || 'Visme Ebook'
     );
-    console.log('[visme] Gerado: ' + title + ' | ' + docUrl.slice(0, 60));
+    logger.info('[visme] Gerado: ' + title + ' | ' + docUrl.slice(0, 60));
 
     // ── Exportar como PDF ─────────────────────────────────────────────────────
     const ts = Date.now();
@@ -222,7 +224,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
       }
       return null;
     });
-    console.log('[visme] Share/Export: ' + (shareClicked || 'not found'));
+    logger.info('[visme] Share/Export: ' + (shareClicked || 'not found'));
     await sleep(2000);
     await screenshot(page, 'export_menu');
 
@@ -236,7 +238,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
       }
       return null;
     });
-    console.log('[visme] PDF: ' + (pdfClicked || 'not found'));
+    logger.info('[visme] PDF: ' + (pdfClicked || 'not found'));
     await sleep(3000);
     await screenshot(page, 'pdf_dialog');
 
@@ -252,7 +254,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
       }
       return null;
     });
-    console.log('[visme] Download: ' + (dlClicked || 'not found'));
+    logger.info('[visme] Download: ' + (dlClicked || 'not found'));
 
     // Aguardar arquivo
     const deadline2 = Date.now() + 60000;
@@ -263,7 +265,7 @@ async function generateWithVisme({ topic, language, email, googleSessionFile, se
         const src = path.join(OUTPUT_DIR, files[0]);
         if (src !== pdfPath) fs.renameSync(src, pdfPath);
         pdfSaved = true;
-        console.log('[visme] ✅ PDF: ' + pdfPath);
+        logger.info('[visme] ✅ PDF: ' + pdfPath);
         break;
       }
       await sleep(2000);

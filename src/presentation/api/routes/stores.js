@@ -1,3 +1,5 @@
+const { createLogger } = require('../../../core/logger');
+const logger = createLogger('stores');
 /**
  * stores.js - GET /api/v2/stores - session health per store + affiliate management
  */
@@ -74,18 +76,18 @@ module.exports = function(sessionManager, orchestrator) {
         try {
           const { setupAllAffiliates: hmSetup } = require('../../../agents/publisherHotmartAffiliate');
           const r = await hmSetup({ commission, autoApprove, limit });
-          console.info('[affiliate/hotmart] Complete:', JSON.stringify({ done: r.done, failed: r.failed }));
+          logger.info('[affiliate/hotmart] Complete:', JSON.stringify({ done: r.done, failed: r.failed }));
         } catch (e) {
-          console.error('[affiliate/hotmart] Error:', e.message);
+          logger.error('[affiliate/hotmart] Error:', e.message);
         }
       }
       if (store === 'cakto' || store === 'all') {
         try {
           const { setupAllAffiliates: caktoSetup } = require('../../../agents/publisherCaktoAffiliate');
           const r = await caktoSetup({ commission, autoApprove, limit });
-          console.info('[affiliate/cakto] Complete:', JSON.stringify({ done: r.done, skipped: r.skipped, failed: r.failed }));
+          logger.info('[affiliate/cakto] Complete:', JSON.stringify({ done: r.done, skipped: r.skipped, failed: r.failed }));
         } catch (e) {
-          console.error('[affiliate/cakto] Error:', e.message);
+          logger.error('[affiliate/cakto] Error:', e.message);
         }
       }
     });
@@ -106,7 +108,7 @@ module.exports = function(sessionManager, orchestrator) {
           const { setupSingleAffiliate: hmSingle } = require('../../../agents/publisherHotmartAffiliate');
           await hmSingle(hotmartProductId, { commission, autoApprove });
         } catch (e) {
-          console.error('[affiliate/hotmart/single] Error:', e.message);
+          logger.error('[affiliate/hotmart/single] Error:', e.message);
         }
       }
       if (caktoProductId) {
@@ -114,7 +116,7 @@ module.exports = function(sessionManager, orchestrator) {
           const { setupSingleAffiliate: caktoSingle } = require('../../../agents/publisherCaktoAffiliate');
           await caktoSingle(caktoProductId, { commission, autoApprove });
         } catch (e) {
-          console.error('[affiliate/cakto/single] Error:', e.message);
+          logger.error('[affiliate/cakto/single] Error:', e.message);
         }
       }
     });

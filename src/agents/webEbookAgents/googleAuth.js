@@ -1,4 +1,6 @@
 'use strict';
+const { createLogger } = require('../../core/logger');
+const logger = createLogger('googleAuth');
 /**
  * googleAuth.js — Injeta sessão Google em Puppeteer e resolve OAuth
  *
@@ -49,7 +51,7 @@ async function injectGoogleSession(browser, googleSessionFile) {
         await page.setCookie(c);
       } catch {}
     }
-    console.log(`[googleAuth] ✅ ${cookies.length} cookies Google injetados para ${session.email}`);
+    logger.info(`[googleAuth] ✅ ${cookies.length} cookies Google injetados para ${session.email}`);
   } finally {
     await page.close().catch(() => {});
   }
@@ -90,7 +92,7 @@ async function resolveGoogleOAuth(servicePage, email, timeout = 30000) {
       ).catch(() => '');
       if (pageContent && !pageContent.toLowerCase().includes('sign in') &&
           !pageContent.toLowerCase().includes('entrar')) {
-        console.log('[googleAuth] OAuth resolvido via redirect direto');
+        logger.info('[googleAuth] OAuth resolvido via redirect direto');
         return true;
       }
     }
@@ -134,7 +136,7 @@ async function resolveGoogleOAuth(servicePage, email, timeout = 30000) {
         }, continueTexts);
 
         if (clicked) {
-          console.log(`[googleAuth] ${clicked}`);
+          logger.info(`[googleAuth] ${clicked}`);
           await sleep(3000);
           // Popup deve fechar após login
           try { await p.waitForNavigation({ timeout: 10000 }); } catch {}
@@ -160,7 +162,7 @@ async function resolveGoogleOAuth(servicePage, email, timeout = 30000) {
       }, continueTexts);
 
       if (embeddedClicked && embeddedClicked !== 'has-iframe') {
-        console.log(`[googleAuth] ${embeddedClicked}`);
+        logger.info(`[googleAuth] ${embeddedClicked}`);
         await sleep(3000);
         return true;
       }
@@ -169,7 +171,7 @@ async function resolveGoogleOAuth(servicePage, email, timeout = 30000) {
     await sleep(1000);
   }
 
-  console.warn('[googleAuth] Timeout ao resolver OAuth do Google');
+  logger.warn('[googleAuth] Timeout ao resolver OAuth do Google');
   return false;
 }
 
@@ -201,7 +203,7 @@ async function saveServiceSession(page, sessionFile, meta = {}) {
 
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
   fs.writeFileSync(sessionFile, JSON.stringify(session, null, 2));
-  console.log(`[googleAuth] Sessão salva: ${sessionFile} (${cookies.length} cookies)`);
+  logger.info(`[googleAuth] Sessão salva: ${sessionFile} (${cookies.length} cookies)`);
   return session;
 }
 
@@ -243,10 +245,10 @@ async function loadServiceSession(page, sessionFile) {
       } catch {}
     }
 
-    console.log(`[googleAuth] Sessão carregada: ${sessionFile} (${cookies.length} cookies)`);
+    logger.info(`[googleAuth] Sessão carregada: ${sessionFile} (${cookies.length} cookies)`);
     return true;
   } catch (e) {
-    console.warn(`[googleAuth] Erro ao carregar sessão: ${e.message}`);
+    logger.warn(`[googleAuth] Erro ao carregar sessão: ${e.message}`);
     return false;
   }
 }

@@ -1,4 +1,6 @@
 'use strict';
+const { createLogger } = require('../../core/logger');
+const logger = createLogger('index');
 /**
  * webEbookAgents/index.js — Orquestrador de geração de ebooks via serviços web gratuitos
  *
@@ -45,15 +47,15 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function tryWebEbookGeneration({ topic, language = 'en' }) {
   // Verificar se todos os créditos estão esgotados
   if (creditTracker.isAllExhausted()) {
-    console.log('[webEbook] Todos os créditos mensais esgotados — usando pipeline normal');
+    logger.info('[webEbook] Todos os créditos mensais esgotados — usando pipeline normal');
     return null;
   }
 
   const summary = creditTracker.getSummary();
-  console.log(`[webEbook] Créditos disponíveis este mês (${summary.month}):`);
+  logger.info(`[webEbook] Créditos disponíveis este mês (${summary.month}):`);
   for (const [svc, info] of Object.entries(summary.services)) {
     if (!info.exhausted) {
-      console.log(`  ${svc}: ${info.remaining}/${info.total} restantes`);
+      logger.info(`  ${svc}: ${info.remaining}/${info.total} restantes`);
     }
   }
 
@@ -64,16 +66,16 @@ async function tryWebEbookGeneration({ topic, language = 'en' }) {
   while (attempts < maxAttempts) {
     const slot = creditTracker.getNextSlot();
     if (!slot) {
-      console.log('[webEbook] Sem slots disponíveis — pipeline normal');
+      logger.info('[webEbook] Sem slots disponíveis — pipeline normal');
       return null;
     }
 
     const { service, email, googleSessionFile, serviceSessionFile, remaining } = slot;
-    console.log(`[webEbook] Tentativa ${attempts+1}: ${service} com ${email} (${remaining} restantes)`);
+    logger.info(`[webEbook] Tentativa ${attempts+1}: ${service} com ${email} (${remaining} restantes)`);
 
     const generator = GENERATORS[service];
     if (!generator) {
-      console.warn(`[webEbook] Generator não encontrado: ${service}`);
+      logger.warn(`[webEbook] Generator não encontrado: ${service}`);
       creditTracker.recordFailure(service, email, 'generator-not-found');
       attempts++;
       continue;
@@ -88,7 +90,7 @@ async function tryWebEbookGeneration({ topic, language = 'en' }) {
 
       if (result && result.pdfPath) {
         creditTracker.recordSuccess(service, email);
-        console.log(`[webEbook] ✅ ${service} | ${email} | ${result.pdfPath}`);
+        logger.info(`[webEbook] ✅ ${service} | ${email} | ${result.pdfPath}`);
 
         // Salvar estado no genia para não perder
         saveGenieState(service, email, result);
@@ -103,14 +105,14 @@ async function tryWebEbookGeneration({ topic, language = 'en' }) {
       throw new Error('PDF não retornado pelo agente');
 
     } catch (err) {
-      console.warn(`[webEbook] ❌ ${service}/${email}: ${err.message.slice(0, 100)}`);
+      logger.warn(`[webEbook] ❌ ${service}/${email}: ${err.message.slice(0, 100)}`);
       creditTracker.recordFailure(service, email, err.message.slice(0, 100));
       attempts++;
       await sleep(2000);
     }
   }
 
-  console.log('[webEbook] Todas as tentativas esgotadas — pipeline normal');
+  logger.info('[webEbook] Todas as tentativas esgotadas — pipeline normal');
   return null;
 }
 

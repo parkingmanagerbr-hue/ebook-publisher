@@ -1,3 +1,5 @@
+const { createLogger } = require('../../core/logger');
+const logger = createLogger('creditTracker');
 'use strict';
 /**
  * creditTracker.js — Controle de créditos mensais dos serviços web de geração de ebooks
@@ -44,7 +46,7 @@ function loadState() {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     // Reset automático se mudou o mês
     if (raw.month !== month) {
-      console.log(`[creditTracker] Novo mês detectado (${raw.month} → ${month}) — resetando créditos`);
+      logger.info(`[creditTracker] Novo mês detectado (${raw.month} → ${month}) — resetando créditos`);
       return buildFreshState(month);
     }
     // Conta acrescentada no GMAIL_ACCOUNTS depois da criacao do estado do mes
@@ -127,7 +129,7 @@ function getNextSlot() {
       // Verificar se a sessão Google existe (necessária para OAuth)
       const googleSess = googleSessionFor(email);
       if (!fs.existsSync(googleSess)) {
-        console.log(`[creditTracker] Sem sessão Google para ${email} — pulando`);
+        logger.info(`[creditTracker] Sem sessão Google para ${email} — pulando`);
         continue;
       }
 
@@ -198,7 +200,7 @@ function resetMonthly() {
   const month    = new Date().toISOString().slice(0, 7);
   const newState = buildFreshState(month);
   saveState(newState);
-  console.log(`[creditTracker] ✅ Créditos mensais resetados para ${month}`);
+  logger.info(`[creditTracker] ✅ Créditos mensais resetados para ${month}`);
   return newState;
 }
 
