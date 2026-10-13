@@ -72,6 +72,8 @@ const MODULOS_NO_GATE = [
   'src/ferramentas/especificacao.js',
   'src/ferramentas/pagina.js',
   'src/ferramentas/combo.js',
+  'src/ferramentas/audiolivro.js',
+  'src/core/precoProprio.js',
   'src/core/cdpLocal.js',
   'src/core/aiClient.js',
   'src/core/database.js',

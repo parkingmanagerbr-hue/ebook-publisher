@@ -95,7 +95,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use('/covers',     express.static(path.join(__dirname, '../data/covers')));
-app.use('/audiobooks', express.static(path.join(__dirname, '../data/audiobooks')));
+// /audiobooks so serve o audio de dominio publico; o do livro a venda sai
+// pela rota assinada /audio/:token (ver src/core/entrega.js).
+app.use('/audiobooks', require('./core/entrega').soAudioPublico, express.static(path.join(__dirname, '../data/audiobooks')));
 app.use('/pdfs', (req, res, next) => {
   const token = req.query.token || (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Token required' });
@@ -109,6 +111,17 @@ app.get('/entrega/:token', require('./core/entrega').criarRota(id => {
     return require('./core/database').getDb()
       .prepare('SELECT title, pdf_path FROM ebooks WHERE id = ?').get(id) || null;
   } catch { return null; }
+}));
+
+// Audiolivro do comprador: link assinado com finalidade propria, impresso na
+// pagina 2 do PDF do produto "e-book + audiolivro" (scripts/criarAudiolivros.js).
+app.get('/audio/:token', require('./core/entrega').criarRotaAudio({
+  dir: path.join(DATA_DIR, 'audiobooks'),
+  buscarTitulo: id => {
+    const e = require('./core/database').getDb().prepare('SELECT title FROM ebooks WHERE id = ?').get(id);
+    return e ? e.title : null;
+  },
+  log: logger,
 }));
 
 app.use(express.static(path.join(__dirname, '../public')));

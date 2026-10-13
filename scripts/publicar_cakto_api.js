@@ -20,6 +20,7 @@ const { ehErroDaLoja } = require('../src/agents/higieneCakto');
 const { resumoDaPublicacao, nomeDistintoCakto, chaveDeTitulo } = require('../src/agents/caktoApiRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { travar } = require('../src/core/travaLocal');
+const { precoDaLoja } = require('../src/core/precoProprio');
 
 let log;
 try { log = require('../src/core/logger').createLogger('publicarCakto'); }
@@ -52,8 +53,11 @@ async function rodar(limite, seco) {
   // tinham titulo ja publicado — descartar todos deixava o catalogo parado.
   // combo_de/price: o combo (livro + plano de acao) sobe com o preco proprio,
   // gravado e conferido na oferta (publisherCaktoApi).
-  if (!db.prepare('PRAGMA table_info(ebooks)').all().some(c => c.name === 'combo_de')) db.prepare('ALTER TABLE ebooks ADD COLUMN combo_de TEXT').run();
-  const base = "SELECT id, title, subtitle, description, language, cover_path, pdf_path, price, combo_de FROM ebooks " +
+  // audio_de: o e-book + audiolivro (scripts/criarAudiolivros.js), mesma regra.
+  for (const col of ['combo_de', 'audio_de']) {
+    if (!db.prepare('PRAGMA table_info(ebooks)').all().some(c => c.name === col)) db.prepare('ALTER TABLE ebooks ADD COLUMN ' + col + ' TEXT').run();
+  }
+  const base = "SELECT id, title, subtitle, description, language, cover_path, pdf_path, price, combo_de, audio_de FROM ebooks " +
     "WHERE (cakto_product_id IS NULL OR cakto_product_id = '') AND pdf_path IS NOT NULL AND pdf_path <> '' " +
     "AND id NOT IN (SELECT ebook_id FROM cakto_recusado) AND title IS NOT NULL AND title <> '' " +
     // --so-combos: rodada controlada, so o combo (testar um antes do lote).
@@ -115,7 +119,7 @@ async function rodar(limite, seco) {
     if (seco) { log.info('[dry-run] publicaria "' + umaLinha(e.nomeNaLoja) + '" entrega=' + (entrega ? 'ok' : 'FALTA')); continue; }
     try {
       const capa = e.cover_path && fs.existsSync(e.cover_path) ? e.cover_path : null;
-      const r = await publicarNaCakto({ title: e.nomeNaLoja, description: e.description, entrega, capa, preco: e.combo_de ? e.price : undefined }, { H });
+      const r = await publicarNaCakto({ title: e.nomeNaLoja, description: e.description, entrega, capa, preco: precoDaLoja(e) }, { H });
       // O que o resto do sistema chama de cakto_product_id e o shortcode da
       // oferta (e o que /api/offers/{shortcode}/ aceita).
       if (r.shortcode) grava.run(r.shortcode, e.nomeNaLoja, e.id);

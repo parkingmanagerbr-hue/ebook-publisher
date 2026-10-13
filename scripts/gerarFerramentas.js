@@ -25,6 +25,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { montarPedido, lerEspecificacao, totalDeAcoes } = require('../src/ferramentas/especificacao');
 const { paginaDaFerramenta } = require('../src/ferramentas/pagina');
+const { sqlSoLivroAvulso } = require('../src/core/precoProprio');
 
 let log;
 try { log = require('../src/core/logger').createLogger('ferramentas'); }
@@ -102,11 +103,14 @@ async function gerarUma(db, e, { refazer = false, gerar } = {}) {
  * arquivo) e que ainda nao tem ferramenta nem e ele proprio um combo.
  */
 function proximosCandidatos(db, limite, existe = fs.existsSync) {
+  // Audiolivro (audio_de) e produto derivado como o combo: ferramenta e do
+  // livro avulso, senao o mesmo livro ganharia um segundo combo pelo audio.
+  const derivados = sqlSoLivroAvulso(db.prepare('PRAGMA table_info(ebooks)').all().map(c => c.name), 'e.');
   const linhas = db.prepare(
     "SELECT e.id, e.title, e.subtitle, e.topic, e.language, e.pdf_path FROM ebooks e " +
     "LEFT JOIN topics t ON t.topic = e.topic " +
     "LEFT JOIN ferramentas f ON f.ebook_id = e.id " +
-    "WHERE f.ebook_id IS NULL AND (e.combo_de IS NULL OR e.combo_de = '') " +
+    "WHERE f.ebook_id IS NULL " + derivados +
     "AND LOWER(COALESCE(e.language, '')) LIKE 'pt%' " +
     "AND COALESCE(e.hotmart_product_id, '') <> '' AND COALESCE(e.cakto_product_id, '') <> '' " +
     "ORDER BY COALESCE(t.demand_score, 0) DESC, e.rowid DESC"

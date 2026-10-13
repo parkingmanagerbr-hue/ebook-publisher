@@ -80,3 +80,13 @@ test('traz os campos que a geracao usa', () => {
   const [l] = proximosCandidatos(banco(), 1, existe);
   assert.deepStrictEqual(Object.keys(l).sort(), ['id', 'language', 'pdf_path', 'subtitle', 'title', 'topic']);
 });
+
+test('audiolivro (audio_de) nao ganha ferramenta: e produto derivado, como o combo', () => {
+  const db = banco();
+  db.exec('ALTER TABLE ebooks ADD COLUMN audio_de TEXT');
+  db.prepare("INSERT INTO topics VALUES ('so-audio', 9.99)").run();
+  db.prepare("INSERT INTO ebooks (id, title, topic, language, pdf_path, hotmart_product_id, cakto_product_id, audio_de) VALUES ('x-audio', 'A', 'so-audio', 'pt-BR', '/p/a2.pdf', '40', 'c40', 'b-alta')").run();
+  const r = proximosCandidatos(db, 10, existe).map((l) => l.id);
+  assert.ok(!r.includes('x-audio'), 'a linha do audiolivro ficou de fora');
+  assert.deepStrictEqual(r, ['b-alta', 'b-media', 'b-baixa']);
+});
