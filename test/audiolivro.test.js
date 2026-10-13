@@ -193,3 +193,14 @@ test('script: le os ids da pasta (o de dominio publico fica de fora) e mede pelo
   const cols = db.prepare('PRAGMA table_info(ebooks)').all().map(c => c.name);
   assert.ok(cols.includes('audio_de') && cols.includes('combo_de'), 'colunas criadas uma vez, sem erro na segunda');
 });
+
+test('no A4 o link do audio (110 caracteres) cabe numa linha so, com letra menor', async () => {
+  const { PDFDocument, PDFName } = require('pdf-lib');
+  const url = 'https://publisher.veloxisit.com.br/audio/0c104665-ee04-4964-aab3-e781471f1247.' + 'A'.repeat(32);
+  const texto = a.textoDaPaginaDoAudio('Livro', url, 2880, 'pt');
+  const doc = await PDFDocument.load(await require('../src/ferramentas/combo').montarPdfDoCombo(await pdfDeTeste(595.28), { titulo: 'Livro', url, texto }));
+  const anots = doc.getPage(1).node.lookup(PDFName.of('Annots'));
+  assert.strictEqual(anots.size(), 1, 'uma linha, sem sobrar um caractere sozinho na seguinte');
+  const rect = anots.lookup(0).lookup(PDFName.of('Rect')).asArray().map(n => n.asNumber());
+  assert.ok(rect[2] <= 595.28 - 56 + 0.01, 'dentro da margem');
+});

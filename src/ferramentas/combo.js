@@ -138,7 +138,11 @@ async function montarPdfDoCombo(bytesDoLivro, { titulo, url, texto }) {
   y -= 10;
   // O link: texto azul sublinhado + anotacao clicavel por cima de cada linha.
   const util = w - 2 * margem;
-  const tamLink = util < normal.widthOfTextAtSize(t.link, 11) ? 9 : 11;
+  // Letra menor antes de quebrar: o link do audiolivro tem ~110 caracteres e,
+  // a 9 pt no A4, sobrava UM caractere na segunda linha (medido em 13/10/2026).
+  // So abaixo de 7 pt (ilegivel) o link passa a quebrar.
+  const emUm = normal.widthOfTextAtSize(t.link, 1);
+  const tamLink = util >= emUm * 11 ? 11 : Math.max(7, Math.min(9, Math.floor((util / emUm) * 2) / 2));
   const anotacoes = [];
   for (const pedaco of quebrarLink(t.link, util, s => normal.widthOfTextAtSize(s, tamLink))) {
     const larguraLink = normal.widthOfTextAtSize(pedaco, tamLink);
