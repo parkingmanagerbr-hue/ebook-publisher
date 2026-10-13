@@ -18,7 +18,7 @@ const http = require('http');
 const puppeteer = require('puppeteer-core');
 const { publicarNaKiwify, credenciais } = require('../src/agents/publisherKiwify');
 const { portasCandidatas, escolherPorta } = require('../src/core/navegadorLocal');
-const { ehLimiteDeTaxa, valeTentarKiwify } = require('../src/agents/kiwifyRegras');
+const { ehLimiteDeTaxa, valeTentarKiwify, desfechoDaFalha } = require('../src/agents/kiwifyRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { noServidor, rodarAqui } = require('../src/core/modoServidor');
 
@@ -35,6 +35,8 @@ const TMP = path.join(os.tmpdir(), 'publicar-kiwify');
 // ela, 57 de 60 falharam em segundos (23/09/2026).
 const PAUSA_MS = Number(process.env.KIWIFY_PAUSA_MS || 6000);
 const DESISTIR_APOS = 5;
+// Livro cujo produto nao entrega sai da fila depois disto (e fica registrado).
+const MAX_SEM_ENTREGA = 3;
 const dormir = ms => new Promise(r => setTimeout(r, ms));
 
 const arg = (nome, padrao) => {
@@ -65,11 +67,14 @@ function buscarPendentes(limite) {
     const colunas = db.prepare("PRAGMA table_info(ebooks)").all().map(c => c.name);
     if (!colunas.includes('kiwify_product_id')) db.prepare('ALTER TABLE ebooks ADD COLUMN kiwify_product_id TEXT').run();
     if (!colunas.includes('kiwify_url')) db.prepare('ALTER TABLE ebooks ADD COLUMN kiwify_url TEXT').run();
+    if (!colunas.includes('kiwify_checkout')) db.prepare('ALTER TABLE ebooks ADD COLUMN kiwify_checkout TEXT').run();
+    db.prepare('CREATE TABLE IF NOT EXISTS kiwify_falha (ebook_id TEXT PRIMARY KEY, motivo TEXT, tentativas INTEGER, quando INTEGER)').run();
     // Dois grupos separados: so "pt primeiro" enchia a lista de portugues e o
     // rodizio de idioma nunca via um livro estrangeiro.
     const base = "SELECT id, title, topic, description, language, price FROM ebooks " +
       "WHERE (kiwify_product_id IS NULL OR kiwify_product_id = '') AND pdf_path IS NOT NULL " +
-      "AND id NOT IN (SELECT ebook_id FROM kiwify_recusado) AND title IS NOT NULL AND title <> '' ";
+      "AND id NOT IN (SELECT ebook_id FROM kiwify_recusado) AND title IS NOT NULL AND title <> '' " +
+      "AND id NOT IN (SELECT ebook_id FROM kiwify_falha WHERE tentativas >= ${MAX_SEM_ENTREGA}) ";
     const teto = ${(Number(limite) || 3) * 4};
     const rows = db.prepare(base + "AND LOWER(COALESCE(language,'')) LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all()
       .concat(db.prepare(base + "AND LOWER(COALESCE(language,'')) NOT LIKE 'pt%' ORDER BY rowid DESC LIMIT " + teto).all());
@@ -100,15 +105,35 @@ function marcarRecusado(id, palavra) {
   `);
 }
 
-function gravarResultado(id, produtoId, url) {
+/** kiwify_url e o PAINEL; kiwify_checkout e o link de compra publico (ou vazio). */
+function gravarResultado(id, produtoId, url, checkout) {
   rodarNoContainer(`
     const D = require('better-sqlite3');
     const db = new D('/app/data/metrics.db');
     db.pragma('busy_timeout = 5000');
-    db.prepare('UPDATE ebooks SET kiwify_product_id = ?, kiwify_url = ? WHERE id = ?')
-      .run(${JSON.stringify(String(produtoId))}, ${JSON.stringify(String(url))}, ${JSON.stringify(String(id))});
+    if (!db.prepare('PRAGMA table_info(ebooks)').all().some(c => c.name === 'kiwify_checkout')) db.prepare('ALTER TABLE ebooks ADD COLUMN kiwify_checkout TEXT').run();
+    db.prepare('UPDATE ebooks SET kiwify_product_id = ?, kiwify_url = ?, kiwify_checkout = ? WHERE id = ?')
+      .run(${JSON.stringify(String(produtoId))}, ${JSON.stringify(String(url))}, ${JSON.stringify(checkout || null)}, ${JSON.stringify(String(id))});
+    db.prepare('CREATE TABLE IF NOT EXISTS kiwify_falha (ebook_id TEXT PRIMARY KEY, motivo TEXT, tentativas INTEGER, quando INTEGER)').run();
+    db.prepare('DELETE FROM kiwify_falha WHERE ebook_id = ?').run(${JSON.stringify(String(id))});
     console.log('@@ok');
   `);
+}
+
+/** Produto sem entrega: conta a tentativa; no teto, o livro sai da fila. Devolve a contagem. */
+function registrarSemEntrega(id, motivo) {
+  const saida = rodarNoContainer(`
+    const D = require('better-sqlite3');
+    const db = new D('/app/data/metrics.db');
+    db.pragma('busy_timeout = 5000');
+    db.prepare('CREATE TABLE IF NOT EXISTS kiwify_falha (ebook_id TEXT PRIMARY KEY, motivo TEXT, tentativas INTEGER, quando INTEGER)').run();
+    db.prepare("INSERT INTO kiwify_falha (ebook_id, motivo, tentativas, quando) VALUES (?, ?, 1, ?) " +
+      "ON CONFLICT(ebook_id) DO UPDATE SET motivo = excluded.motivo, tentativas = tentativas + 1, quando = excluded.quando")
+      .run(${JSON.stringify(String(id))}, ${JSON.stringify('sem-entrega: ' + String(motivo).slice(0, 120))}, Date.now());
+    console.log('@@' + db.prepare('SELECT tentativas FROM kiwify_falha WHERE ebook_id = ?').get(${JSON.stringify(String(id))}).tentativas);
+  `);
+  const linha = String(saida).split(/\r?\n/).find(l => l.startsWith('@@'));
+  return linha ? Number(linha.slice(2)) : null;
 }
 
 /** slug da vitrine: mesma regra do gerador de paginas. */
@@ -164,6 +189,10 @@ async function principal() {
   const pagina = await browser.newPage();
   const cred = await credenciais(pagina);
   log.info('sessao da Kiwify pronta');
+  // Na VPS o segredo da entrega esta aqui: a conferencia prova que o token do
+  // approved_url abre ESTE livro. Fora dela, confere-se a igualdade com o link
+  // assinado que o servidor gerou (kiwifyRegras.motivoSemEntrega).
+  const verificarEntrega = noServidor() ? (t => require('../src/core/entrega').verificarToken(t)) : undefined;
 
   let publicados = 0, falhas = 0, recusados = 0, seguidasPorRitmo = 0;
   for (const livro of pendentes) {
@@ -175,23 +204,28 @@ async function principal() {
       preco: livro.price || 5,
       paginaDeVendas: VITRINE + slug(livro.title) + '/',
       linkDeEntrega: livro.link_entrega || '',
+      ebookId: livro.id,
     };
     if (!dados.linkDeEntrega) log.warn('sem link de entrega: "' + umaLinha(livro.title) + '"' + (livro.sem_entrega ? ' (' + umaLinha(livro.sem_entrega, 80) + ')' : ''));
     if (seco) { log.info('[dry-run] publicaria "' + umaLinha(livro.title) + '" entrega=' + (dados.linkDeEntrega ? 'ok' : 'FALTA')); continue; }
     try {
-      const r = await publicarNaKiwify(pagina, dados, { cred });
-      gravarResultado(livro.id, r.id, r.url);
+      const r = await publicarNaKiwify(pagina, dados, { cred, verificarEntrega });
+      gravarResultado(livro.id, r.id, r.url, r.checkout);
       publicados++;
       seguidasPorRitmo = 0;
       log.info((r.jaExistia ? 'ja existia' : 'publicado') + ': "' + umaLinha(livro.title) + '" -> ' + r.url);
     } catch (e) {
       falhas++;
       const msg = String((e && e.message) || '');
-      const recusa = msg.match(/^KIWIFY_RECUSADO: (.+)$/);
-      if (recusa) {
-        marcarRecusado(livro.id, recusa[1]);
+      const desfecho = desfechoDaFalha(msg);
+      if (desfecho.tipo === 'recusado') {
+        marcarRecusado(livro.id, desfecho.detalhe);
         recusados++;
-        log.warn('fora da fila (filtro de conteudo, palavra "' + umaLinha(recusa[1], 40) + '"): "' + umaLinha(livro.title) + '"');
+        log.warn('fora da fila (filtro de conteudo, palavra "' + umaLinha(desfecho.detalhe, 40) + '"): "' + umaLinha(livro.title) + '"');
+      } else if (desfecho.tipo === 'sem-entrega') {
+        const n = registrarSemEntrega(livro.id, desfecho.detalhe);
+        log.error('NAO publicado (sem-entrega) "' + umaLinha(livro.title) + '": ' + umaLinha(desfecho.detalhe, 120) +
+          ' | tentativa ' + n + ' de ' + MAX_SEM_ENTREGA + (n >= MAX_SEM_ENTREGA ? ' — saiu da fila, conferir o produto no painel' : ''));
       } else {
         log.error('FALHA "' + umaLinha(livro.title) + '": ' + umaLinha(msg, 160));
       }

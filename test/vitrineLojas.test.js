@@ -15,7 +15,7 @@ const bom = 'Um texto de descricao com tamanho suficiente para valer a visita do
 const lojas = l => lojasDoLivro(l).map(x => x.loja + ' ' + x.url);
 
 test('todas as lojas confiaveis, na ordem de preferencia', () => {
-  const l = { gplay_id: 'AbCdEf123456', kiwify_url: 'https://pay.kiwify.com.br/Xy12AbC', hotmart_product_id: '8451111', cakto_sales_page: 'https://pay.cakto.com.br/abc123_1147168' };
+  const l = { gplay_id: 'AbCdEf123456', kiwify_checkout: 'https://pay.kiwify.com.br/Xy12AbC', hotmart_product_id: '8451111', cakto_sales_page: 'https://pay.cakto.com.br/abc123_1147168' };
   assert.deepStrictEqual(lojas(l), [
     'cakto https://pay.cakto.com.br/abc123_1147168',
     'hotmart https://hotmart.com/product/8451111',
@@ -28,10 +28,12 @@ test('todas as lojas confiaveis, na ordem de preferencia', () => {
 test('link incompleto ou de painel nunca vira botao', () => {
   assert.deepStrictEqual(lojas({ cakto_sales_page: 'https://pay.cakto.com.br/abc123' }), [], 'Cakto sem checkout da 404');
   assert.deepStrictEqual(lojas({ cakto_sales_page: 'https://pay.cakto.com.br/abc_1/extra' }), []);
-  assert.deepStrictEqual(lojas({ kiwify_url: 'https://dashboard.kiwify.com/products/edit/0d1e-b6ec' }), [], 'painel do vendedor e tela de login');
-  assert.deepStrictEqual(lojas({ kiwify_url: 'https://pay.kiwify.com.br/' }), []);
-  assert.deepStrictEqual(lojas({ kiwify_url: 'http://pay.kiwify.com.br/Xy12' }), [], 'sem https nao');
-  assert.deepStrictEqual(lojas({ kiwify_url: 'https://kiwify.app/Xy12' }), ['kiwify https://kiwify.app/Xy12']);
+  assert.deepStrictEqual(lojas({ kiwify_checkout: 'https://dashboard.kiwify.com/products/edit/0d1e-b6ec' }), [], 'painel do vendedor e tela de login');
+  assert.deepStrictEqual(lojas({ kiwify_checkout: 'https://pay.kiwify.com.br/' }), []);
+  assert.deepStrictEqual(lojas({ kiwify_checkout: 'http://pay.kiwify.com.br/Xy12' }), [], 'sem https nao');
+  assert.deepStrictEqual(lojas({ kiwify_checkout: 'https://kiwify.app/Xy12' }), [], 'so o checkout pay.kiwify.com.br');
+  assert.deepStrictEqual(lojas({ kiwify_checkout: 'https://pay.kiwify.com.br/Xy-12' }), [], 'id alfanumerico');
+  assert.deepStrictEqual(lojas({ kiwify_url: 'https://pay.kiwify.com.br/Xy12AbC' }), [], 'kiwify_url e o painel: nunca e lido como checkout');
   assert.deepStrictEqual(lojas({ gplay_id: 'x' }), [], 'id curto demais');
   assert.deepStrictEqual(lojas({ gplay_id: 'id com espaco' }), []);
   assert.deepStrictEqual(lojas({ gplay_id: 'GGKEY:SJ22W106K4J' }), ['gplay https://play.google.com/store/books/details?id=GGKEY%3ASJ22W106K4J']);
@@ -40,14 +42,14 @@ test('link incompleto ou de painel nunca vira botao', () => {
 });
 
 test('Kiwify sozinha basta para a pagina; linkDeCompra continua so Cakto/Hotmart', () => {
-  const l = { title: 'Guia', description: bom, kiwify_url: 'https://pay.kiwify.com.br/Xy12AbC' };
+  const l = { title: 'Guia', description: bom, kiwify_checkout: 'https://pay.kiwify.com.br/Xy12AbC' };
   assert.strictEqual(elegivelParaVitrine(l), true);
   assert.strictEqual(linkDeCompra(l), null, 'semantica antiga preservada');
-  assert.strictEqual(elegivelParaVitrine({ ...l, kiwify_url: 'https://dashboard.kiwify.com/products/edit/1' }), false);
+  assert.strictEqual(elegivelParaVitrine({ ...l, kiwify_checkout: 'https://dashboard.kiwify.com/products/edit/1' }), false);
 });
 
 test('rodape so cita loja que tem produto no catalogo gerado', () => {
-  const cat = [{ hotmart_product_id: '1' }, { kiwify_url: 'https://pay.kiwify.com.br/A1' }, { kiwify_url: 'https://dashboard.kiwify.com/x' }, null];
+  const cat = [{ hotmart_product_id: '1' }, { kiwify_checkout: 'https://pay.kiwify.com.br/Aa11' }, { kiwify_checkout: 'https://dashboard.kiwify.com/x' }, null];
   assert.deepStrictEqual(lojasDoCatalogo(cat), ['Hotmart', 'Kiwify']);
   assert.deepStrictEqual(lojasDoCatalogo([{ gplay_id: 'AbCdEf1234' }, { cakto_sales_page: 'https://pay.cakto.com.br/a_1' }]), ['Cakto', 'Google Play'], 'ordem da lista, nao da chegada');
   assert.deepStrictEqual(lojasDoCatalogo(null), []);
@@ -66,14 +68,14 @@ test('cada original aponta para o audiolivro que esta na vitrine', () => {
 
 const livro = (extra = {}) => ({
   id: 'o1', title: 'Liderança Prática', description: bom, price: 4.99, slug: 'lideranca-pratica-o1', imagem: null,
-  lojas: lojasDoLivro({ hotmart_product_id: '845', kiwify_url: 'https://pay.kiwify.com.br/Kw1' }), ...extra,
+  lojas: lojasDoLivro({ hotmart_product_id: '845', kiwify_checkout: 'https://pay.kiwify.com.br/Kw11' }), ...extra,
 });
 
 test('pagina do livro: um botao por loja, o primeiro destacado, e o bloco do audiolivro', () => {
   const audio = { slug: 'lideranca-pratica-audiolivro-a1', title: 'Liderança Prática + Audiolivro', price: 9.9 };
   const h = paginaDoLivro(livro(), [], { audio, lojas: 'Disponível na Hotmart e Kiwify' });
   assert.match(h, /<a class="botao" href="https:\/\/hotmart\.com\/product\/845"[^>]*>Comprar na Hotmart<\/a>/);
-  assert.match(h, /<a class="botao secundario" href="https:\/\/pay\.kiwify\.com\.br\/Kw1"[^>]*>Comprar na Kiwify<\/a>/);
+  assert.match(h, /<a class="botao secundario" href="https:\/\/pay\.kiwify\.com\.br\/Kw11"[^>]*>Comprar na Kiwify<\/a>/);
   assert.match(h, /Também com audiolivro[\s\S]*href="\/livros\/lideranca-pratica-audiolivro-a1\/"/);
   assert.match(h, /R\$ 9,90/);
   assert.match(h, /Disponível na Hotmart e Kiwify/);
@@ -104,8 +106,8 @@ test('indice: selo "com audiolivro" no audiolivro e no original que tem um', () 
 test('consulta do catalogo tolera coluna ausente (gplay_id ainda nao existe)', () => {
   const db = new Database(':memory:');
   db.exec('CREATE TABLE ebooks (id TEXT, title TEXT, description TEXT, language TEXT, price REAL, cover_path TEXT, ' +
-    'hotmart_product_id TEXT, hotmart_url TEXT, cakto_product_id TEXT, kiwify_url TEXT)');
-  db.prepare("INSERT INTO ebooks (id, title, kiwify_url) VALUES ('k', 'So Kiwify', 'https://pay.kiwify.com.br/A1')").run();
+    'hotmart_product_id TEXT, hotmart_url TEXT, cakto_product_id TEXT, kiwify_checkout TEXT)');
+  db.prepare("INSERT INTO ebooks (id, title, kiwify_checkout) VALUES ('k', 'So Kiwify', 'https://pay.kiwify.com.br/Aa11')").run();
   db.prepare("INSERT INTO ebooks (id, title) VALUES ('n', 'Em loja nenhuma')").run();
   const cols = db.prepare('PRAGMA table_info(ebooks)').all().map(c => c.name);
   const linhas = db.prepare(consultaDoCatalogo(cols)).all();

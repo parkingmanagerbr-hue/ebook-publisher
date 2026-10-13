@@ -14,7 +14,7 @@
  * Ele nao preenche cadastro, documento nem dado bancario: a conta so recebe
  * quando o titular completa isso no painel.
  */
-const { corpoDeCriacao, corpoDeAtualizacao, categoriaKiwify, mesmoProdutoKiwify, nomeKiwify, chaveDeNome, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa } = require('./kiwifyRegras');
+const { corpoDeCriacao, corpoDeAtualizacao, categoriaKiwify, mesmoProdutoKiwify, nomeKiwify, chaveDeNome, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa, motivoSemEntrega, checkoutPublico } = require('./kiwifyRegras');
 
 let log;
 try { log = require('../core/logger').createLogger('kiwify'); }
@@ -97,10 +97,33 @@ async function catalogo(page, cred, opcoes) {
 }
 
 /**
- * Publica um livro. Devolve { id, url, jaExistia } ou lanca.
- * `livro`: { title, description, language, preco, paginaDeVendas, topic }
+ * Le o produto de volta e confere que ele ENTREGA o livro. Sem isso o produto
+ * ficava a venda com approved_url vazio (13/10/2026). Lanca KIWIFY_SEM_ENTREGA
+ * com `idKiwify` no erro; devolve o checkout publico quando confere.
  */
-async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada } = {}) {
+async function conferirEntrega(page, cred, id, livro, { verificarEntrega, opcoesDeChamada } = {}) {
+  const r = await chamar(page, cred, 'GET', '/v1/products/' + id + '?full=true', null, opcoesDeChamada);
+  const produto = (r.json && (r.json.product || r.json)) || null;
+  const motivo = r.status !== 200 || !produto
+    ? 'conferencia ilegivel (status ' + r.status + ')'
+    : motivoSemEntrega(produto, { ebookId: livro.ebookId, linkEsperado: livro.linkDeEntrega, verificar: verificarEntrega });
+  if (motivo) {
+    log.error('SEM_ENTREGA na Kiwify: id=' + umaLinha(id, 40) + ' "' + umaLinha(livro.title) + '" — ' + motivo + ' — NAO gravado como publicado');
+    const e = new Error('KIWIFY_SEM_ENTREGA: ' + motivo + ' id=' + umaLinha(id, 40));
+    e.idKiwify = id;
+    throw e;
+  }
+  const checkout = checkoutPublico(produto);
+  log.info('entrega conferida id=' + umaLinha(id, 40) + (checkout ? ' | checkout publico ok' : ' | sem plano publico ativo (checkout fica vazio)'));
+  return checkout;
+}
+
+/**
+ * Publica um livro. Devolve { id, url, jaExistia, checkout } ou lanca.
+ * `livro`: { title, description, language, preco, paginaDeVendas, topic, ebookId, linkDeEntrega }
+ * `verificarEntrega(token)`: verificarToken do servidor, quando ha segredo aqui.
+ */
+async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada, verificarEntrega } = {}) {
   const credenciais_ = cred || await credenciais(page, { espera });
   const titulo = String(livro.title || '').trim();
   if (!titulo) throw new Error('KIWIFY_SEM_TITULO: livro sem nome');
@@ -111,9 +134,16 @@ async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada } =
   if (porNome.has(chave)) {
     const id = porNome.get(chave);
     log.info('ja estava na Kiwify: "' + umaLinha(titulo) + '" id=' + umaLinha(id, 40) + ' (catalogo com ' + total + ')');
-    return { id, url: PAINEL + '/products/edit/' + id, jaExistia: true };
+    // Produto antigo pode estar a venda sem entrega: confere antes de ligar.
+    const checkout = await conferirEntrega(page, credenciais_, id, livro, { verificarEntrega, opcoesDeChamada });
+    return { id, url: PAINEL + '/products/edit/' + id, jaExistia: true, checkout };
   }
 
+  // Sem link de entrega o produto nasceria a venda sem entregar nada: nao cria.
+  if (!livro.linkDeEntrega) {
+    log.error('SEM_ENTREGA: "' + umaLinha(titulo) + '" sem link de entrega — produto NAO criado na Kiwify');
+    throw new Error('KIWIFY_SEM_ENTREGA: livro sem link de entrega');
+  }
   const corpo = corpoDeCriacao(livro);
   const criado = await chamar(page, credenciais_, 'POST', '/v1/products', corpo, opcoesDeChamada);
   if (criado.status !== 200 && criado.status !== 201) {
@@ -140,11 +170,14 @@ async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada } =
   const categoria = categoriaKiwify(titulo, livro.topic);
   const atualizado = await chamar(page, credenciais_, 'PUT', '/v1/products/' + id, corpoDeAtualizacao(base, livro, categoria), opcoesDeChamada);
   if (atualizado.status >= 400) {
-    log.warn('produto criado mas categoria nao entrou: id=' + umaLinha(id, 40) + ' status=' + atualizado.status + ' ' + umaLinha(atualizado.texto, 160));
+    // Este PUT leva a ENTREGA (approved_url), nao so a categoria: a conferencia
+    // abaixo decide se o produto pode ser dado por publicado.
+    log.warn('produto criado mas o PUT (categoria e entrega) falhou: id=' + umaLinha(id, 40) + ' status=' + atualizado.status + ' ' + umaLinha(atualizado.texto, 160));
   } else {
     log.info('categoria ' + categoria + ' gravada em id=' + umaLinha(id, 40));
   }
-  return { id, url: PAINEL + '/products/edit/' + id, jaExistia: false, categoria };
+  const checkout = await conferirEntrega(page, credenciais_, id, livro, { verificarEntrega, opcoesDeChamada });
+  return { id, url: PAINEL + '/products/edit/' + id, jaExistia: false, categoria, checkout };
 }
 
-module.exports = { publicarNaKiwify, credenciais, chamar, catalogo, API, PAINEL };
+module.exports = { publicarNaKiwify, conferirEntrega, credenciais, chamar, catalogo, API, PAINEL };

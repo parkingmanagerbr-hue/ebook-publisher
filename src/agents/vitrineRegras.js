@@ -15,6 +15,8 @@
  */
 
 /** Uma linha, sem quebra e sem espaco duplo. */
+const { CHECKOUT_KIWIFY } = require('./kiwifyRegras');
+
 function umaLinha(s, n = 300) {
   return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
 }
@@ -45,14 +47,14 @@ function linkHotmart(l) {
 }
 
 /**
- * Kiwify: so o checkout publico. O banco guarda em `kiwify_url` o endereco do
- * PAINEL do vendedor (dashboard.kiwify.com/products/edit/<id>, medido em
- * 13/10/2026 nos 1.419 livros de la) — o visitante cairia numa tela de login.
- * Esse endereco e recusado; entra so quem tiver o link de compra de verdade.
+ * Kiwify: so o checkout publico, da coluna `kiwify_checkout`. O `kiwify_url`
+ * do banco e o PAINEL do vendedor (dashboard.kiwify.com/products/edit/<id>,
+ * medido em 13/10/2026 nos 1.419 livros de la) — o visitante cairia numa tela
+ * de login — e por isso nao e lido aqui.
  */
 function linkKiwify(l) {
-  const url = umaLinha(l.kiwify_url || l.kiwifyUrl, 300);
-  return /^https:\/\/(pay\.kiwify\.com\.br|kiwify\.app)\/[A-Za-z0-9_-]+\/?$/.test(url) ? url : null;
+  const url = umaLinha(l.kiwify_checkout || l.kiwifyCheckout, 300);
+  return CHECKOUT_KIWIFY.test(url) ? url : null;
 }
 
 /**

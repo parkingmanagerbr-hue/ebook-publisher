@@ -11,16 +11,35 @@ const { interceptar, recarregar } = require('./apoio');
 const { publicarNaKiwify, credenciais, catalogo, chamar } = require('../src/agents/publisherKiwify');
 
 /** Resposta da API por (metodo, caminho). */
-function paginaFalsa({ produtos = [], criar, ao_buscar_id, put = { status: 200, corpo: {} }, device = 'DEV123', bearer = 'Bearer xyz', falhaDeRede = false } = {}) {
+// O servidor falso guarda o approved_url que o PUT gravou (so quando o PUT
+// passa), e o GET seguinte devolve esse estado — e o que a conferencia de
+// entrega le. `entregaInicial`: approved_url que o produto ja tinha (caso
+// "ja estava na Kiwify"). `conferencia`: resposta fixa para os GETs depois do
+// primeiro. `links`: planos de checkout do produto.
+const PLANO = [{ id: 'sVgIhNe', type: 'plan', status: 'active', private: false }];
+function paginaFalsa({ produtos = [], criar, ao_buscar_id, put = { status: 200, corpo: {} }, device = 'DEV123', bearer = 'Bearer xyz', falhaDeRede = false,
+  entregaInicial = '', conferencia, links = PLANO } = {}) {
   const chamadas = [];
   const ouvintes = [];
+  let approved = entregaInicial;
+  let getsPorId = 0;
   const responder = (metodo, caminho, corpo) => {
     chamadas.push({ metodo, caminho, corpo: corpo ? JSON.parse(corpo) : null });
     if (falhaDeRede) throw new TypeError('Failed to fetch');
     if (metodo === 'GET' && caminho.endsWith('/v1/products')) return { status: 200, texto: JSON.stringify(produtos) };
     if (metodo === 'POST') return criar || { status: 500, texto: '{}' };
-    if (metodo === 'GET') return ao_buscar_id || { status: 200, texto: JSON.stringify({ id: 'p1', name: 'Livro Novo' }) };
-    if (metodo === 'PUT') return { status: put.status, texto: JSON.stringify(put.corpo) };
+    if (metodo === 'GET') {
+      getsPorId++;
+      if (getsPorId === 1 && ao_buscar_id) return ao_buscar_id;
+      if (getsPorId > 1 && conferencia) return conferencia;
+      let base = { id: 'p1', name: 'Livro Novo' };
+      try { const j = ao_buscar_id && JSON.parse(ao_buscar_id.texto); if (j) base = j.product || j; } catch (_) { /* GET ilegivel no primeiro */ }
+      return { status: 200, texto: JSON.stringify({ ...base, links, checkout: { approved_url: approved } }) };
+    }
+    if (metodo === 'PUT') {
+      if (put.status < 400) approved = JSON.parse(corpo).approved_url;
+      return { status: put.status, texto: JSON.stringify(put.corpo) };
+    }
     return { status: 404, texto: '{}' };
   };
   return {
@@ -56,7 +75,8 @@ function paginaFalsa({ produtos = [], criar, ao_buscar_id, put = { status: 200, 
   };
 }
 
-const LIVRO = { title: 'Livro Novo', description: 'Descricao do livro.', language: 'pt-BR', preco: 5, paginaDeVendas: 'https://veloxisit.com.br/livros/x/', topic: 'financas' };
+const ENTREGA = 'https://publisher.veloxisit.com.br/entrega/ebook-0001.' + 'S'.repeat(32);
+const LIVRO = { title: 'Livro Novo', description: 'Descricao do livro.', language: 'pt-BR', preco: 5, paginaDeVendas: 'https://veloxisit.com.br/livros/x/', topic: 'financas', ebookId: 'ebook-0001', linkDeEntrega: ENTREGA };
 const CRED = { bearer: 'Bearer xyz', device: 'DEV123' };
 
 test('livro novo: cria, confere o nome e grava a categoria', async () => {
@@ -77,7 +97,7 @@ test('livro novo: cria, confere o nome e grava a categoria', async () => {
 });
 
 test('livro que ja esta la nao vira duplicata', async () => {
-  const p = paginaFalsa({ produtos: [{ id: 'ja1', name: ' LIVRO   novo ' }] });
+  const p = paginaFalsa({ produtos: [{ id: 'ja1', name: ' LIVRO   novo ' }], entregaInicial: ENTREGA });
   const r = await publicarNaKiwify(p, LIVRO, { cred: CRED });
   assert.deepStrictEqual([r.jaExistia, r.id], [true, 'ja1']);
   assert.ok(!p.chamadas.some(c => c.metodo === 'POST'), 'nao tenta criar de novo');
@@ -113,10 +133,18 @@ test('livro sem titulo nao vai para a loja', async () => {
   await assert.rejects(() => publicarNaKiwify(p, { ...LIVRO, title: '  ' }, { cred: CRED }), /KIWIFY_SEM_TITULO/);
 });
 
-test('categoria que falha nao perde o produto ja criado', async () => {
+test('PUT que falha deixa o produto SEM ENTREGA: nao e dado por publicado, e o erro leva o id criado', async () => {
+  // 13/10/2026: produtos ativos com approved_url vazio. O PUT pos-criacao leva a
+  // entrega; quando ele falhava, o log dizia "categoria nao entrou" e o livro
+  // era gravado como publicado.
   const p = paginaFalsa({ criar: { status: 201, texto: JSON.stringify({ id: 'p2' }) }, put: { status: 500, corpo: {} } });
-  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED });
-  assert.strictEqual(r.id, 'p2');
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), e => {
+    assert.match(e.message, /^KIWIFY_SEM_ENTREGA: approved_url vazio id=p2$/);
+    assert.strictEqual(e.idKiwify, 'p2');
+    return true;
+  });
+  const metodos = p.chamadas.map(c => c.metodo + ' ' + c.caminho);
+  assert.strictEqual(metodos[metodos.length - 1], 'GET /v1/products/p2?full=true', 'conferiu lendo o produto DEPOIS do PUT');
 });
 
 test('sem sessao aberta o agente diz o que falta, sem vazar credencial', async () => {
@@ -177,7 +205,7 @@ test('sem o logger do projeto o agente ainda registra (console) e publica igual'
   const r = await mod.publicarNaKiwify(p, LIVRO, { cred: CRED });
   assert.strictEqual(r.id, 'pc');
 
-  const jaLa = paginaFalsa({ produtos: [{ id: 'j1', name: 'Livro Novo' }] });
+  const jaLa = paginaFalsa({ produtos: [{ id: 'j1', name: 'Livro Novo' }], entregaInicial: ENTREGA });
   assert.strictEqual((await mod.publicarNaKiwify(jaLa, LIVRO, { cred: CRED })).jaExistia, true);
 
   const errado = paginaFalsa({
@@ -187,7 +215,7 @@ test('sem o logger do projeto o agente ainda registra (console) e publica igual'
   await assert.rejects(() => mod.publicarNaKiwify(errado, LIVRO, { cred: CRED }), /KIWIFY_PRODUTO_ERRADO/);
 
   const semCategoria = paginaFalsa({ criar: { status: 201, texto: JSON.stringify({ id: 'pw' }) }, put: { status: 500, corpo: {} } });
-  assert.strictEqual((await mod.publicarNaKiwify(semCategoria, LIVRO, { cred: CRED })).id, 'pw');
+  await assert.rejects(() => mod.publicarNaKiwify(semCategoria, LIVRO, { cred: CRED }), /KIWIFY_SEM_ENTREGA/);
 
   await assert.rejects(() => mod.publicarNaKiwify(paginaFalsa({}), { title: '' }, { cred: CRED }), /KIWIFY_SEM_TITULO/);
   await assert.rejects(() => mod.publicarNaKiwify(paginaFalsa({ criar: { status: 500, texto: 'x' } }), LIVRO, { cred: CRED }), /KIWIFY_CRIACAO_FALHOU/);
@@ -238,7 +266,7 @@ test('livro sem a chave title e produto sem id no catalogo nao quebram o log', a
   const p = paginaFalsa({});
   await assert.rejects(() => publicarNaKiwify(p, { language: 'pt-BR' }, { cred: CRED }), /KIWIFY_SEM_TITULO/);
 
-  const p2 = paginaFalsa({ produtos: [{ name: 'Livro Novo' }] });
+  const p2 = paginaFalsa({ produtos: [{ name: 'Livro Novo' }], entregaInicial: ENTREGA });
   const r = await publicarNaKiwify(p2, LIVRO, { cred: CRED });
   assert.strictEqual(r.jaExistia, true);
   assert.strictEqual(r.url, 'https://dashboard.kiwify.com/products/edit/undefined');
@@ -271,7 +299,7 @@ test('429 nao perde o livro: espera e tenta de novo', async () => {
     const [, , , metodo, caminho] = args;
     if (metodo === 'GET' && caminho.endsWith('/v1/products')) return { status: 200, texto: '[]' };
     if (metodo === 'POST') { vez++; return vez < 3 ? { status: 429, texto: 'Rate limit exceeded' } : { status: 200, texto: JSON.stringify({ id: 'pr' }) }; }
-    if (metodo === 'GET') return { status: 200, texto: JSON.stringify({ product: { id: 'pr', name: 'Livro Novo' } }) };
+    if (metodo === 'GET') return { status: 200, texto: JSON.stringify({ product: { id: 'pr', name: 'Livro Novo', checkout: { approved_url: ENTREGA } } }) };
     return { status: 200, texto: '{}' };
   };
   const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, opcoesDeChamada: { tentativas: 3, esperar: async ms => { esperas.push(ms); } } });
@@ -312,7 +340,7 @@ const LONGO = 'Barba e Pele Impecaveis: O Guia Definitivo para Homens: Domine a 
 
 test('titulo longo que ja esta la (nome cortado em 100) e achado, nao duplicado', async () => {
   assert.ok(LONGO.length > 100);
-  const p = paginaFalsa({ produtos: [{ id: 'longo1', name: LONGO.slice(0, 100) }] });
+  const p = paginaFalsa({ produtos: [{ id: 'longo1', name: LONGO.slice(0, 100) }], entregaInicial: ENTREGA });
   const r = await publicarNaKiwify(p, { ...LIVRO, title: LONGO }, { cred: CRED });
   assert.deepStrictEqual([r.jaExistia, r.id], [true, 'longo1']);
   assert.ok(!p.chamadas.some(c => c.metodo === 'POST'), 'nao cria a segunda copia');
@@ -327,4 +355,66 @@ test('titulo longo recem-criado passa na conferencia e grava (antes: PRODUTO_ERR
   assert.deepStrictEqual([r.jaExistia, r.id], [false, 'longo2']);
   assert.strictEqual(p.chamadas.find(c => c.metodo === 'POST').corpo.name, LONGO.slice(0, 100));
   assert.ok(p.chamadas.some(c => c.metodo === 'PUT'), 'seguiu ate gravar a categoria');
+});
+
+
+// ── entrega conferida (13/10/2026) ──────────────────────────────────────────
+
+test('livro novo: le o produto de volta, confere a entrega e devolve o checkout publico', async () => {
+  const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p1' }) } });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED });
+  assert.strictEqual(r.checkout, 'https://pay.kiwify.com.br/sVgIhNe');
+  const putc = p.chamadas.find(c => c.metodo === 'PUT');
+  assert.strictEqual(putc.corpo.approved_url, ENTREGA, 'o PUT leva o link assinado deste livro');
+  const gets = p.chamadas.filter(c => c.metodo === 'GET' && c.caminho === '/v1/products/p1?full=true');
+  assert.strictEqual(gets.length, 2, 'um GET para montar o PUT, outro para conferir');
+});
+
+test('PUT que diz 200 mas nao grava a entrega tambem nao passa', async () => {
+  const p = paginaFalsa({
+    criar: { status: 200, texto: JSON.stringify({ id: 'p3' }) },
+    conferencia: { status: 200, texto: JSON.stringify({ id: 'p3', name: 'Livro Novo', checkout: { approved_url: '' } }) },
+  });
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), /KIWIFY_SEM_ENTREGA: approved_url vazio/);
+});
+
+test('conferencia ilegivel bloqueia: nao conseguir conferir nunca libera', async () => {
+  const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p4' }) }, conferencia: { status: 502, texto: '<html>' } });
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), /KIWIFY_SEM_ENTREGA: conferencia ilegivel \(status 502\)/);
+  // Erro da API com corpo JSON: o motivo tem de dizer que a LEITURA falhou, nao
+  // que o produto esta sem entrega — senao a investigacao vai para o produto.
+  const p2 = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p4' }) }, conferencia: { status: 500, texto: '{"error":"interno"}' } });
+  await assert.rejects(() => publicarNaKiwify(p2, LIVRO, { cred: CRED }), /KIWIFY_SEM_ENTREGA: conferencia ilegivel \(status 500\)/);
+});
+
+test('"ja estava na Kiwify" sem entrega: nao liga o livro e nao mexe no produto', async () => {
+  const p = paginaFalsa({ produtos: [{ id: 'velho', name: 'Livro Novo' }], entregaInicial: '' });
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), e => e.idKiwify === 'velho' && /approved_url vazio/.test(e.message));
+  assert.ok(!p.chamadas.some(c => c.metodo === 'POST' || c.metodo === 'PUT'), 'so leitura');
+  const outro = paginaFalsa({ produtos: [{ id: 'velho', name: 'Livro Novo' }], entregaInicial: ENTREGA.replace('ebook-0001', 'ebook-9999') });
+  await assert.rejects(() => publicarNaKiwify(outro, LIVRO, { cred: CRED }), /diferente do link deste livro/, 'entrega de OUTRO livro');
+});
+
+test('no servidor o token do approved_url tem de abrir ESTE livro', async () => {
+  const jaLa = () => paginaFalsa({ produtos: [{ id: 'j9', name: 'Livro Novo' }], entregaInicial: ENTREGA });
+  const tokens = [];
+  const r = await publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, verificarEntrega: t => { tokens.push(t); return 'ebook-0001'; } });
+  assert.strictEqual(r.jaExistia, true);
+  assert.deepStrictEqual(tokens, ['ebook-0001.' + 'S'.repeat(32)], 'verificou o token do link');
+  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, verificarEntrega: () => null }), /token do approved_url nao abre este livro/);
+  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, verificarEntrega: () => 'ebook-0002' }), /nao abre este livro/);
+  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, verificarEntrega: () => { throw new Error('sem segredo'); } }), /nao abre este livro/);
+});
+
+test('livro sem link de entrega nem chega a criar o produto', async () => {
+  const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p5' }) } });
+  await assert.rejects(() => publicarNaKiwify(p, { ...LIVRO, linkDeEntrega: '' }, { cred: CRED }), /KIWIFY_SEM_ENTREGA: livro sem link de entrega/);
+  assert.ok(!p.chamadas.some(c => c.metodo === 'POST'), 'nao nasce produto a venda sem entrega');
+});
+
+test('sem plano publico ativo, publica com o checkout vazio (a vitrine nao ganha link)', async () => {
+  for (const links of [[{ id: 'Ab12', type: 'plan', status: 'active', private: true }], [{ id: 'Ab12', type: 'plan', status: 'inactive', private: false }], []]) {
+    const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p6' }) }, links });
+    assert.strictEqual((await publicarNaKiwify(p, LIVRO, { cred: CRED })).checkout, null);
+  }
 });

@@ -244,7 +244,76 @@ function valeTentarKiwify(ultimaFalha, agora = Date.now(), espera = ESPERA_APOS_
   return (agora - quando) >= espera;
 }
 
+/** approved_url do produto como o GET ?full=true devolve (dentro de checkout ou solto). Pura. */
+function approvedUrlDe(produto) {
+  const p = produto || {};
+  return String((p.checkout && p.checkout.approved_url) || p.approved_url || '').trim();
+}
+
+/**
+ * O produto ENTREGA o livro? Devolve null quando sim, ou o motivo.
+ *
+ * Achado em 13/10/2026: produtos antigos ativos na Kiwify com approved_url
+ * VAZIO — quem comprava nao recebia o PDF. O approved_url so entra no PUT
+ * depois da criacao; quando esse PUT falhava, o log dizia "categoria nao
+ * entrou" e o produto seguia a venda sem entrega. Agora o publicador le o
+ * produto de volta e confere com esta funcao antes de dar por publicado.
+ *
+ * `linkEsperado`: o link assinado gerado para este livro (o mesmo que foi no
+ * PUT). `verificar(token)`: verificarToken do servidor, quando o segredo esta
+ * na maquina — confere que o token abre ESTE livro. Erro ao verificar conta
+ * como "nao confere": nao conseguir conferir nunca libera. Pura.
+ */
+function motivoSemEntrega(produto, { ebookId, linkEsperado, verificar } = {}) {
+  const url = approvedUrlDe(produto);
+  if (!url) return 'approved_url vazio';
+  if (linkEsperado && url !== linkEsperado) return 'approved_url diferente do link deste livro';
+  if (verificar) {
+    const m = /\/entrega\/([^/?#]+)$/.exec(url);
+    let id = null;
+    try { id = m ? verificar(m[1]) : null; } catch (_) { id = null; }
+    if (!id || id !== ebookId) return 'token do approved_url nao abre este livro';
+  }
+  return null;
+}
+
+/** Checkout publico da Kiwify: pay.kiwify.com.br/<id alfanumerico>. */
+const CHECKOUT_KIWIFY = /^https:\/\/pay\.kiwify\.com\.br\/[A-Za-z0-9]{4,40}$/;
+
+/**
+ * Link de compra publico do produto, a partir do GET ?full=true: o plano ativo
+ * e nao privado (medido em 13/10/2026: produto 0d8122e0 -> pay.kiwify.com.br/
+ * sVgIhNe). O `kiwify_url` do banco e o PAINEL do vendedor, nao serve ao
+ * comprador. null quando nao ha plano publico. Pura.
+ */
+function checkoutPublico(produto) {
+  const p = produto || {};
+  const links = Array.isArray(p.links) ? p.links : (p.checkout && Array.isArray(p.checkout.links) ? p.checkout.links : []);
+  for (const l of links) {
+    if (!l || l.type !== 'plan' || l.status !== 'active' || l.private !== false) continue;
+    const url = 'https://pay.kiwify.com.br/' + String(l.id || '');
+    if (CHECKOUT_KIWIFY.test(url)) return url;
+  }
+  return null;
+}
+
+/**
+ * O que fazer com o livro depois de uma falha na Kiwify. Pura.
+ *   recusado: filtro de conteudo — sai da fila de vez;
+ *   sem-entrega: produto que nao entrega — NAO e gravado como publicado, conta
+ *     uma tentativa (com teto, para nao repetir para sempre);
+ *   falha: o resto (rede, limite) — tenta na proxima rodada.
+ */
+function desfechoDaFalha(mensagem) {
+  const msg = String(mensagem == null ? '' : mensagem);
+  const recusa = /^KIWIFY_RECUSADO: (.+)$/.exec(msg);
+  if (recusa) return { tipo: 'recusado', detalhe: recusa[1] };
+  if (/^KIWIFY_SEM_ENTREGA: /.test(msg)) return { tipo: 'sem-entrega', detalhe: msg.slice('KIWIFY_SEM_ENTREGA: '.length) };
+  return { tipo: 'falha', detalhe: msg };
+}
+
 module.exports = {
+  desfechoDaFalha, approvedUrlDe, motivoSemEntrega, checkoutPublico, CHECKOUT_KIWIFY,
   valeTentarKiwify, ESPERA_APOS_LIMITE_MS,
   CATEGORIAS, NOMES_CATEGORIA, categoriaKiwify, precoCentavos, moedaPorIdioma, descricaoKiwify,
   descritorFatura, corpoDeCriacao, corpoDeAtualizacao, mesmoProdutoKiwify, nomeKiwify, chaveDeNome, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa,

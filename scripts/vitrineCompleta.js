@@ -181,10 +181,10 @@ function gravar(arquivo, conteudo) {
 function consultaDoCatalogo(colunas) {
   const tem = new Set(colunas);
   const col = c => (tem.has(c) ? c : 'NULL AS ' + c);
-  const lojaPreenchida = ['hotmart_product_id', 'cakto_product_id', 'kiwify_url', 'gplay_id']
+  const lojaPreenchida = ['hotmart_product_id', 'cakto_product_id', 'kiwify_checkout', 'gplay_id']
     .filter(c => tem.has(c)).map(c => '(' + c + ' IS NOT NULL AND ' + c + " <> '')").join(' OR ') || '0';
   return 'SELECT id, title, description, language, price, cover_path, hotmart_product_id, hotmart_url, cakto_product_id, ' +
-    ['cakto_nome', 'cakto_url', 'kiwify_url', 'gplay_id', 'audio_de'].map(col).join(', ') +
+    ['cakto_nome', 'cakto_url', 'kiwify_checkout', 'gplay_id', 'audio_de'].map(col).join(', ') +
     ' FROM ebooks WHERE ' + lojaPreenchida;
 }
 
@@ -193,7 +193,7 @@ function principal() {
   const limite = Number(arg('limite', '0')) || 0;
   const db = require('../src/core/database').getDb();
 
-  // Colunas opcionais: kiwify_url (Kiwify), gplay_id (Google Play, ainda nao
+  // Colunas opcionais: kiwify_checkout (Kiwify), gplay_id (Google Play, ainda nao
   // existe), audio_de (e-book + audiolivro). Coluna ausente entra como NULL —
   // citar coluna que nao existe derrubaria a vitrine inteira.
   const brutos = db.prepare(consultaDoCatalogo(db.prepare('PRAGMA table_info(ebooks)').all().map(c => c.name))).all();
