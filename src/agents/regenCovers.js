@@ -197,6 +197,7 @@ module.exports = { regerar, buscarSemArquivo, buscarTodas, contarTentativa, gara
 
 if (require.main === module) {
   regerar({ limite: arg('limite', '20'), todas: process.argv.includes('--todas') })
-    .then(r => { log.info('resumo', { resultado: r }); process.exit(0); })
+    // stdout e o resultado do programa (quem chama le a ultima linha); o log vai a parte.
+    .then(r => { log.info('resumo', { resultado: r }); console.log(JSON.stringify(r)); process.exit(0); })
     .catch(e => { console.error('ERRO: ' + e.message); process.exit(1); });
 }

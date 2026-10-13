@@ -320,6 +320,7 @@ if (require.main === module) {
     limite: arg('limite', '10'),
     paralelo: arg('paralelo', '3'),
   })
-    .then(r => { log.info('resumo', { resultado: r }); process.exit(0); })
+    // stdout e o resultado do programa (quem chama le a ultima linha); o log vai a parte.
+    .then(r => { log.info('resumo', { resultado: r }); console.log(JSON.stringify(r)); process.exit(0); })
     .catch(e => { console.error('ERRO: ' + e.message); process.exit(1); });
 }
