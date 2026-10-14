@@ -184,7 +184,7 @@ function consultaDoCatalogo(colunas) {
   const lojaPreenchida = ['hotmart_product_id', 'cakto_product_id', 'kiwify_checkout', 'gplay_url']
     .filter(c => tem.has(c)).map(c => '(' + c + ' IS NOT NULL AND ' + c + " <> '')").join(' OR ') || '0';
   return 'SELECT id, title, description, language, price, cover_path, hotmart_product_id, hotmart_url, cakto_product_id, ' +
-    ['cakto_nome', 'cakto_url', 'kiwify_checkout', 'gplay_url', 'audio_de'].map(col).join(', ') +
+    ['cakto_nome', 'cakto_url', 'cakto_checkout', 'kiwify_checkout', 'gplay_url', 'audio_de'].map(col).join(', ') +
     ' FROM ebooks WHERE ' + lojaPreenchida;
 }
 

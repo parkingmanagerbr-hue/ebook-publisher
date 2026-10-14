@@ -17,6 +17,7 @@
 /** Uma linha, sem quebra e sem espaco duplo. */
 const { CHECKOUT_KIWIFY } = require('./kiwifyRegras');
 const { urlPublicaDe } = require('./gplayRegras');
+const { CHECKOUT_CAKTO } = require('./caktoCheckout');
 
 function umaLinha(s, n = 300) {
   return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
@@ -35,7 +36,14 @@ function linkDeCompra(livro) {
   return linkCakto(l) || linkHotmart(l);
 }
 
+/**
+ * Cakto: `cakto_checkout` (gravado por scripts/caktoCheckoutDoCatalogo.js SO
+ * para produto ativo — pausado mostra "Produto nao encontrado") ou, como antes,
+ * o checkout completo `<oferta>_<checkout>` da pagina de vendas.
+ */
 function linkCakto(l) {
+  const checkout = umaLinha(l.cakto_checkout || l.caktoCheckout, 300);
+  if (CHECKOUT_CAKTO.test(checkout)) return checkout;
   const cakto = umaLinha(l.cakto_sales_page || l.caktoSalesPage, 300);
   return /^https:\/\/pay\.cakto\.com\.br\/[^/?#]*_[^/?#]+$/.test(cakto) ? cakto : null;
 }

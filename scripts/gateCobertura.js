@@ -42,6 +42,7 @@ const MODULOS_NO_GATE = [
   'src/agents/caktoApiRegras.js',
   'src/agents/aprovacaoHotmart.js',
   'src/agents/vitrineRegras.js',
+  'src/agents/caktoCheckout.js',
   'src/agents/gplayRegras.js',
   'src/agents/gplayArquivos.js',
   'src/agents/indexNow.js',
