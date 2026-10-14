@@ -37,7 +37,12 @@ function pedidor(H) {
   return async rota => {
     const r = await fetch('https://api.cakto.com.br/api/' + rota, { headers: H });
     const t = await r.text();
-    if (t.startsWith('<')) throw new Error('CAKTO_HTML: HTTP ' + r.status + ' em ' + rota + ' — Cloudflare ou sessao expirada');
+    // 429 volta em HTML do Cloudflare: devolve o status para a leitura esperar e
+    // repetir. Outro HTML e sessao expirada ou bloqueio — lanca.
+    if (t.startsWith('<')) {
+      if (r.status === 429) return { status: 429, json: null };
+      throw new Error('CAKTO_HTML: HTTP ' + r.status + ' em ' + rota + ' — Cloudflare ou sessao expirada');
+    }
     let json = null; try { json = JSON.parse(t); } catch (_) { /* protocolo: corpo nao JSON vira status sem lista */ }
     return { status: r.status, json };
   };
@@ -52,11 +57,12 @@ async function principal({ seco = process.argv.includes('--dry-run'), db, pedir,
   db = db || require('../src/core/database').getDb();
   prepararBanco(db);
   pedir = pedir || pedidor(cabecalhos());
-  esperar = esperar || (() => dormir(PAUSA_MS));
+  // nivel 0: o ritmo normal; nivel n (depois de um 429): 30 s, 60 s, 90 s, 120 s.
+  esperar = esperar || (nivel => dormir(nivel ? 30000 * nivel : PAUSA_MS));
   const t0 = Date.now();
   const produtos = await lerPaginado('products/', { pedir, esperar, porPagina: 100 });
   log.info('produtos lidos: ' + produtos.itens.length + ' de ' + produtos.total);
-  await esperar();
+  await esperar(0);
   const ofertas = await lerPaginado('offers/', { pedir, esperar, porPagina: 200 });
   log.info('ofertas lidas: ' + ofertas.itens.length + ' de ' + ofertas.total);
   if (!listaCompleta(produtos) || !listaCompleta(ofertas)) {

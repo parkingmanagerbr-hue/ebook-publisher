@@ -29,12 +29,19 @@ function urlDoCheckout(shortcode) {
  * derruba a sessao). Qualquer outro erro LANCA: lista pela metade nao pode virar
  * "o resto nao existe" — quem chama limparia o checkout de milhares de livros.
  */
-async function lerPaginado(rota, { pedir, esperar, porPagina = 100, tetoPaginas = 1000 }) {
+async function lerPaginado(rota, { pedir, esperar, porPagina = 100, tetoPaginas = 1000, tentativas429 = 4 }) {
   const itens = [];
   let total = null;
   for (let pagina = 1; pagina <= tetoPaginas; pagina++) {
-    if (pagina > 1) await esperar();
-    const r = await pedir(rota + '?limit=' + porPagina + '&page=' + pagina);
+    if (pagina > 1) await esperar(0);
+    let r = await pedir(rota + '?limit=' + porPagina + '&page=' + pagina);
+    // 429: limite de ritmo, nao fim nem erro da lista. Medido em 14/10/2026: a
+    // leitura caiu na pagina 158 de 162 (os outros jobs da Cakto usam a mesma
+    // sessao e o mesmo IP). Espera cada vez mais e repete a MESMA pagina.
+    for (let n = 1; r.status === 429 && n <= tentativas429; n++) {
+      await esperar(n);
+      r = await pedir(rota + '?limit=' + porPagina + '&page=' + pagina);
+    }
     if (r.status === 404) return { itens, total };
     if (r.status !== 200 || !r.json || !Array.isArray(r.json.results)) {
       throw new Error('CAKTO_LISTA_FALHOU: ' + rota + ' pagina ' + pagina + ' HTTP ' + r.status);

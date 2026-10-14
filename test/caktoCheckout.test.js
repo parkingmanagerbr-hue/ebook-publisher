@@ -129,3 +129,22 @@ test('bordas: oferta sem produto e livro sem id', () => {
   assert.deepStrictEqual(C.decidirCheckout({ cakto_product_id: 'semp001' }, o, new Map()), { acao: 'limpar', motivo: 'produto-ausente' });
   assert.deepStrictEqual(C.planejar([{ id: 'L9' }], [], []).resumo.motivos, { 'sem-oferta': 1 });
 });
+
+test('429 no meio: espera cada vez mais e repete a MESMA pagina; insistente, lanca', async () => {
+  let vezes = 0;
+  const pedidos = [];
+  const pedir = async rota => {
+    pedidos.push(rota);
+    const n = Number(/page=(\d+)/.exec(rota)[1]);
+    if (n === 2 && vezes++ < 2) return { status: 429, json: null };
+    if (n > 2) return { status: 404, json: {} };
+    return { status: 200, json: { count: 2, next: 'x', results: [{ id: n }] } };
+  };
+  const niveis = [];
+  const r = await C.lerPaginado('products/', { pedir, esperar: async nivel => { niveis.push(nivel); } });
+  assert.deepStrictEqual(r.itens.map(x => x.id), [1, 2], 'nenhuma pagina perdida');
+  assert.deepStrictEqual(pedidos.filter(p => /page=2/.test(p)).length, 3, 'a pagina 2 foi pedida de novo');
+  assert.deepStrictEqual(niveis, [0, 1, 2, 0], 'ritmo normal, depois espera crescente, depois normal');
+  const sempre = async () => ({ status: 429, json: null });
+  await assert.rejects(() => C.lerPaginado('offers/', { pedir: sempre, esperar: async () => {}, tentativas429: 3 }), /CAKTO_LISTA_FALHOU: offers\/ pagina 1 HTTP 429/);
+});
