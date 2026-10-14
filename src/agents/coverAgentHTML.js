@@ -380,7 +380,7 @@ Create a cover so stunning it makes people click "Buy Now" immediately.`;
 // Usada PRIMEIRO para gerar o HTML da capa, poupando a cota das chaves de texto.
 // Se falhar (chave inválida/esgotada), cai no pool normal via generateText.
 const COVER_KEY = process.env.GEMINI_COVER_KEY || process.env.GEMINI_API_KEY_6;
-const COVER_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const COVER_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 
 async function _generateViaCoverKey(prompt) {
   if (!COVER_KEY) return null;

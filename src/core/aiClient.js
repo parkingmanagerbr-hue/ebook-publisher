@@ -405,8 +405,11 @@ process.on('SIGINT', () => { process.exit(); });
 // available to new users" — cada tentativa era uma chamada jogada fora.
 const MODELOS_GEMINI = [...new Set([
   process.env.GEMINI_MODEL,
+  // `gemini-2.0-flash` saiu do catalogo (404 nas 13 chaves, medido em
+  // 13/10/2026) e o `gemini-3.1-flash-lite` foi o unico que respondeu 200 em
+  // TODAS, inclusive a paga — por isso ele vem na frente, e nao no fim.
+  'gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest',
   'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-flash-latest',
-  'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.1-flash-lite', 'gemini-2.0-flash',
 ].filter(Boolean))];
 
 function ehCotaOuModeloIndisponivel(e) {

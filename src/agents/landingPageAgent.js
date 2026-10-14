@@ -159,7 +159,7 @@ async function callGemini(prompt) {
 
     const opts = {
       hostname: 'generativelanguage.googleapis.com',
-      path: '/v1beta/models/' + (process.env.LP_GEMINI_MODEL || 'gemini-2.0-flash') + ':generateContent?key=' + apiKey,
+      path: '/v1beta/models/' + (process.env.LP_GEMINI_MODEL || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite') + ':generateContent?key=' + apiKey,
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     };
