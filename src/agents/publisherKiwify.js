@@ -97,25 +97,55 @@ async function catalogo(page, cred, opcoes) {
 }
 
 /**
- * Le o produto de volta e confere que ele ENTREGA o livro. Sem isso o produto
- * ficava a venda com approved_url vazio (13/10/2026). Lanca KIWIFY_SEM_ENTREGA
- * com `idKiwify` no erro; devolve o checkout publico quando confere.
+ * Esperas antes de cada leitura de conferencia. A Kiwify demora a refletir o
+ * PUT no GET ?full=true: em 14/10/2026 a leitura IMEDIATA deu approved_url
+ * vazio em 10 de 10 produtos novos, e os mesmos produtos, lidos horas depois,
+ * tinham a entrega certa (o conserto manual, que esperava 1,5 s, sempre leu
+ * certo). Tres leituras espacadas antes de concluir qualquer coisa.
  */
-async function conferirEntrega(page, cred, id, livro, { verificarEntrega, opcoesDeChamada } = {}) {
-  const r = await chamar(page, cred, 'GET', '/v1/products/' + id + '?full=true', null, opcoesDeChamada);
-  const produto = (r.json && (r.json.product || r.json)) || null;
-  const motivo = r.status !== 200 || !produto
-    ? 'conferencia ilegivel (status ' + r.status + ')'
-    : motivoSemEntrega(produto, { ebookId: livro.ebookId, linkEsperado: livro.linkDeEntrega, verificar: verificarEntrega });
-  if (motivo) {
-    log.error('SEM_ENTREGA na Kiwify: id=' + umaLinha(id, 40) + ' "' + umaLinha(livro.title) + '" — ' + motivo + ' — NAO gravado como publicado');
-    const e = new Error('KIWIFY_SEM_ENTREGA: ' + motivo + ' id=' + umaLinha(id, 40));
+const ESPERAS_CONFERENCIA_MS = [1500, 3000, 6000];
+
+/**
+ * Le o produto de volta e confere que ele ENTREGA o livro. Sem isso o produto
+ * ficava a venda com approved_url vazio (13/10/2026).
+ *   - alguma leitura confere: devolve o checkout publico;
+ *   - todas as leituras LEGIVEIS dizem que nao entrega: KIWIFY_SEM_ENTREGA
+ *     (com `idKiwify` no erro);
+ *   - nenhuma leitura legivel (rede, 5xx): KIWIFY_SEM_CONFERENCIA — "nao
+ *     consegui medir" nao e "sem entrega": o livro volta na proxima rodada sem
+ *     gastar tentativa.
+ */
+async function conferirEntrega(page, cred, id, livro, { verificarEntrega, opcoesDeChamada, esperar = dormir, esperas = ESPERAS_CONFERENCIA_MS } = {}) {
+  let ultimoMotivo = null;
+  let ilegiveis = 0;
+  for (let i = 0; i < esperas.length; i++) {
+    await esperar(esperas[i]);
+    const r = await chamar(page, cred, 'GET', '/v1/products/' + id + '?full=true', null, opcoesDeChamada);
+    const produto = (r.json && (r.json.product || r.json)) || null;
+    if (r.status !== 200 || !produto) {
+      ilegiveis++;
+      log.warn('conferencia de entrega ilegivel id=' + umaLinha(id, 40) + ' (leitura ' + (i + 1) + ' de ' + esperas.length + ', status ' + r.status + ')');
+      continue;
+    }
+    const motivo = motivoSemEntrega(produto, { ebookId: livro.ebookId, linkEsperado: livro.linkDeEntrega, verificar: verificarEntrega });
+    if (!motivo) {
+      const checkout = checkoutPublico(produto);
+      log.info('entrega conferida id=' + umaLinha(id, 40) + ' na leitura ' + (i + 1) + (checkout ? ' | checkout publico ok' : ' | sem plano publico ativo (checkout fica vazio)'));
+      return checkout;
+    }
+    ultimoMotivo = motivo;
+    log.warn('entrega ainda nao confere id=' + umaLinha(id, 40) + ' (leitura ' + (i + 1) + ' de ' + esperas.length + '): ' + motivo);
+  }
+  if (!ultimoMotivo) {
+    log.error('SEM_CONFERENCIA na Kiwify: id=' + umaLinha(id, 40) + ' "' + umaLinha(livro.title) + '" — ' + ilegiveis + ' leitura(s) ilegivel(is); tenta na proxima rodada');
+    const e = new Error('KIWIFY_SEM_CONFERENCIA: nenhuma leitura legivel id=' + umaLinha(id, 40));
     e.idKiwify = id;
     throw e;
   }
-  const checkout = checkoutPublico(produto);
-  log.info('entrega conferida id=' + umaLinha(id, 40) + (checkout ? ' | checkout publico ok' : ' | sem plano publico ativo (checkout fica vazio)'));
-  return checkout;
+  log.error('SEM_ENTREGA na Kiwify: id=' + umaLinha(id, 40) + ' "' + umaLinha(livro.title) + '" — ' + ultimoMotivo + ' em ' + (esperas.length - ilegiveis) + ' leitura(s) — NAO gravado como publicado');
+  const e = new Error('KIWIFY_SEM_ENTREGA: ' + ultimoMotivo + ' id=' + umaLinha(id, 40));
+  e.idKiwify = id;
+  throw e;
 }
 
 /**
@@ -123,7 +153,7 @@ async function conferirEntrega(page, cred, id, livro, { verificarEntrega, opcoes
  * `livro`: { title, description, language, preco, paginaDeVendas, topic, ebookId, linkDeEntrega }
  * `verificarEntrega(token)`: verificarToken do servidor, quando ha segredo aqui.
  */
-async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada, verificarEntrega } = {}) {
+async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada, verificarEntrega, esperarConferencia } = {}) {
   const credenciais_ = cred || await credenciais(page, { espera });
   const titulo = String(livro.title || '').trim();
   if (!titulo) throw new Error('KIWIFY_SEM_TITULO: livro sem nome');
@@ -135,7 +165,7 @@ async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada, ve
     const id = porNome.get(chave);
     log.info('ja estava na Kiwify: "' + umaLinha(titulo) + '" id=' + umaLinha(id, 40) + ' (catalogo com ' + total + ')');
     // Produto antigo pode estar a venda sem entrega: confere antes de ligar.
-    const checkout = await conferirEntrega(page, credenciais_, id, livro, { verificarEntrega, opcoesDeChamada });
+    const checkout = await conferirEntrega(page, credenciais_, id, livro, { verificarEntrega, opcoesDeChamada, esperar: esperarConferencia });
     return { id, url: PAINEL + '/products/edit/' + id, jaExistia: true, checkout };
   }
 
@@ -176,8 +206,8 @@ async function publicarNaKiwify(page, livro, { cred, espera, opcoesDeChamada, ve
   } else {
     log.info('categoria ' + categoria + ' gravada em id=' + umaLinha(id, 40));
   }
-  const checkout = await conferirEntrega(page, credenciais_, id, livro, { verificarEntrega, opcoesDeChamada });
+  const checkout = await conferirEntrega(page, credenciais_, id, livro, { verificarEntrega, opcoesDeChamada, esperar: esperarConferencia });
   return { id, url: PAINEL + '/products/edit/' + id, jaExistia: false, categoria, checkout };
 }
 
-module.exports = { publicarNaKiwify, conferirEntrega, credenciais, chamar, catalogo, API, PAINEL };
+module.exports = { publicarNaKiwify, conferirEntrega, ESPERAS_CONFERENCIA_MS, credenciais, chamar, catalogo, API, PAINEL };

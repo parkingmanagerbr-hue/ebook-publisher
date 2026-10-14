@@ -31,7 +31,7 @@ function paginaFalsa({ produtos = [], criar, ao_buscar_id, put = { status: 200, 
     if (metodo === 'GET') {
       getsPorId++;
       if (getsPorId === 1 && ao_buscar_id) return ao_buscar_id;
-      if (getsPorId > 1 && conferencia) return conferencia;
+      if (getsPorId > 1 && conferencia) return Array.isArray(conferencia) ? conferencia[Math.min(getsPorId - 2, conferencia.length - 1)] : conferencia;
       let base = { id: 'p1', name: 'Livro Novo' };
       try { const j = ao_buscar_id && JSON.parse(ao_buscar_id.texto); if (j) base = j.product || j; } catch (_) { /* GET ilegivel no primeiro */ }
       return { status: 200, texto: JSON.stringify({ ...base, links, checkout: { approved_url: approved } }) };
@@ -78,10 +78,11 @@ function paginaFalsa({ produtos = [], criar, ao_buscar_id, put = { status: 200, 
 const ENTREGA = 'https://publisher.veloxisit.com.br/entrega/ebook-0001.' + 'S'.repeat(32);
 const LIVRO = { title: 'Livro Novo', description: 'Descricao do livro.', language: 'pt-BR', preco: 5, paginaDeVendas: 'https://veloxisit.com.br/livros/x/', topic: 'financas', ebookId: 'ebook-0001', linkDeEntrega: ENTREGA };
 const CRED = { bearer: 'Bearer xyz', device: 'DEV123' };
+const SEM_ESPERA = async () => {};
 
 test('livro novo: cria, confere o nome e grava a categoria', async () => {
   const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p1' }) } });
-  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.strictEqual(r.jaExistia, false);
   assert.strictEqual(r.id, 'p1');
   assert.strictEqual(r.url, 'https://dashboard.kiwify.com/products/edit/p1');
@@ -98,24 +99,24 @@ test('livro novo: cria, confere o nome e grava a categoria', async () => {
 
 test('livro que ja esta la nao vira duplicata', async () => {
   const p = paginaFalsa({ produtos: [{ id: 'ja1', name: ' LIVRO   novo ' }], entregaInicial: ENTREGA });
-  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.deepStrictEqual([r.jaExistia, r.id], [true, 'ja1']);
   assert.ok(!p.chamadas.some(c => c.metodo === 'POST'), 'nao tenta criar de novo');
 });
 
 test('API recusando a criacao lanca com o status', async () => {
   const p = paginaFalsa({ criar: { status: 422, texto: '{"error":"price too low"}' } });
-  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), /KIWIFY_CRIACAO_FALHOU: status 422/);
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_CRIACAO_FALHOU: status 422/);
 });
 
 test('criou mas nao devolveu id: para, em vez de seguir no escuro', async () => {
   const p = paginaFalsa({ criar: { status: 200, texto: '{"ok":true}' } });
-  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), /KIWIFY_SEM_ID/);
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_ID/);
 });
 
 test('id devolvido dentro de product tambem serve', async () => {
   const p = paginaFalsa({ criar: { status: 201, texto: JSON.stringify({ product: { id: 'p7' } }) }, ao_buscar_id: { status: 200, texto: JSON.stringify({ product: { id: 'p7', name: 'Livro Novo' } }) } });
-  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.strictEqual(r.id, 'p7');
 });
 
@@ -124,13 +125,13 @@ test('id que abre OUTRO produto nao recebe alteracao nenhuma', async () => {
     criar: { status: 200, texto: JSON.stringify({ id: 'p9' }) },
     ao_buscar_id: { status: 200, texto: JSON.stringify({ id: 'p9', name: 'Orçamento de Viagem de Luxo' }) },
   });
-  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), /KIWIFY_PRODUTO_ERRADO/);
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_PRODUTO_ERRADO/);
   assert.ok(!p.chamadas.some(c => c.metodo === 'PUT'), 'nada foi escrito no produto errado');
 });
 
 test('livro sem titulo nao vai para a loja', async () => {
   const p = paginaFalsa({});
-  await assert.rejects(() => publicarNaKiwify(p, { ...LIVRO, title: '  ' }, { cred: CRED }), /KIWIFY_SEM_TITULO/);
+  await assert.rejects(() => publicarNaKiwify(p, { ...LIVRO, title: '  ' }, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_TITULO/);
 });
 
 test('PUT que falha deixa o produto SEM ENTREGA: nao e dado por publicado, e o erro leva o id criado', async () => {
@@ -138,7 +139,7 @@ test('PUT que falha deixa o produto SEM ENTREGA: nao e dado por publicado, e o e
   // entrega; quando ele falhava, o log dizia "categoria nao entrou" e o livro
   // era gravado como publicado.
   const p = paginaFalsa({ criar: { status: 201, texto: JSON.stringify({ id: 'p2' }) }, put: { status: 500, corpo: {} } });
-  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), e => {
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), e => {
     assert.match(e.message, /^KIWIFY_SEM_ENTREGA: approved_url vazio id=p2$/);
     assert.strictEqual(e.idKiwify, 'p2');
     return true;
@@ -202,24 +203,24 @@ test('sem o logger do projeto o agente ainda registra (console) e publica igual'
   t.mock.method(console, 'error', () => {});
 
   const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'pc' }) } });
-  const r = await mod.publicarNaKiwify(p, LIVRO, { cred: CRED });
+  const r = await mod.publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.strictEqual(r.id, 'pc');
 
   const jaLa = paginaFalsa({ produtos: [{ id: 'j1', name: 'Livro Novo' }], entregaInicial: ENTREGA });
-  assert.strictEqual((await mod.publicarNaKiwify(jaLa, LIVRO, { cred: CRED })).jaExistia, true);
+  assert.strictEqual((await mod.publicarNaKiwify(jaLa, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA })).jaExistia, true);
 
   const errado = paginaFalsa({
     criar: { status: 200, texto: JSON.stringify({ id: 'pe' }) },
     ao_buscar_id: { status: 200, texto: JSON.stringify({ id: 'pe', name: 'Outro Livro' }) },
   });
-  await assert.rejects(() => mod.publicarNaKiwify(errado, LIVRO, { cred: CRED }), /KIWIFY_PRODUTO_ERRADO/);
+  await assert.rejects(() => mod.publicarNaKiwify(errado, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_PRODUTO_ERRADO/);
 
   const semCategoria = paginaFalsa({ criar: { status: 201, texto: JSON.stringify({ id: 'pw' }) }, put: { status: 500, corpo: {} } });
-  await assert.rejects(() => mod.publicarNaKiwify(semCategoria, LIVRO, { cred: CRED }), /KIWIFY_SEM_ENTREGA/);
+  await assert.rejects(() => mod.publicarNaKiwify(semCategoria, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_ENTREGA/);
 
-  await assert.rejects(() => mod.publicarNaKiwify(paginaFalsa({}), { title: '' }, { cred: CRED }), /KIWIFY_SEM_TITULO/);
-  await assert.rejects(() => mod.publicarNaKiwify(paginaFalsa({ criar: { status: 500, texto: 'x' } }), LIVRO, { cred: CRED }), /KIWIFY_CRIACAO_FALHOU/);
-  await assert.rejects(() => mod.publicarNaKiwify(paginaFalsa({ criar: { status: 200, texto: '{}' } }), LIVRO, { cred: CRED }), /KIWIFY_SEM_ID/);
+  await assert.rejects(() => mod.publicarNaKiwify(paginaFalsa({}), { title: '' }, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_TITULO/);
+  await assert.rejects(() => mod.publicarNaKiwify(paginaFalsa({ criar: { status: 500, texto: 'x' } }), LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_CRIACAO_FALHOU/);
+  await assert.rejects(() => mod.publicarNaKiwify(paginaFalsa({ criar: { status: 200, texto: '{}' } }), LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_ID/);
   await assert.rejects(() => mod.credenciais(paginaFalsa({ bearer: null }), { espera: 0 }), /KIWIFY_SEM_SESSAO/);
   assert.deepStrictEqual(await mod.credenciais(paginaFalsa({}), { espera: 0 }), CRED);
   assert.strictEqual((await mod.chamar(paginaFalsa({ falhaDeRede: true }), CRED, 'GET', '/v1/products')).status, 0);
@@ -256,7 +257,7 @@ test('produto criado cujo GET volta ilegivel: segue com o que sabe', async () =>
     criar: { status: 200, texto: JSON.stringify({ id: 'p8' }) },
     ao_buscar_id: { status: 502, texto: '<html>gateway</html>' },
   });
-  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.strictEqual(r.id, 'p8');
   const putc = p.chamadas.find(c => c.metodo === 'PUT');
   assert.strictEqual(putc.corpo.name, 'Livro Novo', 'monta o PUT mesmo sem o objeto anterior');
@@ -264,10 +265,10 @@ test('produto criado cujo GET volta ilegivel: segue com o que sabe', async () =>
 
 test('livro sem a chave title e produto sem id no catalogo nao quebram o log', async () => {
   const p = paginaFalsa({});
-  await assert.rejects(() => publicarNaKiwify(p, { language: 'pt-BR' }, { cred: CRED }), /KIWIFY_SEM_TITULO/);
+  await assert.rejects(() => publicarNaKiwify(p, { language: 'pt-BR' }, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_TITULO/);
 
   const p2 = paginaFalsa({ produtos: [{ name: 'Livro Novo' }], entregaInicial: ENTREGA });
-  const r = await publicarNaKiwify(p2, LIVRO, { cred: CRED });
+  const r = await publicarNaKiwify(p2, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.strictEqual(r.jaExistia, true);
   assert.strictEqual(r.url, 'https://dashboard.kiwify.com/products/edit/undefined');
 });
@@ -284,7 +285,7 @@ test('painel que nao abre e localStorage bloqueado nao derrubam o processo', asy
 
 test('livro recusado pelo filtro da Kiwify nao insiste (erro proprio)', async () => {
   const p = paginaFalsa({ criar: { status: 400, texto: '{"error":"ProductNotAllowed","keyword":"casino"}' } });
-  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), e => {
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), e => {
     assert.match(e.message, /^KIWIFY_RECUSADO: casino$/);
     return true;
   });
@@ -302,7 +303,7 @@ test('429 nao perde o livro: espera e tenta de novo', async () => {
     if (metodo === 'GET') return { status: 200, texto: JSON.stringify({ product: { id: 'pr', name: 'Livro Novo', checkout: { approved_url: ENTREGA } } }) };
     return { status: 200, texto: '{}' };
   };
-  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, opcoesDeChamada: { tentativas: 3, esperar: async ms => { esperas.push(ms); } } });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA, opcoesDeChamada: { tentativas: 3, esperar: async ms => { esperas.push(ms); } } });
   assert.strictEqual(r.id, 'pr');
   assert.strictEqual(vez, 3, 'tentou ate passar');
   assert.deepStrictEqual(esperas, [5000, 15000], 'esperou mais a cada vez');
@@ -316,7 +317,7 @@ test('429 insistente desiste com a mensagem da API', async () => {
     return { status: 429, texto: 'Rate limit exceeded' };
   };
   await assert.rejects(
-    () => publicarNaKiwify(p, LIVRO, { cred: CRED, opcoesDeChamada: { tentativas: 2, esperar: async () => {} } }),
+    () => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA, opcoesDeChamada: { tentativas: 2, esperar: async () => {} } }),
     /KIWIFY_CRIACAO_FALHOU: status 429/);
 });
 
@@ -341,7 +342,7 @@ const LONGO = 'Barba e Pele Impecaveis: O Guia Definitivo para Homens: Domine a 
 test('titulo longo que ja esta la (nome cortado em 100) e achado, nao duplicado', async () => {
   assert.ok(LONGO.length > 100);
   const p = paginaFalsa({ produtos: [{ id: 'longo1', name: LONGO.slice(0, 100) }], entregaInicial: ENTREGA });
-  const r = await publicarNaKiwify(p, { ...LIVRO, title: LONGO }, { cred: CRED });
+  const r = await publicarNaKiwify(p, { ...LIVRO, title: LONGO }, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.deepStrictEqual([r.jaExistia, r.id], [true, 'longo1']);
   assert.ok(!p.chamadas.some(c => c.metodo === 'POST'), 'nao cria a segunda copia');
 });
@@ -351,7 +352,7 @@ test('titulo longo recem-criado passa na conferencia e grava (antes: PRODUTO_ERR
     criar: { status: 200, texto: JSON.stringify({ id: 'longo2' }) },
     ao_buscar_id: { status: 200, texto: JSON.stringify({ id: 'longo2', name: LONGO.slice(0, 100) }) },
   });
-  const r = await publicarNaKiwify(p, { ...LIVRO, title: LONGO }, { cred: CRED });
+  const r = await publicarNaKiwify(p, { ...LIVRO, title: LONGO }, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.deepStrictEqual([r.jaExistia, r.id], [false, 'longo2']);
   assert.strictEqual(p.chamadas.find(c => c.metodo === 'POST').corpo.name, LONGO.slice(0, 100));
   assert.ok(p.chamadas.some(c => c.metodo === 'PUT'), 'seguiu ate gravar a categoria');
@@ -362,7 +363,7 @@ test('titulo longo recem-criado passa na conferencia e grava (antes: PRODUTO_ERR
 
 test('livro novo: le o produto de volta, confere a entrega e devolve o checkout publico', async () => {
   const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p1' }) } });
-  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
   assert.strictEqual(r.checkout, 'https://pay.kiwify.com.br/sVgIhNe');
   const putc = p.chamadas.find(c => c.metodo === 'PUT');
   assert.strictEqual(putc.corpo.approved_url, ENTREGA, 'o PUT leva o link assinado deste livro');
@@ -375,46 +376,89 @@ test('PUT que diz 200 mas nao grava a entrega tambem nao passa', async () => {
     criar: { status: 200, texto: JSON.stringify({ id: 'p3' }) },
     conferencia: { status: 200, texto: JSON.stringify({ id: 'p3', name: 'Livro Novo', checkout: { approved_url: '' } }) },
   });
-  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), /KIWIFY_SEM_ENTREGA: approved_url vazio/);
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_ENTREGA: approved_url vazio/);
 });
 
-test('conferencia ilegivel bloqueia: nao conseguir conferir nunca libera', async () => {
+test('conferencia ilegivel bloqueia, mas como "nao consegui medir" — nunca como sem entrega', async () => {
   const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p4' }) }, conferencia: { status: 502, texto: '<html>' } });
-  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), /KIWIFY_SEM_ENTREGA: conferencia ilegivel \(status 502\)/);
-  // Erro da API com corpo JSON: o motivo tem de dizer que a LEITURA falhou, nao
-  // que o produto esta sem entrega — senao a investigacao vai para o produto.
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), e => {
+    assert.match(e.message, /^KIWIFY_SEM_CONFERENCIA: nenhuma leitura legivel id=p4$/);
+    assert.strictEqual(e.idKiwify, 'p4');
+    return true;
+  });
   const p2 = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p4' }) }, conferencia: { status: 500, texto: '{"error":"interno"}' } });
-  await assert.rejects(() => publicarNaKiwify(p2, LIVRO, { cred: CRED }), /KIWIFY_SEM_ENTREGA: conferencia ilegivel \(status 500\)/);
+  await assert.rejects(() => publicarNaKiwify(p2, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_CONFERENCIA/, '500 com JSON tambem e leitura que falhou');
 });
 
 test('"ja estava na Kiwify" sem entrega: nao liga o livro e nao mexe no produto', async () => {
   const p = paginaFalsa({ produtos: [{ id: 'velho', name: 'Livro Novo' }], entregaInicial: '' });
-  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED }), e => e.idKiwify === 'velho' && /approved_url vazio/.test(e.message));
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), e => e.idKiwify === 'velho' && /approved_url vazio/.test(e.message));
   assert.ok(!p.chamadas.some(c => c.metodo === 'POST' || c.metodo === 'PUT'), 'so leitura');
   const outro = paginaFalsa({ produtos: [{ id: 'velho', name: 'Livro Novo' }], entregaInicial: ENTREGA.replace('ebook-0001', 'ebook-9999') });
-  await assert.rejects(() => publicarNaKiwify(outro, LIVRO, { cred: CRED }), /diferente do link deste livro/, 'entrega de OUTRO livro');
+  await assert.rejects(() => publicarNaKiwify(outro, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /diferente do link deste livro/, 'entrega de OUTRO livro');
 });
 
 test('no servidor o token do approved_url tem de abrir ESTE livro', async () => {
   const jaLa = () => paginaFalsa({ produtos: [{ id: 'j9', name: 'Livro Novo' }], entregaInicial: ENTREGA });
   const tokens = [];
-  const r = await publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, verificarEntrega: t => { tokens.push(t); return 'ebook-0001'; } });
+  const r = await publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA, verificarEntrega: t => { tokens.push(t); return 'ebook-0001'; } });
   assert.strictEqual(r.jaExistia, true);
   assert.deepStrictEqual(tokens, ['ebook-0001.' + 'S'.repeat(32)], 'verificou o token do link');
-  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, verificarEntrega: () => null }), /token do approved_url nao abre este livro/);
-  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, verificarEntrega: () => 'ebook-0002' }), /nao abre este livro/);
-  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, verificarEntrega: () => { throw new Error('sem segredo'); } }), /nao abre este livro/);
+  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA, verificarEntrega: () => null }), /token do approved_url nao abre este livro/);
+  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA, verificarEntrega: () => 'ebook-0002' }), /nao abre este livro/);
+  await assert.rejects(() => publicarNaKiwify(jaLa(), LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA, verificarEntrega: () => { throw new Error('sem segredo'); } }), /nao abre este livro/);
 });
 
 test('livro sem link de entrega nem chega a criar o produto', async () => {
   const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p5' }) } });
-  await assert.rejects(() => publicarNaKiwify(p, { ...LIVRO, linkDeEntrega: '' }, { cred: CRED }), /KIWIFY_SEM_ENTREGA: livro sem link de entrega/);
+  await assert.rejects(() => publicarNaKiwify(p, { ...LIVRO, linkDeEntrega: '' }, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_ENTREGA: livro sem link de entrega/);
   assert.ok(!p.chamadas.some(c => c.metodo === 'POST'), 'nao nasce produto a venda sem entrega');
 });
 
 test('sem plano publico ativo, publica com o checkout vazio (a vitrine nao ganha link)', async () => {
   for (const links of [[{ id: 'Ab12', type: 'plan', status: 'active', private: true }], [{ id: 'Ab12', type: 'plan', status: 'inactive', private: false }], []]) {
     const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'p6' }) }, links });
-    assert.strictEqual((await publicarNaKiwify(p, LIVRO, { cred: CRED })).checkout, null);
+    assert.strictEqual((await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA })).checkout, null);
   }
+});
+
+
+// ── a Kiwify demora a refletir o PUT (14/10/2026: 10 de 10 falsos SEM_ENTREGA) ──
+
+const vazio = id => ({ status: 200, texto: JSON.stringify({ id, name: 'Livro Novo', checkout: { approved_url: '' } }) });
+const certo = id => ({ status: 200, texto: JSON.stringify({ id, name: 'Livro Novo', checkout: { approved_url: ENTREGA }, links: PLANO }) });
+
+test('1a leitura vazia e a 2a certa: publicado, depois de esperar 1,5 s e 3 s', async () => {
+  const esperas = [];
+  const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'k1' }) }, conferencia: [vazio('k1'), certo('k1')] });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: async ms => { esperas.push(ms); } });
+  assert.strictEqual(r.id, 'k1');
+  assert.strictEqual(r.checkout, 'https://pay.kiwify.com.br/sVgIhNe');
+  assert.deepStrictEqual(esperas, [1500, 3000], 'esperou antes de cada leitura e parou na que conferiu');
+});
+
+test('as 3 leituras vazias: SEM_ENTREGA, depois de 1,5 s, 3 s e 6 s', async () => {
+  const esperas = [];
+  const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'k2' }) }, conferencia: [vazio('k2'), vazio('k2'), vazio('k2')] });
+  await assert.rejects(() => publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: async ms => { esperas.push(ms); } }), /KIWIFY_SEM_ENTREGA: approved_url vazio id=k2/);
+  assert.deepStrictEqual(esperas, [1500, 3000, 6000]);
+  assert.strictEqual(p.chamadas.filter(c => c.metodo === 'GET' && c.caminho === '/v1/products/k2?full=true').length, 4, '1 para montar o PUT + 3 de conferencia');
+});
+
+test('leitura ilegivel no meio nao vira sem entrega, e a ultima certa libera', async () => {
+  const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'k3' }) }, conferencia: [{ status: 0, texto: 'TypeError: Failed to fetch' }, vazio('k3'), certo('k3')] });
+  assert.strictEqual((await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA })).id, 'k3');
+  const p2 = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'k4' }) }, conferencia: [{ status: 0, texto: 'x' }, vazio('k4'), { status: 503, texto: 'x' }] });
+  await assert.rejects(() => publicarNaKiwify(p2, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA }), /KIWIFY_SEM_ENTREGA: approved_url vazio/, 'uma leitura legivel sem entrega e nenhuma certa');
+});
+
+test('"ja estava na Kiwify" tambem espera e repete antes de concluir', async () => {
+  const p = paginaFalsa({ produtos: [{ id: 'j5', name: 'Livro Novo' }], conferencia: [vazio('j5'), certo('j5')] });
+  // sem ao_buscar_id, a 1a leitura e a do proprio fake (entregaInicial vazio): vazia, depois certa
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
+  assert.deepStrictEqual([r.jaExistia, r.id], [true, 'j5']);
+});
+
+test('sem esperar injetado, a conferencia usa as esperas medidas', () => {
+  assert.deepStrictEqual(require('../src/agents/publisherKiwify').ESPERAS_CONFERENCIA_MS, [1500, 3000, 6000]);
 });
