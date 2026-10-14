@@ -206,7 +206,14 @@ async function generatePDF(ebookBruto, coverPath) {
   // PÁGINA 1: CAPA
   // ===========================
   if (coverPath && fs.existsSync(coverPath)) {
-    doc.image(coverPath, 0, 0, { width: doc.page.width, height: doc.page.height });
+    // Capa em JPEG: em PNG o PDFKit embute sem perda, ~3,3 MB por livro (era a
+    // imagem que enchia o disco da VPS em 14/10/2026). Ver capaJpeg.js.
+    const capa = await require('./capaJpeg').capaParaPdf(coverPath, { avisar: m => logger.warn(m) });
+    doc.image(capa.caminho, 0, 0, { width: doc.page.width, height: doc.page.height });
+    if (capa.temporario) {
+      logger.info('capa embutida em JPEG: ' + capa.kbAntes + ' KB -> ' + capa.kbDepois + ' KB');
+      try { fs.unlinkSync(capa.caminho); } catch (_) { /* protocolo: temporario ja lido pelo doc.image */ }
+    }
   } else {
     // Capa simples sem imagem
     doc.rect(0, 0, doc.page.width, doc.page.height).fill(COLORS.primary);
