@@ -15,7 +15,7 @@ const bom = 'Um texto de descricao com tamanho suficiente para valer a visita do
 const lojas = l => lojasDoLivro(l).map(x => x.loja + ' ' + x.url);
 
 test('todas as lojas confiaveis, na ordem de preferencia', () => {
-  const l = { gplay_id: 'AbCdEf123456', kiwify_checkout: 'https://pay.kiwify.com.br/Xy12AbC', hotmart_product_id: '8451111', cakto_sales_page: 'https://pay.cakto.com.br/abc123_1147168' };
+  const l = { gplay_url: 'https://play.google.com/store/books/details?id=AbCdEf123456', kiwify_checkout: 'https://pay.kiwify.com.br/Xy12AbC', hotmart_product_id: '8451111', cakto_sales_page: 'https://pay.cakto.com.br/abc123_1147168' };
   assert.deepStrictEqual(lojas(l), [
     'cakto https://pay.cakto.com.br/abc123_1147168',
     'hotmart https://hotmart.com/product/8451111',
@@ -34,9 +34,10 @@ test('link incompleto ou de painel nunca vira botao', () => {
   assert.deepStrictEqual(lojas({ kiwify_checkout: 'https://kiwify.app/Xy12' }), [], 'so o checkout pay.kiwify.com.br');
   assert.deepStrictEqual(lojas({ kiwify_checkout: 'https://pay.kiwify.com.br/Xy-12' }), [], 'id alfanumerico');
   assert.deepStrictEqual(lojas({ kiwify_url: 'https://pay.kiwify.com.br/Xy12AbC' }), [], 'kiwify_url e o painel: nunca e lido como checkout');
-  assert.deepStrictEqual(lojas({ gplay_id: 'x' }), [], 'id curto demais');
-  assert.deepStrictEqual(lojas({ gplay_id: 'id com espaco' }), []);
-  assert.deepStrictEqual(lojas({ gplay_id: 'GGKEY:SJ22W106K4J' }), ['gplay https://play.google.com/store/books/details?id=GGKEY%3ASJ22W106K4J']);
+  assert.deepStrictEqual(lojas({ gplay_id: 'GGKEY:SJ22W106K4J' }), [], 'GGKEY e o id do painel: livro em revisao nao tem loja');
+  assert.deepStrictEqual(lojas({ gplay_url: 'https://play.google.com/store/books/details?id=GGKEY:SJ22W106K4J' }), [], 'nem como id na url');
+  assert.deepStrictEqual(lojas({ gplay_url: 'https://play.google.com/store/apps/details?id=AbCdEf123456' }), [], 'so a loja de livros');
+  assert.deepStrictEqual(lojas({ gplay_url: 'https://play.google.com/store/books/details?id=AbCdEf123456&hl=pt_BR' }), ['gplay https://play.google.com/store/books/details?id=AbCdEf123456'], 'parametro extra sai');
   assert.deepStrictEqual(lojas({ hotmart_url: 'https://site-qualquer.com/x' }), []);
   assert.deepStrictEqual(lojasDoLivro(null), []);
 });
@@ -51,7 +52,7 @@ test('Kiwify sozinha basta para a pagina; linkDeCompra continua so Cakto/Hotmart
 test('rodape so cita loja que tem produto no catalogo gerado', () => {
   const cat = [{ hotmart_product_id: '1' }, { kiwify_checkout: 'https://pay.kiwify.com.br/Aa11' }, { kiwify_checkout: 'https://dashboard.kiwify.com/x' }, null];
   assert.deepStrictEqual(lojasDoCatalogo(cat), ['Hotmart', 'Kiwify']);
-  assert.deepStrictEqual(lojasDoCatalogo([{ gplay_id: 'AbCdEf1234' }, { cakto_sales_page: 'https://pay.cakto.com.br/a_1' }]), ['Cakto', 'Google Play'], 'ordem da lista, nao da chegada');
+  assert.deepStrictEqual(lojasDoCatalogo([{ gplay_url: 'https://play.google.com/store/books/details?id=AbCdEf1234' }, { cakto_sales_page: 'https://pay.cakto.com.br/a_1' }]), ['Cakto', 'Google Play'], 'ordem da lista, nao da chegada');
   assert.deepStrictEqual(lojasDoCatalogo(null), []);
   assert.strictEqual(fraseDasLojas(['Hotmart']), 'Disponível na Hotmart');
   assert.strictEqual(fraseDasLojas(['Hotmart', 'Cakto', 'Kiwify', 'Google Play']), 'Disponível na Hotmart, Cakto, Kiwify e Google Play');
@@ -103,7 +104,7 @@ test('indice: selo "com audiolivro" no audiolivro e no original que tem um', () 
   assert.strictEqual((paginaDoIndice(itens, { numero: 1, total: 1 }).match(/class="selo"/g) || []).length, 1, 'sem mapa, so o proprio audiolivro');
 });
 
-test('consulta do catalogo tolera coluna ausente (gplay_id ainda nao existe)', () => {
+test('consulta do catalogo tolera coluna ausente (gplay_url ainda nao existe)', () => {
   const db = new Database(':memory:');
   db.exec('CREATE TABLE ebooks (id TEXT, title TEXT, description TEXT, language TEXT, price REAL, cover_path TEXT, ' +
     'hotmart_product_id TEXT, hotmart_url TEXT, cakto_product_id TEXT, kiwify_checkout TEXT)');
@@ -112,7 +113,7 @@ test('consulta do catalogo tolera coluna ausente (gplay_id ainda nao existe)', (
   const cols = db.prepare('PRAGMA table_info(ebooks)').all().map(c => c.name);
   const linhas = db.prepare(consultaDoCatalogo(cols)).all();
   assert.deepStrictEqual(linhas.map(l => l.id), ['k'], 'Kiwify sozinha entra na consulta');
-  assert.strictEqual(linhas[0].gplay_id, null);
+  assert.strictEqual(linhas[0].gplay_url, null);
   assert.strictEqual(linhas[0].audio_de, null);
   assert.match(consultaDoCatalogo([]), / WHERE 0$/, 'sem coluna de loja, nada');
 });

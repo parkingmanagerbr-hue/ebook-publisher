@@ -16,6 +16,7 @@
 
 /** Uma linha, sem quebra e sem espaco duplo. */
 const { CHECKOUT_KIWIFY } = require('./kiwifyRegras');
+const { urlPublicaDe } = require('./gplayRegras');
 
 function umaLinha(s, n = 300) {
   return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
@@ -58,17 +59,13 @@ function linkKiwify(l) {
 }
 
 /**
- * Google Play Livros: `gplay_id` e o identificador do livro na loja.
- * CONFIRMAR no primeiro livro publicado la: a pagina publica e
- * play.google.com/store/books/details?id=<id do volume>. O Partner Center
- * mostra tambem um "GGKEY:..." para livro sem ISBN, e nao ha medicao aqui de
- * que a pagina publica aceite esse valor — se o botao "Comprar no Google Play"
- * abrir "item nao encontrado", e este id que precisa trocar pelo do volume.
+ * Google Play Livros: so `gplay_url`, gravada pelo publicador quando o livro
+ * FICA NO AR, com o link que a propria loja mostra. O GGKEY (gplay_id) e o id
+ * do Partner Center, nao o da pagina publica, e livro em revisao nao tem loja —
+ * botao para ele seria "item nao encontrado". Mesma regra de urlPublicaDe.
  */
 function linkGooglePlay(l) {
-  const id = umaLinha(l.gplay_id || l.gplayId, 80);
-  if (!/^(GGKEY:)?[A-Za-z0-9_-]{6,60}$/.test(id)) return null;
-  return 'https://play.google.com/store/books/details?id=' + encodeURIComponent(id);
+  return urlPublicaDe(umaLinha(l.gplay_url || l.gplayUrl, 300));
 }
 
 /** Nome da loja na frase ("Comprar na Hotmart", "no Google Play"). */
