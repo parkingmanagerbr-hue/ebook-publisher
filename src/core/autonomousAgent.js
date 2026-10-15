@@ -259,9 +259,23 @@ async function publishReadyEbooks() {
         logger.info('[publish-ready] Cakto já publicado: ' + ebook.cakto_url);
       } else if (shouldPublishTo('CAKTO') && await ensureSession('cakto')) {
         setState({ currentStep: 'publishing:cakto' });
-        results.cakto = await publishToCakto(ebookData);
-        if (results.cakto?.success) logger.info('[publish-ready] Cakto OK: ' + (results.cakto.url || ''));
-        else logger.warn('[publish-ready] Cakto falhou: ' + (results.cakto?.error || 'desconhecido'));
+        // Via API em vez do wizard por navegador: o form da Cakto muda e derruba
+        // o wizard (3006 falhas/24h em 15/10/2026), enquanto a API é robusta e
+        // AUTO-PROTEGIDA — sem link de entrega o produto nasce PAUSADO (não vende
+        // sem arquivo), e o preço é conferido. Mapeamento de `livro` copiado fiel
+        // de scripts/publicar_cakto_api.js (entrega e preço são dinheiro).
+        const { publicarNaCakto } = require('../agents/publisherCaktoApi');
+        let urlEntrega = null;
+        try { urlEntrega = require('./entrega').urlEntrega; } catch (_) { /* sem segredo: nasce pausado */ }
+        const { precoDaLoja } = require('./precoProprio');
+        let entrega = '';
+        try { entrega = urlEntrega ? urlEntrega(ebook.id) : ''; } catch (_) { entrega = ''; }
+        if (!entrega) logger.warn('[publish-ready] Cakto: sem link de entrega — nasce pausado');
+        const capa = ebook.cover_path && require('fs').existsSync(ebook.cover_path) ? ebook.cover_path : null;
+        const nomeLoja = (ebook.cakto_nome && ebook.cakto_nome.trim()) ? ebook.cakto_nome : ebook.title;
+        const rc = await publicarNaCakto({ title: nomeLoja, description: ebook.description || '', entrega, capa, preco: precoDaLoja(ebook) }, {});
+        results.cakto = { success: true, caktoProductId: rc.id, productId: rc.id, url: rc.checkout || '' };
+        logger.info('[publish-ready] Cakto OK (API): id=' + rc.id + ' ' + (rc.checkout || '(checkout aparece na higiene)'));
       }
     } catch (e) {
       logger.error('[publish-ready] Cakto erro: ' + e.message.slice(0, 120));
