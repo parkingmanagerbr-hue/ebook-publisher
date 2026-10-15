@@ -36,6 +36,10 @@ const LOJAS_ATIVAS = ['hotmart', 'cakto', 'kiwify'];
  */
 function detectarProblemas(fatos, limites = {}) {
   const L = { ...LIMITES_PADRAO, ...limites };
+  // Lojas que o sistema REALMENTE tenta publicar agora. Loja desligada (ex.:
+  // Hotmart apos a conta ser encerrada em 15/10/2026) sai daqui e para de
+  // alarmar — avisar de loja que nao se usa mais e so ruido.
+  const ativas = limites.lojasAtivas || LOJAS_ATIVAS;
   const probs = [];
   const f = fatos || {};
   const ready = f.ready || {};
@@ -43,8 +47,10 @@ function detectarProblemas(fatos, limites = {}) {
   const lojas = f.lojas || {};
   const falhas = f.falhas24h || {};
 
-  // 1) Hotmart: token expirado é a causa nº1 de "parou de publicar na Hotmart".
-  if (token.hotmartExpiraMin == null) {
+  // 1) Hotmart: token expirado (so se a Hotmart ainda estiver ligada).
+  if (!ativas.includes('hotmart')) {
+    // Hotmart desligada: nao checa token.
+  } else if (token.hotmartExpiraMin == null) {
     probs.push({
       item: 'hotmart-token',
       texto: 'Hotmart: HOTMART_ACCESS_TOKEN ausente — a finalização de rascunho (API) não roda.',
@@ -77,7 +83,7 @@ function detectarProblemas(fatos, limites = {}) {
   }
 
   // 3) Loja ativa travada (não publica há muitas horas).
-  for (const loja of LOJAS_ATIVAS) {
+  for (const loja of ativas) {
     const h = lojas[loja] && lojas[loja].horasSemPublicar;
     if (h != null && h > L.lojaParadaHoras) {
       probs.push({
@@ -89,7 +95,7 @@ function detectarProblemas(fatos, limites = {}) {
   }
 
   // 4) Kiwify: entrega (approved_url) voltando vazia repetidamente.
-  if ((falhas.kiwifySemEntrega || 0) >= L.kiwifySemEntregaMin) {
+  if (ativas.includes('kiwify') && (falhas.kiwifySemEntrega || 0) >= L.kiwifySemEntregaMin) {
     probs.push({
       item: 'kiwify-entrega',
       texto: `Kiwify: ${falhas.kiwifySemEntrega} produtos com approved_url vazio em 24h — não marcam como publicado.`,
@@ -98,7 +104,7 @@ function detectarProblemas(fatos, limites = {}) {
   }
 
   // 5) Cakto: wizard por navegador falhando (o form da página mudou).
-  if ((falhas.caktoWizard || 0) >= L.caktoWizardFailMin) {
+  if (ativas.includes('cakto') && (falhas.caktoWizard || 0) >= L.caktoWizardFailMin) {
     probs.push({
       item: 'cakto-wizard',
       texto: `Cakto: ${falhas.caktoWizard} falhas do wizard em 24h (input de PDF/capa não encontrado) — o form da Cakto mudou.`,

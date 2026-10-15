@@ -84,7 +84,10 @@ function main() {
     process.stdout.write(`vigia-erro\tvigia das lojas não conseguiu medir: ${String(e.message).slice(0, 120)}\tChecar o container do ebook-publisher e o metrics.db.\n`);
     process.exit(0);
   }
-  for (const p of detectarProblemas(fatos)) {
+  // loja ativa = não explicitamente desligada por AUTO_PUBLISH_<LOJA>=false.
+  // (Hotmart ficou false apos a conta ser encerrada; Kiwify nao tem flag -> ativa.)
+  const ativas = LOJAS_ATIVAS.filter(l => process.env['AUTO_PUBLISH_' + l.toUpperCase()] !== 'false');
+  for (const p of detectarProblemas(fatos, { lojasAtivas: ativas })) {
     process.stdout.write(`${p.item}\t${p.texto}\t${p.acao}\n`);
   }
 }

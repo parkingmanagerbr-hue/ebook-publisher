@@ -95,6 +95,28 @@ test('Cakto wizard: alarma quando o form mudou (falhas repetidas)', () => {
   assert.match(p.texto, /form da Cakto mudou/);
 });
 
+test('Hotmart DESLIGADA (conta encerrada) não alarma token nem loja-parada', () => {
+  const f = {
+    ready: { total: 10, diasMaisAntigo: 1 },
+    token: { hotmartExpiraMin: null, hotmartTemHmSsoExp: false }, // morto, mas off
+    lojas: { hotmart: { horasSemPublicar: 999 }, cakto: { horasSemPublicar: 0 }, kiwify: { horasSemPublicar: 1 } },
+    falhas24h: { kiwifySemEntrega: 0, caktoWizard: 0 },
+  };
+  const i = itens(detectarProblemas(f, { lojasAtivas: ['cakto', 'kiwify'] }));
+  assert.ok(!i.includes('hotmart-token'), 'Hotmart off não checa token');
+  assert.ok(!i.includes('loja-parada-hotmart'), 'Hotmart off não alarma parada');
+  assert.deepStrictEqual(i, []);
+});
+
+test('loja desligada não alarma as PRÓPRIAS falhas (kiwify/cakto off)', () => {
+  const f = saudavel();
+  f.falhas24h = { kiwifySemEntrega: 50, caktoWizard: 5000 };
+  // só hotmart ativa (hipótese): nem kiwify-entrega nem cakto-wizard saem
+  const i = itens(detectarProblemas(f, { lojasAtivas: ['hotmart'] }));
+  assert.ok(!i.includes('kiwify-entrega'));
+  assert.ok(!i.includes('cakto-wizard'));
+});
+
 test('ESTADO REAL 15/10: flaga token, backlog(volume+idade) e kiwify — e cada um traz AÇÃO', () => {
   const real = {
     ready: { total: 885, diasMaisAntigo: 18 },
