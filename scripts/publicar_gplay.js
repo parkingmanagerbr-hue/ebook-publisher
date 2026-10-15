@@ -159,9 +159,22 @@ window.__gp = (() => {
 })();`;
 
 async function ajuda(page) { await page.evaluate(AJUDA); }
+// A aplicacao troca de documento entre as abas do editor e a leitura que pega
+// a troca no meio morre com "detached Frame" (medido em 15/10/2026, logo depois
+// de um Save & Continue). Isso e navegacao, nao falha: espera e le de novo.
+const TROCA_DE_PAGINA = /detached Frame|Execution context was destroyed|Cannot find context with specified id/;
+
 async function gp(page, fn, ...args) {
-  await ajuda(page);
-  return page.evaluate((f, a) => window.__gp[f](...a), fn, args);
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      await ajuda(page);
+      return await page.evaluate((f, a) => window.__gp[f](...a), fn, args);
+    } catch (e) {
+      if (tentativa >= 4 || !TROCA_DE_PAGINA.test(String(e && e.message))) throw e;
+      log.warn('  leitura pegou troca de pagina (' + fn + ', tentativa ' + tentativa + ') — lendo de novo');
+      await dormir(1500);
+    }
+  }
 }
 
 /**
@@ -184,7 +197,8 @@ async function ir(page, hash, espera = 3000) {
     // Sessao do Google caida: o Partner Center manda para a escolha de conta.
     // Medido em 14/10/2026, logo depois de o Chrome da VPS ser reiniciado.
     if (R.pedeLogin(page.url())) throw new Error('GPLAY_SEM_SESSAO');
-    const ok = await page.evaluate((h, re) => location.hash === '#' + h && new RegExp(re).test(document.body.innerText) && !/Loading(?! complete)/.test(document.body.innerText.slice(-200)), hash, PRONTO[chave].source).catch(() => false);
+    const lido = await page.evaluate(re => ({ hash: location.hash, pronto: new RegExp(re).test(document.body.innerText) && !/Loading(?! complete)/.test(document.body.innerText.slice(-200)) }), PRONTO[chave].source).catch(() => ({}));
+    const ok = lido.pronto && R.hashConfere(lido.hash, hash);
     if (ok) { await dormir(espera); return; }
   }
   if (chave) throw new Error('GPLAY_PAGINA_NAO_CARREGOU: ' + hash);
@@ -300,9 +314,16 @@ async function sobre(page, id, d) {
   // Conferir RECARREGANDO: a descricao do primeiro livro ficou vazia (ql-blank)
   // mesmo com o texto na tela antes de salvar.
   await ir(page, 'book/' + id + '/info/about');
+  // O texto "About the book" aparece antes de a aplicacao preencher os campos:
+  // lida na hora, a conferencia viu titulo vazio num rascunho com tudo gravado
+  // (15/10/2026). Espera o titulo chegar antes de julgar.
+  let titulo = '';
+  for (let fim = Date.now() + 20000; Date.now() < fim; await dormir(1000)) {
+    await gp(page, 'campo', 'Title', 'input');
+    titulo = await gp(page, 'valor', 'Title');
+    if (titulo) break;
+  }
   const gravada = await gp(page, 'lerDescricao');
-  await gp(page, 'campo', 'Title', 'input');
-  const titulo = await gp(page, 'valor', 'Title');
   if (titulo !== d.titulo) throw new Error('GPLAY_TITULO_NAO_GRAVOU: "' + umaLinha(titulo) + '"');
   if (!gravada || gravada.slice(0, 40) !== d.descricao.replace(/\s+/g, ' ').slice(0, 40)) throw new Error('GPLAY_DESCRICAO_NAO_GRAVOU: "' + umaLinha(gravada, 60) + '"');
   log.info('  about conferido (titulo e descricao gravados, ' + gravada.length + ' caracteres)');

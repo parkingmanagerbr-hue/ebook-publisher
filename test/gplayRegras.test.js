@@ -164,3 +164,24 @@ test('bordas: sem topico nem titulo, sem rowid, sem texto, limite invalido', () 
   assert.strictEqual(R.ggkeyDe(null), null);
   assert.deepStrictEqual(R.decidirRodada({ portao: 'live', limite: 0, teto: 2 }), { acao: 'publicar', vagas: 1 }, 'limite invalido vira 1');
 });
+
+
+test('lista reescrita pela aplicacao conta como carregada; outra aba nao', () => {
+  assert.strictEqual(R.hashConfere('#list?sortby=last_updated&sortdir=desc', 'list'), true, 'o endereco medido em 15/10/2026');
+  assert.strictEqual(R.hashConfere('#book/GGKEY:AB12CD/review', 'book/GGKEY:AB12CD/review'), true);
+  assert.strictEqual(R.hashConfere('#listagem', 'list'), false);
+  assert.strictEqual(R.hashConfere('#book/GGKEY:AB12CD/info/about', 'book/GGKEY:AB12CD/review'), false);
+  assert.strictEqual(R.hashConfere('', 'list'), false);
+  assert.strictEqual(R.hashConfere('#list', ''), false, 'sem pedido nao confere');
+  assert.strictEqual(R.hashConfere(null, null), false);
+});
+
+test('livro que ja passou pela loja nunca volta para a fila; so o rascunho e retomado', () => {
+  const ok = { title: 'Viajar barato', language: 'pt-BR', description: 'Um guia pratico para viajar pelo Brasil gastando pouco, do planejamento da rota a escolha de hospedagem. Cada capitulo traz um passo pratico e um exemplo de orcamento para a viagem inteira, com a lista do que levar.' };
+  assert.strictEqual(R.motivoParaNaoPublicar(ok), null);
+  for (const estado of ['live', 'enviado', 'em-revisao', 'reprovado', 'registrado'])
+    assert.strictEqual(R.motivoParaNaoPublicar({ ...ok, gplay_estado: estado }), 'ja-na-loja', estado);
+  assert.strictEqual(R.motivoParaNaoPublicar({ ...ok, gplay_id: 'GGKEY:SJ22W106K4J', gplay_estado: 'live' }), 'ja-na-loja', 'o primeiro livro, no ar');
+  assert.strictEqual(R.motivoParaNaoPublicar({ ...ok, gplay_id: 'GGKEY:RZ7E9AGXWKZ', gplay_estado: null }), 'ja-na-loja', 'GGKEY sem estado: nao arrisca outro produto');
+  assert.strictEqual(R.motivoParaNaoPublicar({ ...ok, gplay_id: 'GGKEY:AAAAAAA', gplay_estado: 'rascunho' }), null, 'rascunho e retomado');
+});

@@ -227,6 +227,11 @@ function motivoParaNaoPublicar(livro, { temPdf = true, temCapa = true } = {}) {
   const l = livro || {};
   if (l.combo_de) return 'combo';
   if (l.audio_de) return 'audiolivro';
+  // Livro que ja passou pela loja (no ar, enviado, em revisao, reprovado,
+  // registrado) NUNCA volta: republicar criaria outro produto do mesmo livro.
+  // O dono tira de venda pelo painel ("Stop selling") e o estado continua 'live'.
+  // So o rascunho e retomado.
+  if ((l.gplay_estado && l.gplay_estado !== 'rascunho') || (l.gplay_id && l.gplay_estado !== 'rascunho')) return 'ja-na-loja';
   if (!String(l.title || '').trim()) return 'sem-titulo';
   if (!idiomaGoogle(l.language)) return 'idioma-sem-mapeamento';
   if (!temPdf) return 'sem-pdf';
@@ -307,6 +312,19 @@ function reprovacoesSeguidas(resultados) {
   return n;
 }
 
+/**
+ * O endereco atual e a aba pedida? A lista e reescrita pela aplicacao: pedir
+ * `#list` vira `#list?sortby=last_updated&sortdir=desc` (medido em 15/10/2026),
+ * e a comparacao exata deixava o publicador esperando para sempre
+ * ("GPLAY_PAGINA_NAO_CARREGOU: list"). Vale o mesmo endereco ou ele seguido de
+ * parametros — `#list` nao casa `#listagem`. Pura.
+ */
+function hashConfere(atual, pedido) {
+  const a = String(atual || '').replace(/^#/, '');
+  const p = String(pedido || '').replace(/^#/, '');
+  return !!p && (a === p || a.startsWith(p + '?'));
+}
+
 /** A pagina caiu na tela de login/escolha de conta do Google? Pura. */
 function pedeLogin(url) {
   return /^https:\/\/accounts\.google\.com\//.test(String(url || ''));
@@ -365,7 +383,7 @@ function oQueFazerComAchado(status) {
 }
 
 module.exports = {
-  pedeLogin, estadoDoConteudo, decidirRodada, oQueFazerComAchado,
+  hashConfere, pedeLogin, estadoDoConteudo, decidirRodada, oQueFazerComAchado,
   TETO_DIA_PADRAO, PRECO_PADRAO, MINIMO_DESCRICAO, MAX_REPROVACOES_SEGUIDAS, IDIOMAS, BISAC, REGRAS_BISAC,
   idiomaGoogle, generosDoLivro, opcaoDoGenero, ALEGACAO_DESCRICAO, limparDescricao, tituloComPromessa,
   motivoParaNaoPublicar, ordenarFila, cabeHoje, diaDoNegocio, estadoNaRevisao, estadoNaLista, ggkeyDe,
