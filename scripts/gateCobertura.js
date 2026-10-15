@@ -27,6 +27,7 @@ const RAIZ = path.join(__dirname, '..');
 // dentro dele entra no gate automaticamente — de proposito.
 const MODULOS_NO_GATE = [
   'src/domain/',
+  'src/vigia-lojas.logic.js',
   'src/agents/backfillCovers.js',
   'src/agents/caktoRegras.js',
   'src/agents/coverPackaging.js',
