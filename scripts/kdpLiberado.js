@@ -6,6 +6,7 @@
  */
 const { urlCdpObrigatoria } = require('../src/core/cdpLocal');
 const { contaLiberada } = require('../src/agents/kdpConta');
+const { respostaGuardadaKdp } = require('../src/agents/kdpRegras');
 let log;
 try { log = require('../src/core/logger').createLogger('kdpLiberado'); }
 catch { log = { info: console.log, warn: console.warn, error: console.error }; }
@@ -24,10 +25,30 @@ async function principal() {
   }
 }
 
+const CACHE = process.env.KDP_CONTA_CACHE || '/app/data/kdp_conta_cache.json';
+
+/** Le a resposta guardada; arquivo ausente ou ilegivel = conferir no navegador. */
+function lerCache(fs = require('fs')) {
+  try { return JSON.parse(fs.readFileSync(CACHE, 'utf8')); } catch (_) { return null; }   // protocolo: sem cache, confere de novo
+}
+
+function gravarCache(r, fs = require('fs')) {
+  try { fs.writeFileSync(CACHE + '.tmp', JSON.stringify({ liberada: r.liberada, motivo: r.motivo, quando: Date.now() })); fs.renameSync(CACHE + '.tmp', CACHE); }
+  catch (e) { log.warn('cache da conta KDP nao gravado: ' + String(e.message).slice(0, 80)); }
+}
+
+async function conferir() {
+  const guardada = respostaGuardadaKdp(lerCache());
+  if (guardada) return guardada;   // bloqueada ha menos de 3 h: nao abre o Chrome de novo
+  const r = await principal();
+  gravarCache(r);
+  return r;
+}
+
 if (require.main === module) {
-  principal()
-    .then(r => { (r.liberada ? log.info : log.warn)('conta KDP: ' + (r.liberada ? 'liberada' : 'bloqueada — ' + r.motivo)); console.log(JSON.stringify(r)); process.exit(r.liberada ? 0 : 3); })
+  conferir()
+    .then(r => { if (!r.guardada) (r.liberada ? log.info : log.warn)('conta KDP: ' + (r.liberada ? 'liberada' : 'bloqueada — ' + r.motivo)); console.log(JSON.stringify(r)); process.exit(r.liberada ? 0 : 3); })
     .catch(e => { log.error('ERRO: ' + String(e && e.message).replace(/[\r\n\t]+/g, ' ').slice(0, 200)); process.exit(1); });
 }
 
-module.exports = { principal };
+module.exports = { principal, conferir, lerCache, gravarCache };

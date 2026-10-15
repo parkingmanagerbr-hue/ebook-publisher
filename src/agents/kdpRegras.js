@@ -143,7 +143,24 @@ function podeLogarSozinhoNoKdp(env) {
   return String(e.KDP_LOGIN_AUTOMATICO == null ? '' : e.KDP_LOGIN_AUTOMATICO).trim() === '1';
 }
 
+/**
+ * A conta do KDP ja foi conferida ha pouco e estava BLOQUEADA? Devolve a
+ * resposta guardada, ou null para conferir de novo. Medido em 15/10/2026: o
+ * laco da VPS abria o Chrome na pagina da conta a cada 10 min para ler a mesma
+ * recusa ("conta bancaria que nao pode receber") — 465 vezes. A recusa depende
+ * de o dono trocar a conta bancaria; tres horas de espera nao atrasam nada.
+ * Conta LIBERADA nunca vem do guardado: e o que manda publicar. Pura.
+ */
+const PRAZO_CACHE_KDP_MS = 3 * 60 * 60 * 1000;
+function respostaGuardadaKdp(cache, agora = Date.now(), prazo = PRAZO_CACHE_KDP_MS) {
+  if (!cache || cache.liberada !== false) return null;
+  const idade = agora - Number(cache.quando);
+  if (!(idade >= 0 && idade < prazo)) return null;
+  return { liberada: false, motivo: cache.motivo, guardada: true };
+}
+
 module.exports = {
+  respostaGuardadaKdp, PRAZO_CACHE_KDP_MS,
   ehBloqueioDeConta,
   podeLogarSozinhoNoKdp,
   ehBotaoDePublicar,

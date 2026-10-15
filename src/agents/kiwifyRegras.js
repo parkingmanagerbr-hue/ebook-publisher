@@ -244,6 +244,19 @@ function valeTentarKiwify(ultimaFalha, agora = Date.now(), espera = ESPERA_APOS_
   return (agora - quando) >= espera;
 }
 
+/**
+ * O produto inteiro a partir do GET ?full=true. A resposta real (medida em
+ * 15/10/2026) traz `product`, `checkout` e `links` LADO A LADO: o approved_url
+ * mora em `checkout`, o plano de compra em `links`. Ler so `json.product` —
+ * como a conferencia de entrega fazia — nunca enxerga a entrega: 86 livros
+ * sairam como "sem-entrega" com a entrega certa no ar. Pura.
+ */
+function produtoCompleto(json) {
+  if (!json || typeof json !== 'object') return null;
+  if (!json.product || typeof json.product !== 'object') return json;
+  return { ...json.product, checkout: json.checkout || json.product.checkout, links: json.links || json.product.links };
+}
+
 /** approved_url do produto como o GET ?full=true devolve (dentro de checkout ou solto). Pura. */
 function approvedUrlDe(produto) {
   const p = produto || {};
@@ -313,7 +326,7 @@ function desfechoDaFalha(mensagem) {
 }
 
 module.exports = {
-  desfechoDaFalha, approvedUrlDe, motivoSemEntrega, checkoutPublico, CHECKOUT_KIWIFY,
+  produtoCompleto, desfechoDaFalha, approvedUrlDe, motivoSemEntrega, checkoutPublico, CHECKOUT_KIWIFY,
   valeTentarKiwify, ESPERA_APOS_LIMITE_MS,
   CATEGORIAS, NOMES_CATEGORIA, categoriaKiwify, precoCentavos, moedaPorIdioma, descricaoKiwify,
   descritorFatura, corpoDeCriacao, corpoDeAtualizacao, mesmoProdutoKiwify, nomeKiwify, chaveDeNome, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa,

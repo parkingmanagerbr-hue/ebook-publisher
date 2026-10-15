@@ -14,7 +14,7 @@
  * Ele nao preenche cadastro, documento nem dado bancario: a conta so recebe
  * quando o titular completa isso no painel.
  */
-const { corpoDeCriacao, corpoDeAtualizacao, categoriaKiwify, mesmoProdutoKiwify, nomeKiwify, chaveDeNome, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa, motivoSemEntrega, checkoutPublico } = require('./kiwifyRegras');
+const { corpoDeCriacao, corpoDeAtualizacao, categoriaKiwify, mesmoProdutoKiwify, nomeKiwify, chaveDeNome, motivoRecusa, ehLimiteDeTaxa, esperaPorTentativa, motivoSemEntrega, checkoutPublico, produtoCompleto } = require('./kiwifyRegras');
 
 let log;
 try { log = require('../core/logger').createLogger('kiwify'); }
@@ -121,7 +121,7 @@ async function conferirEntrega(page, cred, id, livro, { verificarEntrega, opcoes
   for (let i = 0; i < esperas.length; i++) {
     await esperar(esperas[i]);
     const r = await chamar(page, cred, 'GET', '/v1/products/' + id + '?full=true', null, opcoesDeChamada);
-    const produto = (r.json && (r.json.product || r.json)) || null;
+    const produto = produtoCompleto(r.json);
     if (r.status !== 200 || !produto) {
       ilegiveis++;
       log.warn('conferencia de entrega ilegivel id=' + umaLinha(id, 40) + ' (leitura ' + (i + 1) + ' de ' + esperas.length + ', status ' + r.status + ')');

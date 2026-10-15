@@ -6,7 +6,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const Database = require('better-sqlite3');
-const { approvedUrlDe, motivoSemEntrega, checkoutPublico, desfechoDaFalha, CHECKOUT_KIWIFY } = require('../src/agents/kiwifyRegras');
+const { approvedUrlDe, motivoSemEntrega, checkoutPublico, desfechoDaFalha, CHECKOUT_KIWIFY, produtoCompleto } = require('../src/agents/kiwifyRegras');
 const imp = require('../scripts/kiwifyCheckoutDoArquivo');
 
 const LINK = 'https://publisher.veloxisit.com.br/entrega/livro-0001.' + 'S'.repeat(32);
@@ -100,4 +100,19 @@ test('importacao: grava, limpa o que deixou de servir, so no produto ligado ao l
   assert.strictEqual(checkout('e3'), null, 'kid de outro produto nao grava');
   assert.strictEqual(checkout('e4'), null);
   assert.deepStrictEqual(imp.lerArquivo(''), { linhas: [], ilegiveis: 0 });
+});
+
+
+test('produto completo junta product, checkout e links da resposta real', () => {
+  const j = { product: { id: 'k', name: 'N' }, checkout: { approved_url: LINK }, links: [{ id: 'aBc1234', type: 'plan', status: 'active', private: false }] };
+  const p = produtoCompleto(j);
+  assert.strictEqual(p.name, 'N');
+  assert.strictEqual(approvedUrlDe(p), LINK);
+  assert.strictEqual(checkoutPublico(p), 'https://pay.kiwify.com.br/aBc1234');
+  assert.strictEqual(approvedUrlDe(j.product), '', 'so product nao tem a entrega: era o defeito');
+  const dentro = produtoCompleto({ product: { id: 'k', checkout: { approved_url: LINK }, links: [] } });
+  assert.strictEqual(approvedUrlDe(dentro), LINK, 'checkout dentro de product tambem serve');
+  assert.deepStrictEqual(produtoCompleto({ id: 'solto' }), { id: 'solto' }, 'resposta sem product fica como veio');
+  assert.deepStrictEqual(produtoCompleto({ product: 'x' }), { product: 'x' });
+  assert.strictEqual(produtoCompleto(null), null);
 });

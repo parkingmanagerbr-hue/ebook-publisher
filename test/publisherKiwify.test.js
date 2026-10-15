@@ -34,7 +34,8 @@ function paginaFalsa({ produtos = [], criar, ao_buscar_id, put = { status: 200, 
       if (getsPorId > 1 && conferencia) return Array.isArray(conferencia) ? conferencia[Math.min(getsPorId - 2, conferencia.length - 1)] : conferencia;
       let base = { id: 'p1', name: 'Livro Novo' };
       try { const j = ao_buscar_id && JSON.parse(ao_buscar_id.texto); if (j) base = j.product || j; } catch (_) { /* GET ilegivel no primeiro */ }
-      return { status: 200, texto: JSON.stringify({ ...base, links, checkout: { approved_url: approved } }) };
+      // Forma REAL da resposta (medida em 15/10/2026): product, checkout e links lado a lado.
+      return { status: 200, texto: JSON.stringify({ product: base, checkout: { approved_url: approved }, links }) };
     }
     if (metodo === 'PUT') {
       if (put.status < 400) approved = JSON.parse(corpo).approved_url;
@@ -461,4 +462,20 @@ test('"ja estava na Kiwify" tambem espera e repete antes de concluir', async () 
 
 test('sem esperar injetado, a conferencia usa as esperas medidas', () => {
   assert.deepStrictEqual(require('../src/agents/publisherKiwify').ESPERAS_CONFERENCIA_MS, [1500, 3000, 6000]);
+});
+
+
+// ── 15/10/2026: a entrega mora em json.checkout, AO LADO de json.product ──
+
+test('forma real da resposta: approved_url em checkout e plano em links, fora de product', async () => {
+  const real = id => ({ status: 200, texto: JSON.stringify({
+    product: { id, name: 'Livro Novo', status: 'active', price: 499 },
+    checkout: { approved_url: ENTREGA, payment_methods: 3 },
+    links: [{ id: 'aBc1234', type: 'plan', status: 'active', private: false }],
+    settings: { currency: 'BRL' },
+  }) });
+  const p = paginaFalsa({ criar: { status: 200, texto: JSON.stringify({ id: 'r1' }) }, conferencia: real('r1') });
+  const r = await publicarNaKiwify(p, LIVRO, { cred: CRED, esperarConferencia: SEM_ESPERA });
+  assert.strictEqual(r.id, 'r1', 'a entrega no checkout ao lado conta');
+  assert.strictEqual(r.checkout, 'https://pay.kiwify.com.br/aBc1234', 'o plano em links tambem');
 });

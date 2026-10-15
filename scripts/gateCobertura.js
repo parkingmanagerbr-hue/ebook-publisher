@@ -45,6 +45,7 @@ const MODULOS_NO_GATE = [
   'src/agents/vitrineRegras.js',
   'src/agents/caktoCheckout.js',
   'src/agents/capaJpeg.js',
+  'src/agents/resumoDiario.js',
   'src/agents/gplayRegras.js',
   'src/agents/gplayArquivos.js',
   'src/agents/indexNow.js',
