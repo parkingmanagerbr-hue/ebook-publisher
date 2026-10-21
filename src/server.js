@@ -236,13 +236,27 @@ app.get('/painel', (req, res) => {
       db.close();
     } catch (e) { aff.err = e.message; }
 
-    let eb = { total: 0, byStatus: [], recent: [], daily: [] };
+    let eb = { total: 0, byStatus: [], recent: [], daily: [], lojas: [] };
     try {
       const db = new Database(metPath, { readonly: true });
       eb.total = db.prepare('SELECT count(*) c FROM ebooks').get().c;
       eb.byStatus = db.prepare('SELECT status, count(*) c FROM ebooks GROUP BY status ORDER BY c DESC').all();
       eb.recent = db.prepare('SELECT title, status, language, created_at FROM ebooks ORDER BY created_at DESC LIMIT 12').all();
       eb.daily = db.prepare("SELECT substr(created_at,1,10) d, count(*) c FROM ebooks GROUP BY d ORDER BY d DESC LIMIT 14").all();
+
+      // Livros por loja. A coluna do id varia por loja (amazon usa o ASIN) e
+      // kiwify/gplay são criadas por ALTER sob demanda — só conta a que EXISTE,
+      // senão a query quebra o painel inteiro ("não existe" ≠ "não consegui ler").
+      const { resumoLojas } = require('./painel-lojas.logic');
+      const cols = new Set(db.prepare('PRAGMA table_info(ebooks)').all().map(c => c.name));
+      const colDaLoja = { hotmart: 'hotmart_product_id', cakto: 'cakto_product_id', kiwify: 'kiwify_product_id', amazon: 'amazon_asin', gplay: 'gplay_id' };
+      const contagens = {};
+      for (const [loja, col] of Object.entries(colDaLoja)) {
+        if (!cols.has(col)) continue; // coluna ausente: não medimos essa loja.
+        contagens[loja] = db.prepare(`SELECT count(*) c FROM ebooks WHERE ${col} IS NOT NULL AND ${col} <> ''`).get().c;
+      }
+      eb.lojas = resumoLojas(contagens, eb.total);
+      logger.info('[painel] livros por loja: ' + eb.lojas.map(l => `${l.loja}=${l.n}`).join(' ') + ` (total=${eb.total})`);
       db.close();
     } catch (e) { eb.err = e.message; }
 
@@ -261,6 +275,9 @@ function renderPainel(aff, eb) {
   const platRows = aff.byPlat.map(p => `<tr><td>${esc(p.platform)}</td><td>${fmt(p.total)}</td><td>${fmt(p.com_link)}</td><td><b>${fmt(p.clicks)}</b></td></tr>`).join('');
   const topRows = aff.top.length ? aff.top.map((p, i) => `<tr><td>${i + 1}</td><td class="nm">${p.image_url ? `<img src="${esc(p.image_url)}">` : ''}<span>${esc((p.product_name || '').slice(0, 60))}</span></td><td>${esc(p.platform)}</td><td><b>${fmt(p.click_count)}</b></td></tr>`).join('') : '<tr><td colspan="4" class="muted">Nenhum clique ainda — divulgue o hub para começar a medir.</td></tr>';
   const ebStatus = eb.byStatus.map(s => `<span class="tag">${esc(s.status || '?')}: <b>${fmt(s.c)}</b></span>`).join('');
+  const lojaRows = (eb.lojas || []).map(l => `<tr><td>${esc(l.rotulo)}${l.motivo ? ` <span class="muted-tag">${esc(l.motivo)}</span>` : ''}</td><td><b>${fmt(l.n)}</b></td><td>${l.pct == null ? '—' : l.pct.toLocaleString('pt-BR') + '%'}</td></tr>`).join('');
+  const lojasBloco = lojaRows ? `<h2>🏪 Livros por loja</h2>
+<div class="panel"><table><tr><th>Loja</th><th>Livros publicados</th><th>% do acervo</th></tr>${lojaRows}</table></div>` : '';
   const ebRows = eb.recent.map(e => `<tr><td>${(e.created_at || '').slice(0, 16)}</td><td>${esc((e.title || '').slice(0, 55))}</td><td>${esc(e.language || '')}</td><td><span class="st st-${esc(e.status)}">${esc(e.status || '?')}</span></td></tr>`).join('');
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Painel GENIA — Afiliados & Ebooks</title>
@@ -277,6 +294,7 @@ table{width:100%;border-collapse:collapse;font-size:.86rem}th,td{text-align:left
 .tag{display:inline-block;background:#1f2a3d;border-radius:8px;padding:5px 10px;font-size:.8rem;margin:0 6px 6px 0}
 .st{font-size:.72rem;padding:3px 8px;border-radius:6px;background:#334155}.st-published{background:#166534;color:#bbf7d0}.st-ready{background:#854d0e;color:#fde68a}.st-failed{background:#7f1d1d;color:#fecaca}
 .chart{display:flex;align-items:flex-end;gap:6px;height:120px;padding-top:10px}.bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px}.bar .fill{width:100%;border-radius:4px 4px 0 0}.bar span{font-size:.6rem;color:#64748b}
+.muted-tag{display:inline-block;background:#334155;color:#cbd5e1;border-radius:6px;padding:2px 7px;font-size:.7rem;margin-left:6px}
 a{color:#60a5fa}</style></head>
 <body><div class="hd"><h1>📊 Painel GENIA</h1><p>Afiliados &amp; Ebooks · ${new Date().toLocaleString('pt-BR')}</p></div>
 <div class="wrap">
@@ -286,6 +304,8 @@ ${card('Cliques totais', fmt(aff.clicks), 'nas páginas de venda')}
 ${card('Ebooks gerados', fmt(eb.total), 'desde o início')}
 ${card('Hub', '<a href="https://ofertas.veloxisit.com.br" target="_blank">ofertas ↗</a>', 'pt · en · es')}
 </div>
+
+${lojasBloco}
 
 <h2>🔗 Afiliados por plataforma</h2>
 <div class="panel"><table><tr><th>Plataforma</th><th>Produtos</th><th>Com link</th><th>Cliques</th></tr>${platRows}</table></div>
