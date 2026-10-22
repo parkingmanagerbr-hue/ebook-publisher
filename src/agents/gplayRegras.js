@@ -313,16 +313,23 @@ function reprovacoesSeguidas(resultados) {
 }
 
 /**
- * O endereco atual e a aba pedida? A lista e reescrita pela aplicacao: pedir
- * `#list` vira `#list?sortby=last_updated&sortdir=desc` (medido em 15/10/2026),
- * e a comparacao exata deixava o publicador esperando para sempre
- * ("GPLAY_PAGINA_NAO_CARREGOU: list"). Vale o mesmo endereco ou ele seguido de
- * parametros — `#list` nao casa `#listagem`. Pura.
+ * A aba do editor CARREGOU? Decide pelo CONTEUDO: o texto proprio da aba
+ * (marca) e nenhum "Loading" no fim. O endereco so serve para conferir QUAL
+ * livro — o GGKEY tem de estar no texto ou no endereco atual, em qualquer
+ * forma que a aplicacao reescreva (?sortby=, /edit...). De 16 a 22/10/2026 a
+ * espera exigia o endereco exato e falhou em lista, content, contributors,
+ * settings e review. Pura.
  */
-function hashConfere(atual, pedido) {
-  const a = String(atual || '').replace(/^#/, '');
-  const p = String(pedido || '').replace(/^#/, '');
-  return !!p && (a === p || a.startsWith(p + '?'));
+function paginaPronta({ texto, marca, ggkey, endereco } = {}) {
+  const t = String(texto || '');
+  if (!marca || !marca.test(t)) return false;
+  if (ggkey && !t.includes(ggkey) && !String(endereco || '').includes(ggkey)) return false;
+  return !/Loading(?! complete)/.test(t.slice(-200));
+}
+
+/** A lista "Effective prices" ja tem pais com valor (ex.: "ARS 1,500.00")? Pura. */
+function temPrecosPorPais(texto) {
+  return /Effective prices[^]*\b[A-Z]{3}\s[\d.,]+/.test(String(texto || ''));
 }
 
 /** A pagina caiu na tela de login/escolha de conta do Google? Pura. */
@@ -383,7 +390,7 @@ function oQueFazerComAchado(status) {
 }
 
 module.exports = {
-  hashConfere, pedeLogin, estadoDoConteudo, decidirRodada, oQueFazerComAchado,
+  paginaPronta, temPrecosPorPais, pedeLogin, estadoDoConteudo, decidirRodada, oQueFazerComAchado,
   TETO_DIA_PADRAO, PRECO_PADRAO, MINIMO_DESCRICAO, MAX_REPROVACOES_SEGUIDAS, IDIOMAS, BISAC, REGRAS_BISAC,
   idiomaGoogle, generosDoLivro, opcaoDoGenero, ALEGACAO_DESCRICAO, limparDescricao, tituloComPromessa,
   motivoParaNaoPublicar, ordenarFila, cabeHoje, diaDoNegocio, estadoNaRevisao, estadoNaLista, ggkeyDe,

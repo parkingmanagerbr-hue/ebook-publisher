@@ -188,21 +188,56 @@ const PRONTO = {
   pricing: /Set the prices/, review: /Book status|Book details/, list: /Book catalog/, 'book/create': /Select a sell option|Sell option/,
 };
 
+/** Botoes que fecham o aviso de "alteracoes nao salvas": cada etapa confere depois de recarregar. */
+const DESCARTAR = /^(Discard|Discard changes|Leave|Leave page|Don't save)$/i;
+
+/**
+ * Vai para a aba e espera ela DESENHAR (gplayRegras.paginaPronta: o texto
+ * proprio da aba, e o livro certo). Se travar, tenta uma segunda vez com a
+ * pagina recarregada do zero; se travar de novo, o erro leva um retrato do que
+ * estava na tela (endereco, comeco do texto, dialogo aberto) — de 16 a
+ * 22/10/2026 o erro so dizia o endereco, e nao havia como saber por que.
+ */
 async function ir(page, hash, espera = 3000) {
-  await page.goto(CONTA + '#' + hash, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(e => log.warn('goto ' + hash + ': ' + umaLinha(e.message)));
   const chave = Object.keys(PRONTO).find(k => hash === k || hash.endsWith('/' + k));
-  const fim = Date.now() + 45000;
-  while (chave && Date.now() < fim) {
-    await dormir(1500);
-    // Sessao do Google caida: o Partner Center manda para a escolha de conta.
-    // Medido em 14/10/2026, logo depois de o Chrome da VPS ser reiniciado.
-    if (R.pedeLogin(page.url())) throw new Error('GPLAY_SEM_SESSAO');
-    const lido = await page.evaluate(re => ({ hash: location.hash, pronto: new RegExp(re).test(document.body.innerText) && !/Loading(?! complete)/.test(document.body.innerText.slice(-200)) }), PRONTO[chave].source).catch(() => ({}));
-    const ok = lido.pronto && R.hashConfere(lido.hash, hash);
-    if (ok) { await dormir(espera); return; }
+  const ggkey = R.ggkeyDe(hash);
+  let lido = {};
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    if (tentativa === 2) {
+      log.warn('  aba nao desenhou (' + hash + '): ' + retrato(lido) + ' — recarregando do zero');
+      await page.goto('about:blank').catch(() => {});
+    }
+    await page.goto(CONTA + '#' + hash, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(e => log.warn('goto ' + hash + ': ' + umaLinha(e.message)));
+    if (!chave) { await dormir(8000); return; }
+    const fim = Date.now() + 40000;
+    while (Date.now() < fim) {
+      await dormir(1500);
+      // Sessao do Google caida: o Partner Center manda para a escolha de conta.
+      // Medido em 14/10/2026, logo depois de o Chrome da VPS ser reiniciado.
+      if (R.pedeLogin(page.url())) throw new Error('GPLAY_SEM_SESSAO');
+      lido = await page.evaluate(() => {
+        const d = document.querySelector('mat-dialog-container');
+        return { hash: location.hash, texto: document.body.innerText, dialogo: d ? String(d.innerText || '') : '' };
+      }).catch(() => ({}));
+      if (lido.dialogo) {
+        const fechou = await page.evaluate(re => {
+          const d = document.querySelector('mat-dialog-container');
+          const b = d && [...d.querySelectorAll('button')].find(x => new RegExp(re, 'i').test(String(x.textContent).trim()));
+          if (!b) return false;
+          b.click(); return true;
+        }, DESCARTAR.source).catch(() => false);
+        log.warn('  dialogo aberto em ' + hash + ': "' + umaLinha(lido.dialogo, 100) + '"' + (fechou ? ' — descartado (a etapa confere depois de recarregar)' : ''));
+      }
+      if (R.paginaPronta({ texto: lido.texto, marca: PRONTO[chave], ggkey, endereco: lido.hash })) { await dormir(espera); return; }
+    }
   }
-  if (chave) throw new Error('GPLAY_PAGINA_NAO_CARREGOU: ' + hash);
-  await dormir(8000);
+  throw new Error('GPLAY_PAGINA_NAO_CARREGOU: ' + hash + ' (' + retrato(lido) + ')');
+}
+
+/** O que estava na tela quando a aba nao desenhou — para o log, sem dado de comprador. */
+function retrato(lido) {
+  const l = lido || {};
+  return 'endereco ' + umaLinha(l.hash, 60) + ' | texto "' + umaLinha(l.texto, 120) + '"' + (l.dialogo ? ' | dialogo "' + umaLinha(l.dialogo, 80) + '"' : '');
 }
 
 /** Espera o "Save" terminar: muda o endereco, ou aparece "saved", ou erro. */
@@ -349,11 +384,26 @@ async function generos(page, id, lista) {
       if (c) c.setAttribute('data-gp', 'genero' + k);
     }, i);
     if (await gp(page, 'valor', 'genero' + i) === lista[i].rotulo) continue;
-    await autocomplete(page, 'genero' + i, lista[i].codigo, R.opcaoDoGenero(lista[i].codigo), 'genero ' + (i + 1));
+    // Confirma a opcao ANTES de gravar: o "Save" com o campo ainda vazio gravava
+    // nada, e a falha so aparecia depois (GPLAY_GENERO_NAO_GRAVOU, 18/10/2026).
+    let escolhido = '';
+    for (let t = 1; t <= 2 && escolhido !== lista[i].rotulo; t++) {
+      await autocomplete(page, 'genero' + i, lista[i].codigo, R.opcaoDoGenero(lista[i].codigo), 'genero ' + (i + 1));
+      for (let fim = Date.now() + 5000; Date.now() < fim; await dormir(500)) {
+        escolhido = await gp(page, 'valor', 'genero' + i);
+        if (escolhido === lista[i].rotulo) break;
+      }
+    }
+    if (escolhido !== lista[i].rotulo) throw new Error('GPLAY_GENERO_NAO_SELECIONADO: ' + lista[i].codigo + ' (campo ficou "' + umaLinha(escolhido, 80) + '")');
   }
   await salvar(page, 'generos');
   await ir(page, 'book/' + id + '/info/genres');
-  const gravados = await page.evaluate(() => [...document.querySelectorAll('input[formcontrolname=code]')].filter(e => e.getBoundingClientRect().width > 0).map(e => e.value));
+  // Os campos chegam depois do rotulo da aba: espera ter valor antes de comparar.
+  let gravados = [];
+  for (let fim = Date.now() + 20000; Date.now() < fim; await dormir(1000)) {
+    gravados = await page.evaluate(() => [...document.querySelectorAll('input[formcontrolname=code]')].filter(e => e.getBoundingClientRect().width > 0).map(e => e.value)).catch(() => []);
+    if (gravados.filter(Boolean).length >= lista.length) break;
+  }
   for (const g of lista) if (!gravados.includes(g.rotulo)) throw new Error('GPLAY_GENERO_NAO_GRAVOU: ' + g.codigo + ' (gravados: ' + umaLinha(gravados.join(' | '), 160) + ')');
   log.info('  generos conferidos: ' + lista.map(g => g.codigo).join(', '));
 }
@@ -460,7 +510,10 @@ async function precos(page, id, preco) {
   await salvar(page, 'precos');
   await ir(page, 'book/' + id + '/pricing');
   const texto = await gp(page, 'texto');
-  if (!/Effective prices[^]*\b[A-Z]{3}\s[\d.,]+/.test(texto)) throw new Error('GPLAY_PRECO_SEM_PAISES');
+  // A lista de paises e montada depois da aba: espera ate 30 s antes de concluir.
+  let precosOk = R.temPrecosPorPais(texto);
+  for (let fim = Date.now() + 30000; !precosOk && Date.now() < fim;) { await dormir(2000); precosOk = R.temPrecosPorPais(await gp(page, 'texto')); }
+  if (!precosOk) throw new Error('GPLAY_PRECO_SEM_PAISES');
   log.info('  preco conferido: BRL ' + preco + ', "Effective prices" com paises');
 }
 

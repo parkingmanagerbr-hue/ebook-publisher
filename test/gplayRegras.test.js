@@ -166,14 +166,26 @@ test('bordas: sem topico nem titulo, sem rowid, sem texto, limite invalido', () 
 });
 
 
-test('lista reescrita pela aplicacao conta como carregada; outra aba nao', () => {
-  assert.strictEqual(R.hashConfere('#list?sortby=last_updated&sortdir=desc', 'list'), true, 'o endereco medido em 15/10/2026');
-  assert.strictEqual(R.hashConfere('#book/GGKEY:AB12CD/review', 'book/GGKEY:AB12CD/review'), true);
-  assert.strictEqual(R.hashConfere('#listagem', 'list'), false);
-  assert.strictEqual(R.hashConfere('#book/GGKEY:AB12CD/info/about', 'book/GGKEY:AB12CD/review'), false);
-  assert.strictEqual(R.hashConfere('', 'list'), false);
-  assert.strictEqual(R.hashConfere('#list', ''), false, 'sem pedido nao confere');
-  assert.strictEqual(R.hashConfere(null, null), false);
+test('aba carregada se decide pelo conteudo; o endereco so confere o livro', () => {
+  const marca = /Upload and review the files/;
+  const pronto = 'Book details GGKEY:AB12CD\nUpload and review the files\nEPUB PDF';
+  assert.strictEqual(R.paginaPronta({ texto: pronto, marca, ggkey: 'GGKEY:AB12CD' }), true);
+  assert.strictEqual(R.paginaPronta({ texto: 'Upload and review the files', marca, ggkey: 'GGKEY:AB12CD', endereco: '#book/GGKEY:AB12CD/content?x=1' }), true, 'endereco reescrito, mesmo livro');
+  assert.strictEqual(R.paginaPronta({ texto: 'Book catalog\nTitle Status', marca: /Book catalog/, endereco: '#list?sortby=last_updated&sortdir=desc' }), true, 'a lista medida em 15/10/2026, sem livro');
+  assert.strictEqual(R.paginaPronta({ texto: 'About the book', marca, ggkey: 'GGKEY:AB12CD', endereco: '#book/GGKEY:AB12CD/content' }), false, 'endereco certo, aba ainda nao desenhou');
+  assert.strictEqual(R.paginaPronta({ texto: 'Upload and review the files GGKEY:ZZ99ZZ', marca, ggkey: 'GGKEY:AB12CD', endereco: '#book/GGKEY:ZZ99ZZ/content' }), false, 'outro livro');
+  assert.strictEqual(R.paginaPronta({ texto: 'Upload and review the files\nLoading', marca, endereco: '#x' }), false, 'ainda carregando');
+  assert.strictEqual(R.paginaPronta({ texto: 'Upload and review the files\nLoading complete', marca }), true);
+  assert.strictEqual(R.paginaPronta({ texto: 'Upload and review the files', marca, ggkey: 'GGKEY:AB12CD' }), false, 'leitura sem endereco nao prova o livro');
+  assert.strictEqual(R.paginaPronta({ texto: pronto }), false, 'sem marca nao conclui');
+  assert.strictEqual(R.paginaPronta(), false);
+});
+
+test('precos: so com a lista de paises com valor', () => {
+  assert.strictEqual(R.temPrecosPorPais('Set the prices\nBRL 19.90\nEffective prices\nARS 1,500.00\nUSD 3.99'), true);
+  assert.strictEqual(R.temPrecosPorPais('Set the prices\nBRL 19.90\nEffective prices\nLoading'), false, 'lista ainda vazia');
+  assert.strictEqual(R.temPrecosPorPais('BRL 19.90 sem a secao'), false, 'preco sem a secao de paises');
+  assert.strictEqual(R.temPrecosPorPais(null), false);
 });
 
 test('livro que ja passou pela loja nunca volta para a fila; so o rascunho e retomado', () => {
