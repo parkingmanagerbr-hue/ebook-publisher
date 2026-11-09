@@ -13,6 +13,7 @@
 const path = require('path');
 const fs   = require('fs');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
+const formatoCapa = require('./formatoCapa');
 const { generateImage } = require('./imageGenAgent');
 const { ensureQualityCover } = require('./qualityAgent');
 const { createLogger }  = require('../core/logger');
@@ -236,7 +237,7 @@ async function compositeTextOnImage(bgBuffer, title, subtitle, topic, category) 
   ctx.fillStyle = accentGrad;
   ctx.fillRect(0, H - 10, W, 10);
 
-  return canvas.toBuffer('image/png');
+  return formatoCapa.codificarCanvas(canvas);
 }
 
 // ─── Canvas puro (sem AI) para fallback total ─────────────────────────────────
@@ -364,8 +365,8 @@ async function _generateCoverOnce(title, subtitle, topic, idioma = 'pt-BR') {
       await geminiImage.generateImage(bgPrompt, tmpPath);
       const bgBuffer = fs.readFileSync(tmpPath);
       try { fs.unlinkSync(tmpPath); } catch (_) {}
-      const filename = `cover_${Date.now()}.png`;
-      const outPath  = path.join(COVERS_DIR, filename);
+      const outPath  = formatoCapa.caminhoDeCapa(COVERS_DIR, 'cover');
+      const filename = path.basename(outPath);
       const finalBuf = await compositeTextOnImage(bgBuffer, title, subtitle, topic, cat);
       fs.writeFileSync(outPath, finalBuf);
       logger.info(`✅ Capa Gemini Image gerada: ${filename} (${Math.round(finalBuf.length/1024)}KB)`);
@@ -376,8 +377,8 @@ async function _generateCoverOnce(title, subtitle, topic, idioma = 'pt-BR') {
   }
 
   // ── Provider 2+: imageGenAgent (Higgsfield/Pollinations/DALL-E) + canvas text overlay ──
-  const filename = `cover_${Date.now()}.png`;
-  const outPath  = path.join(COVERS_DIR, filename);
+  const outPath  = formatoCapa.caminhoDeCapa(COVERS_DIR, 'cover');
+  const filename = path.basename(outPath);
   const bgPrompt = buildBackgroundPrompt(title, topic, cat);
 
   let bgBuffer   = null;

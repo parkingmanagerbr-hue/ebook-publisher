@@ -24,4 +24,13 @@ function caminhoDeCapa(pasta, prefixo, agora = Date.now()) {
   return path.join(pasta, `${prefixo}_${agora}${EXTENSAO}`);
 }
 
-module.exports = { QUALIDADE, EXTENSAO, opcoesDeCaptura, caminhoDeCapa };
+/**
+ * Bytes de uma capa montada em Canvas (@napi-rs/canvas: qualidade 0–100).
+ * 09/11/2026: o caminho de reserva do coverAgent (capa viral e HTML falharam)
+ * seguia gravando PNG — duas capas no mesmo dia do conserto dos geradores.
+ */
+function codificarCanvas(canvas) {
+  return canvas.toBuffer('image/jpeg', QUALIDADE);
+}
+
+module.exports = { QUALIDADE, EXTENSAO, opcoesDeCaptura, caminhoDeCapa, codificarCanvas };
