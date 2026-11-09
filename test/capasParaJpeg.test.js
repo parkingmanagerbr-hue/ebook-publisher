@@ -32,6 +32,9 @@ test('converte PNG antigo, aponta o livro e apaga o PNG; PNG recente fica', { sk
   db.prepare('INSERT INTO ebooks VALUES (?,?)').run('a', velho);
   db.prepare('INSERT INTO ebooks VALUES (?,?)').run('b', velho); // dois livros, mesma capa
   db.prepare('INSERT INTO ebooks VALUES (?,?)').run('c', novo);
+  // capa_externa também guarda o caminho: não pode ficar apontando para o PNG apagado
+  db.exec('CREATE TABLE capa_externa (ebook_id TEXT, cover_path TEXT)');
+  db.prepare('INSERT INTO capa_externa VALUES (?,?)').run('a', velho);
   db.close();
 
   const saida = execFileSync(PY, [path.join(__dirname, '..', 'scripts', 'capasParaJpeg.py'), '--aplicar'],
@@ -45,7 +48,9 @@ test('converte PNG antigo, aponta o livro e apaga o PNG; PNG recente fica', { sk
   assert.ok(fs.existsSync(novo), 'png recente preservado');
   const db2 = new Database(dbPath, { readonly: true });
   const rows = db2.prepare('SELECT id, cover_path FROM ebooks ORDER BY id').all();
+  const externa = db2.prepare('SELECT cover_path FROM capa_externa').get().cover_path;
   db2.close();
+  assert.strictEqual(path.basename(externa), 'velha.jpg');
   assert.deepStrictEqual(rows.map(r => [r.id, path.basename(r.cover_path)]), [['a', 'velha.jpg'], ['b', 'velha.jpg'], ['c', 'nova.png']]);
   const cabeca = fs.readFileSync(jpg).subarray(0, 2);
   assert.deepStrictEqual([...cabeca], [0xFF, 0xD8]);

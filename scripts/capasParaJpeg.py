@@ -68,6 +68,15 @@ def converter(png, agora=None):
     return jpg, os.path.getsize(png) - os.path.getsize(jpg)
 
 
+def tabelas_com_capa(db):
+    """Toda tabela com coluna cover_path. 09/11/2026: so ebooks era reapontada, e
+    capa_externa (284 linhas) tambem guarda o caminho -- o PNG apagado deixaria
+    essa linha apontando para arquivo que nao existe."""
+    nomes = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    return [t for t in nomes
+            if any(c[1] == 'cover_path' for c in db.execute('PRAGMA table_info("%s")' % t))]
+
+
 def main():
     aplicar = '--aplicar' in sys.argv
     limite = int(arg('limite', '1000000'))
@@ -78,6 +87,8 @@ def main():
     existentes = [p for p in pngs if os.path.isfile(p)]
     total = sum(os.path.getsize(p) for p in existentes)
     print('capas png referenciadas: %d (existem %d, %.1f GB)' % (len(pngs), len(existentes), total / 1e9), flush=True)
+    tabelas = tabelas_com_capa(db)
+    print('tabelas reapontadas: %s' % ', '.join(tabelas), flush=True)
     if not aplicar:
         return
     feitas = falhas = puladas = 0
@@ -97,7 +108,8 @@ def main():
             print('falha %s: %s' % (os.path.basename(png), e), flush=True)
             continue
         with db:
-            db.execute('UPDATE ebooks SET cover_path = ? WHERE cover_path = ?', (jpg, png))
+            for tabela in tabelas:
+                db.execute('UPDATE "%s" SET cover_path = ? WHERE cover_path = ?' % tabela, (jpg, png))
         os.remove(png)
         feitas += 1
         economia += eco

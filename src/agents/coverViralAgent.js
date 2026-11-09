@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 let puppeteer; try { puppeteer = require('puppeteer'); } catch (_) { try { puppeteer = require('puppeteer-core'); } catch (__) { puppeteer = null; } }
 const { generateImage } = require('./imageGenAgent');
+const formatoCapa = require('./formatoCapa');
 let log; try { log = require('../core/logger').createLogger('coverViral'); }
 catch (_) { log = { info: (...a) => console.log('[coverViral]', ...a), warn: (...a) => console.warn('[coverViral]', ...a) }; }
 
@@ -345,8 +346,8 @@ async function generateViralCover(title, subtitle, topic, category, coversDir, i
       await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
       await page.evaluate(() => document.fonts.ready).catch(() => {});
       await new Promise(r => setTimeout(r, 900));
-      const out = path.join(dir, `cover_${Date.now()}.png`);
-      await page.screenshot({ path: out, clip: { x: 0, y: 0, width: 1600, height: 2560 } });
+      const out = formatoCapa.caminhoDeCapa(dir, 'cover');
+      await page.screenshot(formatoCapa.opcoesDeCaptura({ path: out, clip: { x: 0, y: 0, width: 1600, height: 2560 } }));
       log.info(`✅ Capa viral (rosto/cena ${category}): ${path.basename(out)}`);
       return out;
     } finally { await browser.close().catch(() => {}); }

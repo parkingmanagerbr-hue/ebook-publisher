@@ -31,6 +31,7 @@ const MODULOS_NO_GATE = [
   'src/agents/backfillCovers.js',
   'src/agents/caktoRegras.js',
   'src/agents/coverPackaging.js',
+  'src/agents/formatoCapa.js',
   'src/agents/idiomaPorVenda.js',
   'src/agents/learningAgent.js',
   'src/agents/dicaNicho.js',

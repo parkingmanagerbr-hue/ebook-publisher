@@ -18,6 +18,7 @@ const fs   = require('fs');
 const path = require('path');
 const { generate: generateText } = require('../core/aiClient');
 const { createLogger } = require('../core/logger');
+const formatoCapa = require('./formatoCapa');
 const logger = createLogger('coverAgentHTML');
 
 const COVERS_DIR = path.join(__dirname, '../../data/covers');
@@ -449,11 +450,10 @@ async function renderHTMLtoPNG(html, outputPath) {
     // Aguardar renderização completa das fontes
     await new Promise(r => setTimeout(r, 1200));
 
-    const buf = await page.screenshot({
-      type: 'png',
+    const buf = await page.screenshot(formatoCapa.opcoesDeCaptura({
       clip: { x: 0, y: 0, width: 1600, height: 2560 },
       fullPage: false,
-    });
+    }));
 
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, buf);
@@ -468,8 +468,7 @@ async function generateHTMLCover(title, subtitle, topic, category) {
   logger.info(`🚀 coverAgentHTML v2 VIRAL: "${title}" [cat=${category}]`);
   const t0 = Date.now();
 
-  const filename = `cover_html_${Date.now()}.png`;
-  const outPath  = path.join(COVERS_DIR, filename);
+  const outPath  = formatoCapa.caminhoDeCapa(COVERS_DIR, 'cover_html');
   fs.mkdirSync(COVERS_DIR, { recursive: true });
 
   const html = await generateCoverHTML(title, subtitle, topic, category);
