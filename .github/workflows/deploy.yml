@@ -82,7 +82,10 @@ jobs:
             set -euo pipefail
             cd /opt/platform
             IMAGEM="ghcr.io/parkingmanagerbr-hue/ebook-publisher:latest"
-            COMPOSE="docker compose -f docker-compose.production.yml -f docker-compose.override.yml"
+            # compose.sh: os dois arquivos + a trava /tmp/platform-compose.lock. Um `up`
+            # direto corre contra o do boot_recovery (cron */10) e deixa o container com
+            # o nome provisório do compose (incidente de 28/10/2026 no ClipCaster).
+            COMPOSE="/bin/bash /opt/platform/scripts/compose.sh"
             $COMPOSE pull ebook-publisher
             $COMPOSE up -d --no-deps ebook-publisher
             sleep 10
