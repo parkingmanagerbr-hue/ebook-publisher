@@ -82,12 +82,14 @@ def main():
     limite = int(arg('limite', '1000000'))
     db = sqlite3.connect(DB, timeout=30)
     db.execute('PRAGMA busy_timeout = 30000')
-    pngs = [r[0] for r in db.execute(
-        "SELECT DISTINCT cover_path FROM ebooks WHERE cover_path LIKE '%.png'").fetchall()]
+    tabelas = tabelas_com_capa(db)
+    # Lista de TODAS as tabelas com capa, nao so de ebooks: 09/11/2026 sobraram 17
+    # PNG (55 MB) referenciados apenas pela capa_externa, que o conversor nunca via.
+    pngs = sorted({r[0] for t in tabelas for r in db.execute(
+        """SELECT DISTINCT cover_path FROM "%s" WHERE cover_path LIKE '%%.png'""" % t)})
     existentes = [p for p in pngs if os.path.isfile(p)]
     total = sum(os.path.getsize(p) for p in existentes)
     print('capas png referenciadas: %d (existem %d, %.1f GB)' % (len(pngs), len(existentes), total / 1e9), flush=True)
-    tabelas = tabelas_com_capa(db)
     print('tabelas reapontadas: %s' % ', '.join(tabelas), flush=True)
     if not aplicar:
         return
