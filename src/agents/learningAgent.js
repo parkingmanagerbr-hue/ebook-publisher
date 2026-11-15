@@ -14,9 +14,7 @@ const logger = createLogger('learningAgent');
  * - Concorrência (muitos e-books = mais difícil)
  * - Sazonalidade implícita (categoria + época)
  */
-function computeMLScore(topic, allEbooks) {
-  const topicEbooks = allEbooks.filter(e => e.topic === topic.topic);
-
+function computeMLScore(topic, topicEbooks) {
   if (topicEbooks.length === 0) {
     // Tópico nunca testado → score base pelo demand_score
     return topic.demand_score * 0.8;
@@ -56,8 +54,30 @@ function computeMLScore(topic, allEbooks) {
   return Math.max(0, score);
 }
 
+/**
+ * Score de todos os tópicos numa passada só pelos e-books.
+ * 15/11/2026: cada tópico filtrava a lista INTEIRA de e-books (tópicos × 33 mil)
+ * e o processo ficava ~2 min sem responder no fim de cada pipeline — o vigia
+ * via HTTP 000 e reiniciava o publisher 15 vezes por dia, no meio de publicações.
+ */
+function pontuarTopicos(allTopics, allEbooks) {
+  const porTopico = new Map();
+  for (const e of allEbooks) {
+    const chave = e.topic;
+    const lista = porTopico.get(chave);
+    if (lista) lista.push(e); else porTopico.set(chave, [e]);
+  }
+  return allTopics.map(topic => ({
+    topic: topic.topic,
+    category: topic.category,
+    mlScore: computeMLScore(topic, porTopico.get(topic.topic) || []),
+    demandScore: topic.demand_score,
+  }));
+}
+
 async function runLearningCycle() {
   logger.info('🧠 Iniciando ciclo de aprendizado ML...');
+  const inicio = Date.now();
 
   const allTopics = getAllTopics();
   const allEbooks = getEbooks();
@@ -65,15 +85,13 @@ async function runLearningCycle() {
 
   logger.info(`Stats: ${stats.totalEbooks} e-books, ${stats.totalSales} vendas, R$ ${stats.totalRevenue?.toFixed(2)} receita`);
 
-  // Recalcular ML score para cada tópico
+  const topicScores = pontuarTopicos(allTopics, allEbooks);
+
+  // Uma transação para todos: um commit por tópico era milhares de fsync no disco.
   const db = getDb();
   const updateScore = db.prepare('UPDATE topics SET ml_score = ? WHERE topic = ?');
-
-  const topicScores = allTopics.map(topic => {
-    const mlScore = computeMLScore(topic, allEbooks);
-    updateScore.run(mlScore, topic.topic);
-    return { topic: topic.topic, category: topic.category, mlScore, demandScore: topic.demand_score };
-  });
+  db.transaction(lista => { for (const t of lista) updateScore.run(t.mlScore, t.topic); })(topicScores);
+  logger.info(`ML: ${allTopics.length} tópicos × ${allEbooks.length} e-books pontuados em ${Date.now() - inicio} ms`);
 
   // Ordenar por score final
   topicScores.sort((a, b) => (b.mlScore + b.demandScore) - (a.mlScore + a.demandScore));
@@ -310,4 +328,4 @@ async function syncSalesFromPlatforms() {
   return { syncedCakto, syncedHotmart };
 }
 
-module.exports = { runLearningCycle, syncSalesFromPlatforms, fetchCaktoSales, fetchHotmartSales };
+module.exports = { runLearningCycle, pontuarTopicos, syncSalesFromPlatforms, fetchCaktoSales, fetchHotmartSales };

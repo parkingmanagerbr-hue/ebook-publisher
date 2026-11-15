@@ -74,6 +74,42 @@ test('score com vendas, receita, recencia e saturacao, limitado a 10 e nunca neg
   assert.strictEqual(mlDe('Espiritualidade e devocional cristão'), 0);
 });
 
+test('REGRESSAO: pontuar le cada e-book uma vez, nao uma vez por topico', t => {
+  // 15/11/2026: o filtro por topico percorria a lista inteira para CADA topico;
+  // com 33 mil e-books o processo ficou ~2 min surdo e o vigia o reiniciava.
+  t.mock.method(Math, 'random', () => 0);
+  let leituras = 0;
+  const topicos = Array.from({ length: 50 }, (_, i) => ({ topic: 'T' + i, demand_score: 5 }));
+  const ebooks = Array.from({ length: 400 }, (_, i) => {
+    const o = { status: 'published', sales_count: i % 3, revenue: 0, published_at: null };
+    const tp = 'T' + (i % 50);
+    Object.defineProperty(o, 'topic', { get() { leituras++; return tp; } });
+    return o;
+  });
+  const r = la.pontuarTopicos(topicos, ebooks);
+  assert.strictEqual(r.length, 50);
+  assert.ok(leituras <= ebooks.length, `leu topic ${leituras} vezes para ${ebooks.length} e-books`);
+  // 8 e-books por topico; T1 = indices 1,51..351 -> vendas 1,0,2,1,0,2,1,0 = 7
+  // media 7/8 * 0,4 + demanda 5*0,2 - saturacao (8-5)*0,3
+  assert.ok(Math.abs(r[1].mlScore - (7 / 8 * 0.4 + 1 - 0.9)) < 1e-9, String(r[1].mlScore));
+  assert.strictEqual(la.pontuarTopicos([{ topic: 'Sem livro', demand_score: 5 }], ebooks)[0].mlScore, 4);
+});
+
+test('scores gravados numa transacao so', async t => {
+  reiniciar();
+  ebook({ topic: 'Concursos públicos' });
+  const prepareReal = db.prepare.bind(db);
+  const dentro = [];
+  t.mock.method(db, 'prepare', sql => {
+    const st = prepareReal(sql);
+    if (!/^UPDATE topics SET ml_score/.test(sql)) return st;
+    return { run: (...a) => { dentro.push(db.inTransaction); return st.run(...a); } };
+  });
+  await la.runLearningCycle();
+  assert.ok(dentro.length > 1, 'gravou os topicos');
+  assert.ok(dentro.every(Boolean), 'todo UPDATE dentro de transacao');
+});
+
 test('relatorio: sem venda pede calibragem e nao elege categoria', async () => {
   reiniciar();
   const r = await la.runLearningCycle();
