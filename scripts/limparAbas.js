@@ -30,7 +30,26 @@ function abasParaFechar(urls) {
   return fechar;
 }
 
+/** Marcador que o dono cria enquanto loga pela tela remota: a limpeza nao fecha as abas dele. */
+const MARCADOR = process.env.LIMPAR_ABAS_MARCADOR || '/app/data/LOGIN_EM_ANDAMENTO';
+const VALIDADE_MS = 2 * 60 * 60 * 1000;   // esquecido no disco, o marcador vence sozinho em 2 h
+
+/** O marcador vale? mtimeMs = null quando o arquivo nao existe. Pura. */
+function loginEmAndamento(mtimeMs, agora, validadeMs = VALIDADE_MS) {
+  if (mtimeMs === null || mtimeMs === undefined) return false;
+  const idade = agora - mtimeMs;
+  return idade >= 0 && idade < validadeMs;
+}
+
+function mtimeDoMarcador(fs = require('fs')) {
+  try { return fs.statSync(MARCADOR).mtimeMs; } catch (_) { return null; }   // protocolo: sem marcador = limpa
+}
+
 async function principal() {
+  if (loginEmAndamento(mtimeDoMarcador(), Date.now())) {
+    log.info('login em andamento (marcador LOGIN_EM_ANDAMENTO) — abas mantidas');
+    return { puladas: true };
+  }
   const puppeteer = require('puppeteer');
   const browser = await puppeteer.connect({ browserURL: await urlCdpObrigatoria(), defaultViewport: null, protocolTimeout: 60000 });
   try {
@@ -43,6 +62,6 @@ async function principal() {
   } finally { browser.disconnect(); }
 }
 
-module.exports = { abasParaFechar, principal };
+module.exports = { abasParaFechar, loginEmAndamento, principal };
 
 if (require.main === module) principal().then(r => console.log(JSON.stringify(r))).catch(e => { log.error('ERRO ' + String(e && e.message).slice(0, 200)); process.exit(1); });
