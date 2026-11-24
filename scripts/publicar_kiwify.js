@@ -186,7 +186,7 @@ async function principal() {
   // Aba propria: reaproveitar a aba aberta trouxe "Requesting main frame too
   // early!" quando ela ficava em estado ruim depois de outro lote (24/09/2026).
   // A sessao vive no perfil do Chrome, nao na aba.
-  const pagina = await browser.newPage();
+  const pagina = await browser.newPage({ background: true })   // nao rouba o foco de quem loga pela tela remota;
   const cred = await credenciais(pagina);
   log.info('sessao da Kiwify pronta');
   // Na VPS o segredo da entrega esta aqui: a conferencia prova que o token do

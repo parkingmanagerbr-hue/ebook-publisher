@@ -14,7 +14,7 @@ catch { log = { info: console.log, warn: console.warn, error: console.error }; }
 async function principal() {
   const puppeteer = require('puppeteer');
   const browser = await puppeteer.connect({ browserURL: await urlCdpObrigatoria(), defaultViewport: null });
-  const page = await browser.newPage();
+  const page = await browser.newPage({ background: true })   // nao rouba o foco de quem loga pela tela remota;
   try {
     await page.goto('https://account.kdp.amazon.com/account', { waitUntil: 'networkidle2', timeout: 90000 });
     await new Promise(r => setTimeout(r, 3000));

@@ -651,7 +651,7 @@ async function principal() {
   if (!soltar) { log.warn('outro publicador do Google Play esta rodando — saindo'); return { ocupado: true }; }
   const puppeteer = require('puppeteer');
   const browser = await puppeteer.connect({ browserURL: await require('../src/core/cdpLocal').urlCdpObrigatoria(), defaultViewport: null, protocolTimeout: 180000 });
-  const page = await browser.newPage();
+  const page = await browser.newPage({ background: true })   // nao rouba o foco de quem loga pela tela remota;
   // Foco EMULADO: a aba se comporta como focada sem tirar o foco da janela que
   // o dono usa pela tela remota. Sem isso o clique confiavel do upload nao
   // abre o seletor.

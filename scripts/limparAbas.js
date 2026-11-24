@@ -32,13 +32,12 @@ function abasParaFechar(urls) {
 
 /** Marcador que o dono cria enquanto loga pela tela remota: a limpeza nao fecha as abas dele. */
 const MARCADOR = process.env.LIMPAR_ABAS_MARCADOR || '/app/data/LOGIN_EM_ANDAMENTO';
-const VALIDADE_MS = 2 * 60 * 60 * 1000;   // esquecido no disco, o marcador vence sozinho em 2 h
+const LIMITE_DE_ABAS = 20;   // valvula: com o marcador e abas demais, limpa mesmo assim (Chrome travou com 26 em 06/10/2026)
 
-/** O marcador vale? mtimeMs = null quando o arquivo nao existe. Pura. */
-function loginEmAndamento(mtimeMs, agora, validadeMs = VALIDADE_MS) {
+/** Mantem as abas? Marcador presente (sem prazo: o dono apaga quando quiser) e abas abaixo do limite. Pura. */
+function loginEmAndamento(mtimeMs, totalAbas, limite = LIMITE_DE_ABAS) {
   if (mtimeMs === null || mtimeMs === undefined) return false;
-  const idade = agora - mtimeMs;
-  return idade >= 0 && idade < validadeMs;
+  return Number(totalAbas) <= limite;
 }
 
 function mtimeDoMarcador(fs = require('fs')) {
@@ -46,14 +45,14 @@ function mtimeDoMarcador(fs = require('fs')) {
 }
 
 async function principal() {
-  if (loginEmAndamento(mtimeDoMarcador(), Date.now())) {
-    log.info('login em andamento (marcador LOGIN_EM_ANDAMENTO) — abas mantidas');
-    return { puladas: true };
-  }
   const puppeteer = require('puppeteer');
   const browser = await puppeteer.connect({ browserURL: await urlCdpObrigatoria(), defaultViewport: null, protocolTimeout: 60000 });
   try {
     const paginas = await browser.pages();
+    if (loginEmAndamento(mtimeDoMarcador(), paginas.length)) {
+      log.info('marcador LOGIN_EM_ANDAMENTO presente — abas mantidas (' + paginas.length + ' abertas)');
+      return { puladas: true, abas: paginas.length };
+    }
     const fechar = abasParaFechar(paginas.map(p => p.url()));
     for (const i of fechar) await paginas[i].close().catch(() => {});
     const r = { abas: paginas.length, fechadas: fechar.length };

@@ -159,7 +159,7 @@ async function principal() {
   const forcar = new Set(String(arg('forcar', '')).split(',').map(s => s.trim()).filter(Boolean));
   const puppeteer = require('puppeteer');
   const browser = await puppeteer.connect({ browserURL: await urlCdpObrigatoria(), defaultViewport: { width: 1400, height: 1000 } });
-  const page = await browser.newPage();
+  const page = await browser.newPage({ background: true })   // nao rouba o foco de quem loga pela tela remota;
   const resumo = { fila: 0, ok: 0, falhas: 0, semCapa: 0, categorias: 0, moedaTrocada: 0, moedaConfirmada: 0 };
   const convertidos = new Map();
   let capas = new Map(); // fora do try: o finally apaga as copias do ultimo bloco
@@ -189,7 +189,7 @@ async function principal() {
         // Aba NOVA por produto: reaproveitando a mesma aba (que tambem faz as
         // chamadas a API), o "Salvar produto" passou a ser ignorado — sem PUT,
         // sem erro; a mesma capa numa aba nova salvou (06/10/2026).
-        const aba = await browser.newPage();
+        const aba = await browser.newPage({ background: true })   // nao rouba o foco de quem loga pela tela remota;
         await aba.setViewport({ width: 1400, height: 1000 });
         let feito;
         try { feito = await aplicarNoPainel(aba, { ...item, capa: local }, { log }); }

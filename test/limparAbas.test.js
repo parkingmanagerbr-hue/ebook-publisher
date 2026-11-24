@@ -13,10 +13,10 @@ test('about:blank fecha, menos quando e a unica aba', () => {
   assert.deepStrictEqual(abasParaFechar(['about:blank']), []);
 });
 
-test('marcador de login: vale por 2 h, some sozinho e ausente limpa', () => {
-  const agora = 10 * 3600 * 1000;
-  assert.strictEqual(loginEmAndamento(null, agora), false);
-  assert.strictEqual(loginEmAndamento(agora - 30 * 60 * 1000, agora), true);
-  assert.strictEqual(loginEmAndamento(agora - 3 * 3600 * 1000, agora), false);
-  assert.strictEqual(loginEmAndamento(agora + 60 * 1000, agora), false);   // relogio no futuro: nao confia
+test('marcador de login: sem prazo, e so a valvula de seguranca limpa', () => {
+  assert.strictEqual(loginEmAndamento(null, 5), false);                    // sem marcador: limpa
+  assert.strictEqual(loginEmAndamento(1, 5), true);                        // marcador: mantem
+  assert.strictEqual(loginEmAndamento(1, 20), true);                       // no limite ainda mantem
+  assert.strictEqual(loginEmAndamento(1, 21), false);                      // abas demais: limpa mesmo assim
+  assert.strictEqual(loginEmAndamento(0, 3), true);                        // mtime 0 e um marcador valido
 });
