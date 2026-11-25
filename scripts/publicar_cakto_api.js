@@ -20,6 +20,7 @@ const { ehErroDaLoja } = require('../src/agents/higieneCakto');
 const { resumoDaPublicacao, nomeDistintoCakto, chaveDeTitulo } = require('../src/agents/caktoApiRegras');
 const { filaDaRodada, resumoDaFila } = require('../src/core/filaIdioma');
 const { travar } = require('../src/core/travaLocal');
+const { ehSemSessao, renovarDoChrome } = require('../src/core/sessaoCakto');
 const { precoDaLoja } = require('../src/core/precoProprio');
 
 let log;
@@ -107,7 +108,8 @@ async function rodar(limite, seco) {
   let urlEntrega = null;
   try { urlEntrega = require('../src/core/entrega').urlEntrega; } catch (_) { /* sem segredo: publica pausado */ }
 
-  const H = await cabecalhos();
+  let H = await cabecalhos();
+  let renovou = false;   // uma renovacao do cookie por rodada
   const grava = db.prepare('UPDATE ebooks SET cakto_product_id = ?, cakto_nome = ? WHERE id = ?');
   const recusa = db.prepare('INSERT OR REPLACE INTO cakto_recusado (ebook_id, motivo, quando) VALUES (?,?,?)');
 
@@ -119,7 +121,19 @@ async function rodar(limite, seco) {
     if (seco) { log.info('[dry-run] publicaria "' + umaLinha(e.nomeNaLoja) + '" entrega=' + (entrega ? 'ok' : 'FALTA')); continue; }
     try {
       const capa = e.cover_path && fs.existsSync(e.cover_path) ? e.cover_path : null;
-      const r = await publicarNaCakto({ title: e.nomeNaLoja, description: e.description, entrega, capa, preco: precoDaLoja(e) }, { H });
+      const publicar = () => publicarNaCakto({ title: e.nomeNaLoja, description: e.description, entrega, capa, preco: precoDaLoja(e) }, { H });
+      let r;
+      try { r = await publicar(); }
+      catch (err) {
+        // 401 = cookie salvo vencido. O dono loga no Chrome da VPS; copiamos de la uma vez e tentamos de novo.
+        if (renovou || !ehSemSessao(err && err.message)) throw err;
+        renovou = true;
+        const rn = await renovarDoChrome();
+        log.warn('sessao da Cakto recusada (401) — cookies do Chrome ' + (rn.ok ? 'copiados (' + rn.n + ')' : 'NAO copiados: ' + rn.motivo));
+        if (!rn.ok) throw err;
+        H = await cabecalhos();
+        r = await publicar();
+      }
       // O que o resto do sistema chama de cakto_product_id e o shortcode da
       // oferta (e o que /api/offers/{shortcode}/ aceita).
       if (r.shortcode) grava.run(r.shortcode, e.nomeNaLoja, e.id);
@@ -136,6 +150,7 @@ async function rodar(limite, seco) {
         if (err.definitivo === 'limite de plano') { log.warn('a conta bateu o limite de produtos — parando a rodada'); break; }
       }
       if (err && err.cloudflare) { log.warn('Cloudflare barrou — parando esta rodada'); break; }
+      if (ehSemSessao(msg)) { log.warn('CAKTO_SEM_SESSAO: logar na Cakto pela tela remota (navegador.veloxisit.com.br) — parando a rodada'); break; }
       if (ehErroDaLoja(err && err.status, msg)) { log.warn('a Cakto esta respondendo erro de servidor — parando a rodada'); break; }
     }
   }

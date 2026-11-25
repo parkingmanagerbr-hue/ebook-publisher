@@ -19,10 +19,10 @@ const fs    = require('fs');
 const BASE         = path.join(__dirname, '..');
 const SESSION_DIR  = path.join(BASE, 'data', 'sessions');
 const CHROME       = process.env.CHROME_EXECUTABLE || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const HM_EMAIL     = process.env.HOTMART_EMAIL    || process.env.CAKTO_EMAIL    || 'mrovariz@hotmail.com';
-const HM_PASS      = process.env.HOTMART_PASSWORD  || process.env.CAKTO_PASSWORD || 'Genia2026$Kdp';
-const CAKTO_EMAIL  = process.env.CAKTO_EMAIL       || 'mrovariz@hotmail.com';
-const CAKTO_PASS   = process.env.CAKTO_PASSWORD    || 'Genia2026$Kdp';
+const HM_EMAIL     = process.env.HOTMART_EMAIL    || process.env.CAKTO_EMAIL || '';
+const HM_PASS      = process.env.HOTMART_PASSWORD  || process.env.CAKTO_PASSWORD || '';
+const CAKTO_EMAIL  = process.env.CAKTO_EMAIL || '';
+const CAKTO_PASS   = process.env.CAKTO_PASSWORD || '';   // 25/11/2026: credencial so por ambiente, nunca no codigo
 
 fs.mkdirSync(SESSION_DIR, { recursive: true });
 

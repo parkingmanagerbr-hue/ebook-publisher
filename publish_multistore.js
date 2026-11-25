@@ -23,8 +23,7 @@ process.env.DEFAULT_PRICE        = '29,90';   // Hotmart — BRL, currency mask
 process.env.HOTMART_PRICE        = '29,90';
 process.env.EBOOK_PRICE          = '29.90';   // Cakto
 process.env.CHROME_EXECUTABLE    = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-process.env.CAKTO_EMAIL          = 'mrovariz@hotmail.com';
-process.env.CAKTO_PASSWORD       = 'Genia2026$Kdp';
+// CAKTO_EMAIL e CAKTO_PASSWORD vem do ambiente (.env) — 25/11/2026: credencial fora do codigo
 
 fs.mkdirSync(process.env.SCREENSHOTS_DIR, { recursive: true });
 
